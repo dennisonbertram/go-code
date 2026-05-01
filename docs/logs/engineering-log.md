@@ -1,5 +1,42 @@
 # Engineering Log
 
+## 2026-05-01 (User-Local Installer and Workspace-Aware TUI)
+
+- Added a sudo-free local installer for distribution testing.
+  - Added `scripts/install.sh`, defaulting to `~/.local/bin` via `~/.local`, with `--prefix`, `--bin-dir`, `--data-dir`, `--system`, `--add-to-path`, `--no-build`, `--uninstall`, and `--dry-run`.
+  - Installer now copies runtime `prompts/` and `catalog/` assets into a sibling `share/go-code` directory so installed commands do not depend on the repo as the current working directory.
+  - Updated `Makefile` so `make install` delegates to the user-local installer instead of copying directly into `/usr/local/bin`.
+  - Updated `scripts/go-code.sh` to discover installed runtime assets and point missing-command hints at the installer.
+- Made installed TUI launches preserve the caller's project workspace.
+  - `harnesscli --tui -workspace <path>` now carries the workspace into `tui.TUIConfig`.
+  - TUI run creation now includes `workspace_path`, matching single-shot prompt mode.
+  - Added regressions for CLI workspace request payloads, TUI config workspace propagation, and TUI start-run workspace payloads.
+- Validation:
+  - `bash -n scripts/install.sh scripts/go-code.sh`
+  - `scripts/install.sh --dry-run --no-build --prefix "$PWD/.tmp/install-dry-run"`
+  - `GOCACHE=/tmp/go-build go test ./cmd/harnesscli ./cmd/harnesscli/tui -run 'TestRunCreatesAndStreamsToCompletion|TestNewTUIConfigIncludesWorkspace|TestRunTUIRequiresTerminal|TestStartRunCmdIncludesWorkspacePath' -count=1`
+  - `GOCACHE=/tmp/go-build scripts/install.sh --prefix "$PWD/.tmp/install-verify"`
+  - `.tmp/install-verify/bin/go-code --help`
+  - `HOME=$(mktemp -d) GOCACHE=/tmp/go-build go test ./cmd/harnesscli/... -count=1`
+
+## 2026-05-01 (Distribution Docs and GitHub Pages)
+
+- Added public distribution documentation for Go Agent Harness.
+  - `docs/runbooks/distribution.md` now documents the current source installer, installed command contract, GitHub Pages setup, release archive layout, future installer download mode, Homebrew tap direction, single-binary simplification path, and release checklist.
+  - `README.md` now points daily users at `./scripts/install.sh --add-to-path`, `go-code`, and the distribution docs.
+- Added a GitHub Pages-ready static site.
+  - `docs/site/index.html` and `docs/site/styles.css` provide a single-page install and product overview for Go Agent Harness.
+  - `docs/site/INDEX.md` indexes the site source folder.
+  - `.github/workflows/pages.yml` publishes `docs/site` through GitHub Actions on pushes to `main` that touch the site or workflow.
+- Updated documentation indexes:
+  - `docs/INDEX.md`
+  - `docs/runbooks/INDEX.md`
+- Validation:
+  - `curl -I http://127.0.0.1:4180/` against a temporary tmux-served `docs/site` static server
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pages.yml"); puts "yaml ok"'`
+  - `git diff --check -- README.md docs/INDEX.md docs/runbooks/INDEX.md docs/runbooks/distribution.md docs/logs/engineering-log.md docs/logs/long-term-thinking-log.md .github/workflows/pages.yml`
+  - `perl -ne 'print "$ARGV:$.: trailing whitespace\n" if /[ \t]$/; close ARGV if eof' docs/site/INDEX.md docs/site/index.html docs/site/styles.css`
+
 - 2026-04-29: Fixed issue `#557` by making the container workspace provision success test use a unique, readable workspace ID per invocation instead of reusing `test-provision`.
   - Added `containerWorkspaceTestID(...)` in `internal/workspace/container_test.go`, combining a readable sanitized prefix with nanoseconds and an atomic sequence.
   - Updated `TestContainerWorkspace_Provision_Success` to register `t.Cleanup` with `Destroy(...)` after provisioning attempts so normal failures clean up the test container.

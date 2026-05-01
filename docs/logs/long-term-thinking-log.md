@@ -1,5 +1,45 @@
 # Long-Term Thinking Log
 
+## 2026-05-01 (User-Local Installer and Workspace-Aware TUI)
+
+- Command intent: Turn the repo-local `go-code` wrapper into a practical installer so the harness can be used from normal projects without manual sudo copy steps.
+- User intent: Make the harness feel like an installed development tool: easy to install, easy to put on PATH, and reliable when launched from any repository.
+- Success definition:
+  - `make install` no longer requires `/usr/local/bin` write permissions by default.
+  - `scripts/install.sh` builds and installs `go-code`, `harnesscli`, and `harnessd` to a user-local bin directory with clear PATH guidance.
+  - Runtime `prompts/` and `catalog/` assets are installed with the wrapper so the command works after being launched from another repository.
+  - Optional system installs and uninstall are still available.
+  - The installed TUI and single-shot modes both send the caller's workspace path to harnessd.
+  - Installer syntax, install dry-run, install-to-temp-prefix, focused tests, broader CLI/TUI tests, and rebuilt binaries pass.
+- Non-goals:
+  - Packaging Homebrew, npm, or signed release artifacts in this slice.
+  - Automatically editing shell startup files without an explicit `--add-to-path`.
+- Guardrails/constraints:
+  - Keep the default install path sudo-free.
+  - Preserve `/usr/local` as an explicit opt-in for system installs.
+  - Do not rely on the harness repo as the current working directory once the command is installed.
+- Next verification step: run `./scripts/install.sh --add-to-path`, open a new shell, then launch `go-code --server` and `go-code` from another project directory.
+
+## 2026-05-01 (Distribution Docs and GitHub Pages)
+
+- Command intent: Document the distribution direction and create a GitHub Pages landing page for Go Agent Harness.
+- User intent: Make the project feel closer to an installable product, with a clear public-facing page and a practical path from source install to real distribution.
+- Success definition:
+  - Public site source exists in a GitHub Pages-compatible folder.
+  - A workflow can publish the site with GitHub Actions.
+  - README explains the installed `go-code` path.
+  - A runbook captures source install, release archives, Homebrew, and future single-binary packaging.
+  - Documentation indexes and logs reflect the new docs.
+- Non-goals:
+  - Building release archives in this slice.
+  - Creating a Homebrew tap in this slice.
+  - Replacing the current multi-binary installer with a single binary immediately.
+- Guardrails/constraints:
+  - Keep Pages static and dependency-free.
+  - Keep the default distribution path sudo-free.
+  - Describe future packaging as roadmap, not implemented behavior.
+- Next verification step: enable Pages in repository settings with GitHub Actions as the source, then run the `pages` workflow manually and check the published page.
+
 - 2026-04-29
   - Command intent: Complete GitHub issue `#557` by preventing `TestContainerWorkspace_Provision_Success` from reusing the fixed Docker container name `workspace-test-provision` across test runs.
   - User intent: Make the Docker-backed workspace provision test rerunnable after normal failures or aborted runs without manual `docker rm` cleanup.

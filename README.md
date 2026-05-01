@@ -31,6 +31,28 @@ The repo root is intentionally kept free of Go source now. If you want to work o
 
 ## Quick Start
 
+### Installed Command
+
+For daily use, install the local `go-code` command:
+
+```bash
+./scripts/install.sh --add-to-path
+```
+
+The installer defaults to `~/.local`, copies `harnesscli`, `harnessd`, and `go-code` into `~/.local/bin`, and installs runtime prompts plus model catalogs into `~/.local/share/go-code`.
+
+After opening a new shell, or exporting `PATH="$HOME/.local/bin:$PATH"`, use:
+
+```bash
+go-code              # launch the TUI from the current project
+go-code "prompt"     # run one prompt from the current project
+go-code --server     # start harnessd and leave it running
+```
+
+Distribution and publishing notes live in `docs/runbooks/distribution.md`. The GitHub Pages source lives in `docs/site/`.
+
+### Development From Source
+
 1. Set `OPENAI_API_KEY`.
 2. Start the server:
 

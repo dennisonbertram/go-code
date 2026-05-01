@@ -9,3 +9,4 @@
 - `context/INDEX.md`: Index for critical project context needed by new contributors.
 - `runbooks/INDEX.md`: Index for operational procedures (testing, deployment, issue triage, worktree flow).
 - `operations/INDEX.md`: Index for recurring operations and nightly agent execution docs.
+- `site/INDEX.md`: GitHub Pages landing page source for Go Agent Harness.

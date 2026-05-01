@@ -21,6 +21,7 @@ type runCreateRequest struct {
 	ProviderName    string `json:"provider_name,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 	PromptProfile   string `json:"prompt_profile,omitempty"`
+	WorkspacePath   string `json:"workspace_path,omitempty"`
 }
 
 type runCreateResponse struct {
@@ -47,7 +48,7 @@ type RemoteSubagent struct {
 // subsequent messages should pass the run ID returned by the first run so that
 // the harness groups them under the same conversation.
 // profile is the name of the prompt profile to use (may be empty).
-func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile string) tea.Cmd {
+func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile, workspace string) tea.Cmd {
 	return func() tea.Msg {
 		body, _ := json.Marshal(runCreateRequest{
 			Prompt:          prompt,
@@ -56,6 +57,7 @@ func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffo
 			ProviderName:    provider,
 			ReasoningEffort: reasoningEffort,
 			PromptProfile:   profile,
+			WorkspacePath:   workspace,
 		})
 		url := strings.TrimRight(baseURL, "/") + "/v1/runs"
 		resp, err := http.Post(url, "application/json", bytes.NewReader(body))

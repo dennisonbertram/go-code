@@ -115,10 +115,14 @@ func TestParseSSEBlockAndTerminalDetection(t *testing.T) {
 }
 
 func TestRunCreatesAndStreamsToCompletion(t *testing.T) {
+	var got runCreateRequest
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/runs", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Fatalf("unexpected method: %s", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
@@ -155,7 +159,12 @@ func TestRunCreatesAndStreamsToCompletion(t *testing.T) {
 	stdout = &out
 	stderr = &errOut
 
-	code := run([]string{"-base-url=" + ts.URL, "-prompt=build a small html page", "-model=gpt-5-nano"})
+	code := run([]string{
+		"-base-url=" + ts.URL,
+		"-prompt=build a small html page",
+		"-model=gpt-5-nano",
+		"-workspace=/tmp/harness-workspace",
+	})
 	if code != 0 {
 		t.Fatalf("expected exit code 0, got %d (stderr=%s)", code, errOut.String())
 	}
@@ -167,6 +176,22 @@ func TestRunCreatesAndStreamsToCompletion(t *testing.T) {
 	}
 	if errOut.Len() != 0 {
 		t.Fatalf("expected empty stderr, got %q", errOut.String())
+	}
+	if got.WorkspacePath != "/tmp/harness-workspace" {
+		t.Fatalf("workspace_path = %q, want /tmp/harness-workspace", got.WorkspacePath)
+	}
+}
+
+func TestNewTUIConfigIncludesWorkspace(t *testing.T) {
+	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project")
+	if cfg.BaseURL != "http://127.0.0.1:8080" {
+		t.Fatalf("BaseURL = %q", cfg.BaseURL)
+	}
+	if cfg.Workspace != "/tmp/tui-project" {
+		t.Fatalf("Workspace = %q, want /tmp/tui-project", cfg.Workspace)
+	}
+	if !cfg.EnableTUI {
+		t.Fatal("EnableTUI = false, want true")
 	}
 }
 

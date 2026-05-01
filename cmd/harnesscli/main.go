@@ -69,6 +69,7 @@ type runCreateRequest struct {
 	TaskContext      string                   `json:"task_context,omitempty"`
 	PromptProfile    string                   `json:"prompt_profile,omitempty"`
 	PromptExtensions *runCreatePromptSettings `json:"prompt_extensions,omitempty"`
+	WorkspacePath    string                   `json:"workspace_path,omitempty"`
 }
 
 type runCreatePromptSettings struct {
@@ -130,6 +131,7 @@ func run(args []string) int {
 	taskContext := flags.String("task-context", "", "harness task context injected into startup prompt")
 	promptProfile := flags.String("prompt-profile", "", "prompt profile override for model routing")
 	promptCustom := flags.String("prompt-custom", "", "custom prompt extension text")
+	workspace := flags.String("workspace", "", "workspace directory for this run (defaults to current working directory)")
 	enableTUI := flags.Bool("tui", false, "launch interactive BubbleTea TUI (experimental)")
 	listProfiles := flags.Bool("list-profiles", false, "list available profiles and exit")
 	var behaviorFlags csvListFlag
@@ -146,8 +148,10 @@ func run(args []string) int {
 		return listProfilesCmd(requestHTTPClient, *baseURL)
 	}
 
+	workspacePath := resolveWorkspacePath(*workspace)
+
 	if *enableTUI {
-		if err := runTUI(*baseURL); err != nil {
+		if err := runTUI(*baseURL, workspacePath); err != nil {
 			fmt.Fprintf(stderr, "harnesscli: tui: %v\n", err)
 			return 1
 		}
@@ -177,6 +181,7 @@ func run(args []string) int {
 		TaskContext:      *taskContext,
 		PromptProfile:    *promptProfile,
 		PromptExtensions: extensions,
+		WorkspacePath:    workspacePath,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "harnesscli: start run: %v\n", err)
@@ -349,17 +354,31 @@ func decodeEvent(envelope sseEnvelope) (harness.Event, error) {
 	return event, nil
 }
 
-
-func runTUI(baseURL string) error {
-	if !term.IsTerminal(int(os.Stdout.Fd())) {
-		return fmt.Errorf("--tui requires a terminal; pipe output or use without --tui for streaming mode")
+func resolveWorkspacePath(workspace string) string {
+	workspacePath := strings.TrimSpace(workspace)
+	if workspacePath == "" {
+		if cwd, err := os.Getwd(); err == nil {
+			workspacePath = cwd
+		}
 	}
-	tuiCfg := tui.TUIConfig{
+	return workspacePath
+}
+
+func newTUIConfig(baseURL, workspace string) tui.TUIConfig {
+	return tui.TUIConfig{
 		BaseURL:      baseURL,
+		Workspace:    workspace,
 		EnableTUI:    true,
 		ColorProfile: "truecolor",
 		AltScreen:    true,
 	}
+}
+
+func runTUI(baseURL, workspace string) error {
+	if !term.IsTerminal(int(os.Stdout.Fd())) {
+		return fmt.Errorf("--tui requires a terminal; pipe output or use without --tui for streaming mode")
+	}
+	tuiCfg := newTUIConfig(baseURL, workspace)
 	p := tea.NewProgram(
 		tui.New(tuiCfg),
 		tea.WithAltScreen(),

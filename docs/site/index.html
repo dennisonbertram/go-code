@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Go Agent Harness is a local coding-agent runtime with a TUI, streamed API, workspaces, tool calls, and installable go-code command.">
+    <title>Go Agent Harness</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="topbar" aria-label="Primary">
+      <a class="brand" href="#top" aria-label="Go Agent Harness home">
+        <span class="brand-mark" aria-hidden="true">go</span>
+        <span>Go Agent Harness</span>
+      </a>
+      <nav class="nav" aria-label="Page sections">
+        <a href="#install">Install</a>
+        <a href="#why">Why</a>
+        <a href="#modes">Modes</a>
+        <a href="#roadmap">Distribution</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Local agent runtime for serious coding loops</p>
+          <h1>Go Agent Harness</h1>
+          <p class="lede">
+            Install one command, open the TUI from any repository, and run agent sessions against a local harness with streamed events, workspace-aware tools, model routing, and cost feedback.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#install">Install locally</a>
+            <a class="button secondary" href="#roadmap">Distribution plan</a>
+          </div>
+        </div>
+
+        <aside class="terminal-shot" aria-label="Example terminal session">
+          <div class="terminal-bar">
+            <span></span>
+            <span></span>
+            <span></span>
+          </div>
+          <div class="terminal-body">
+            <p><span class="prompt">$</span> go-code</p>
+            <p class="dim">project root: /Users/me/Develop/app</p>
+            <p><span class="agent">Go Agent</span> working with DeepSeek V4 Flash</p>
+            <p class="tool">bash called 3x (ctrl+o to open)</p>
+            <p class="reply">Implemented tests first, updated the TUI, and rebuilt the harness.</p>
+            <p class="status">model: deepseek-v4-flash | cost: $0.01 | 62 tok/s</p>
+          </div>
+        </aside>
+      </section>
+
+      <section id="install" class="band install-band">
+        <div class="section-grid">
+          <div>
+            <p class="eyebrow">Current install path</p>
+            <h2>Source install, no sudo by default.</h2>
+            <p>
+              The installer builds the harness, installs the user-facing command, and copies runtime prompts and model catalogs so the command works outside the repository checkout.
+            </p>
+          </div>
+          <div class="code-panel" aria-label="Install commands">
+            <pre><code>git clone https://github.com/dennisonbertram/go-agent-harness.git
+cd go-agent-harness
+./scripts/install.sh --add-to-path
+
+go-code              # TUI
+go-code "fix tests"  # single-shot
+go-code --server     # persistent daemon</code></pre>
+          </div>
+        </div>
+      </section>
+
+      <section id="why" class="section">
+        <div class="section-heading">
+          <p class="eyebrow">Built for everyday development</p>
+          <h2>A harness you can actually live inside.</h2>
+        </div>
+        <div class="feature-grid">
+          <article class="feature">
+            <h3>Workspace-aware</h3>
+            <p>Launch from any repository. Runs carry that project path through to the server so tools operate in the place you intended.</p>
+          </article>
+          <article class="feature">
+            <h3>Readable tool flow</h3>
+            <p>Tool calls stay visible while work is active, then collapse after the assistant reply so the conversation stays usable.</p>
+          </article>
+          <article class="feature">
+            <h3>Model-flexible</h3>
+            <p>Use direct providers or gateways with catalog-backed model metadata, pricing, reasoning effort, and last-selected model memory.</p>
+          </article>
+          <article class="feature">
+            <h3>Streamed and inspectable</h3>
+            <p>The HTTP event stream exposes assistant deltas, tool events, usage, context, approvals, and run lifecycle state.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="modes" class="band">
+        <div class="section-heading compact">
+          <p class="eyebrow">Three entrypoints</p>
+          <h2>One command for interactive and scripted work.</h2>
+        </div>
+        <div class="mode-table" role="table" aria-label="go-code command modes">
+          <div role="row">
+            <code>go-code</code>
+            <span>Launch the terminal UI in the current project.</span>
+          </div>
+          <div role="row">
+            <code>go-code "prompt"</code>
+            <span>Run one prompt, stream output, then exit.</span>
+          </div>
+          <div role="row">
+            <code>go-code --server</code>
+            <span>Start the local harness daemon and leave it running.</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="roadmap" class="section roadmap">
+        <div class="section-heading">
+          <p class="eyebrow">Distribution ladder</p>
+          <h2>From local installer to release-quality packaging.</h2>
+        </div>
+        <ol class="timeline">
+          <li>
+            <strong>Source installer</strong>
+            <span>Current channel for daily use and early testers.</span>
+          </li>
+          <li>
+            <strong>GitHub Releases</strong>
+            <span>Per-platform archives containing binaries plus `share/go-code` assets.</span>
+          </li>
+          <li>
+            <strong>Homebrew tap</strong>
+            <span>Preferred polished macOS path once release archives exist.</span>
+          </li>
+          <li>
+            <strong>Single binary</strong>
+            <span>Long-term simplification: embed assets and make `go-code` the whole product surface.</span>
+          </li>
+        </ol>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>Go Agent Harness</span>
+      <a href="https://github.com/dennisonbertram/go-agent-harness">GitHub</a>
+    </footer>
+  </body>
+</html>
