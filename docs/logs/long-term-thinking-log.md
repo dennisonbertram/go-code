@@ -17,6 +17,24 @@
   - Avoid broad import-path churn while the product rename lands.
 - Next verification step: confirm the Pages workflow publishes the updated site at `https://dennisonbertram.github.io/go-code/`.
 
+## 2026-05-03 (Repository Hygiene Cleanup)
+
+- Command intent: Clean up root-level and generated repository clutter after the public rename.
+- User intent: Make the repository feel presentable and easier to browse without losing useful training examples.
+- Success definition:
+  - Generated/local state is no longer tracked.
+  - Root-level scratch and training outputs no longer crowd the project root.
+  - Durable training examples live under `playground/training/`.
+  - Incomplete examples/exercises remain available but do not poison stable product or playground test baselines.
+  - `.gitignore` prevents the same clutter from coming back.
+- Non-goals:
+  - Moving product packages such as `cmd/`, `internal/`, `catalog/`, `prompts/`, or `scripts/`.
+  - Rewriting benchmark harness imports or Python adapter layout.
+- Guardrails/constraints:
+  - Prefer mechanical moves and deletions over package refactors.
+  - Keep main CLI/TUI tests green.
+- Next verification step: audit whether `skills/` should remain bundled at the repository root or move behind a plugin/package boundary in a separate design slice.
+
 ## 2026-05-01 (User-Local Installer and Workspace-Aware TUI)
 
 - Command intent: Turn the repo-local `go-code` wrapper into a practical installer so the harness can be used from normal projects without manual sudo copy steps.

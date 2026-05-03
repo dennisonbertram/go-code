@@ -12,6 +12,26 @@
   - `bash -n scripts/install.sh scripts/go-code.sh`
   - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pages.yml")'`
 
+## 2026-05-03 (Repository Hygiene Cleanup)
+
+- Removed tracked local/generated state that should not be part of the repository:
+  - `.coord/`
+  - `.codex-worktrees/`
+  - benchmark `jobs/`
+  - Python `__pycache__/` bytecode
+  - root `code-reviews/` output
+  - scratch `sol/`
+- Moved root-level training exercise folders into `playground/training/` so the top-level tree reads like a product repository.
+- Isolated incomplete `playground/examples/` and `playground/exercises/` behind their own module boundaries so `cd playground && go test ./...` covers the stable playground baseline without treating every scratch exercise as product code.
+- Stabilized the moved persistent-trie training test by replacing random word generation with deterministic unique words, avoiding false "future word" failures from duplicate random samples.
+- Tightened `.gitignore` to keep coordination state, generated job output, Python bytecode, and scratch training outputs from being recommitted.
+- Validation:
+  - `git diff --check`
+  - `go test ./cmd/harnesscli/... -count=1`
+  - `go test ./internal/quality/repostructure -count=1`
+  - `go test ./... -count=1`
+  - `cd playground && go test ./... -count=1`
+
 ## 2026-05-01 (User-Local Installer and Workspace-Aware TUI)
 
 - Added a sudo-free local installer for distribution testing.

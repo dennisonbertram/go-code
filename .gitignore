@@ -22,6 +22,8 @@ node_modules/
 dist/
 .tmp/
 tmp/
+__pycache__/
+*.py[cod]
 
 # Compiled binaries (root-level)
 /harnesscli
@@ -30,6 +32,8 @@ tmp/
 /trainerd
 
 # Tooling state
+.codex-worktrees/
+.coord/
 .claude/
 .harness/
 cmd/harnessd/.harness/
@@ -45,6 +49,9 @@ repomix-output.txt
 code-reviews/
 
 # Generated training artifacts
+jobs/
+sol/
+training-*/
 training-reports/
 
 # Runtime artifacts

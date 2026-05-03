@@ -1,9 +1,8 @@
 package ptrie
 
 import (
-	"math/rand"
+	"fmt"
 	"testing"
-	"time"
 )
 
 func TestPersistentTrieTwoVersions(t *testing.T) {
@@ -32,18 +31,7 @@ func TestPersistentTrieTwoVersions(t *testing.T) {
 	}
 }
 
-func genRandomWord(r *rand.Rand, minLen, maxLen int) string {
-	length := minLen + r.Intn(maxLen-minLen+1)
-	bytes := make([]rune, length)
-	letters := []rune("abcdefghijklmnopqrstuvwxyz")
-	for i := range bytes {
-		bytes[i] = letters[r.Intn(len(letters))]
-	}
-	return string(bytes)
-}
-
 func TestPersistentTrieManyVersions(t *testing.T) {
-	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
 	versions := 50
 	wordsPerVersion := 1000 / versions
 	var roots []*Node
@@ -53,7 +41,7 @@ func TestPersistentTrieManyVersions(t *testing.T) {
 	for v := 0; v < versions; v++ {
 		words := make([]string, 0, wordsPerVersion)
 		for i := 0; i < wordsPerVersion; i++ {
-			w := genRandomWord(rng, 3, 10)
+			w := fmt.Sprintf("word-%02d-%02d", v, i)
 			current = Insert(current, w)
 			words = append(words, w)
 			inserted = append(inserted, w)

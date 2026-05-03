@@ -81,6 +81,14 @@ tmux attach-session -t go-code-server
 - `internal/workspace`: local, container, VM, and worktree workspace implementations.
 - `catalog/`: model and pricing catalogs used at runtime.
 - `prompts/`: bundled prompt assets installed with `go-code`.
+- `apps/`: experimental apps that integrate with the harness.
+- `benchmarks/`: Terminal Bench and overnight benchmark harnesses.
+- `harness_agent/`: Python adapter used by benchmark runners.
+- `skills/`: bundled skill fixtures and validation coverage.
+- `demo/`: small static demos and smoke-test pages.
+- `build/`: container/build packaging assets.
+- `testdata/`: shared test fixtures.
+- `playground/`: separate-module experiments and training exercises.
 - `docs/`: runbooks, design notes, logs, Pages source, and project context.
 - `scripts/`: install, development, Symphony, and regression helpers.
 

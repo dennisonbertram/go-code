@@ -15,4 +15,8 @@ cd playground
 go test ./...
 ```
 
+Training exercises and one-off benchmark solutions live in `playground/training/` so the repository root stays focused on the product. Some nested training exercises include their own `go.mod`; run those from their own directory when needed.
+
+`examples/` and `exercises/` are intentionally isolated as their own modules because they contain incomplete practice code. Test those packages individually when working on them; they are not part of the main product or stable playground baseline.
+
 Treat the playground as a sandbox. Product-quality changes should land in the main module instead.
