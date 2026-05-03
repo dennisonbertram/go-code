@@ -3,6 +3,7 @@ bin/
 *.test
 *.out
 coverage.out
+coverage*.out
 
 # Editor/OS
 .DS_Store
@@ -33,6 +34,12 @@ tmp/
 .harness/
 cmd/harnessd/.harness/
 repomix-output.txt
+
+# Local scratch files
+/a.txt
+/b.txt
+/message*
+/process.sh
 
 # Code review outputs
 code-reviews/

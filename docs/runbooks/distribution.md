@@ -1,13 +1,14 @@
 # Distribution Runbook
 
-This runbook describes the current install path and the intended distribution ladder for Go Agent Harness.
+This runbook describes the current install path and the intended distribution ladder for `go-code`.
 
 ## Current Channel: Source Install
 
 The supported local distribution channel is the source installer:
 
 ```bash
-cd /path/to/go-agent-harness
+git clone https://github.com/dennisonbertram/go-code.git
+cd go-code
 ./scripts/install.sh --add-to-path
 ```
 
@@ -44,7 +45,7 @@ The wrapper must:
 - leave an already-running server alone
 - locate installed `prompts/` and `catalog/` assets outside the repo checkout
 - resolve the caller's project root and pass it as the run workspace
-- work when launched from any repository, not just from the harness repo
+- work when launched from any repository, not just from this repo
 
 ## GitHub Pages
 
@@ -55,7 +56,7 @@ The Pages workflow lives in `.github/workflows/pages.yml` and publishes `docs/si
 After deployment, the expected project page is:
 
 ```text
-https://dennisonbertram.github.io/go-agent-harness/
+https://dennisonbertram.github.io/go-code/
 ```
 
 Repository setup:
@@ -72,10 +73,10 @@ The page is intentionally static. Do not add a framework unless the site grows b
 The next distribution channel should be GitHub Releases with per-platform archives:
 
 ```text
-go-agent_Darwin_arm64.tar.gz
-go-agent_Darwin_x86_64.tar.gz
-go-agent_Linux_x86_64.tar.gz
-go-agent_Linux_arm64.tar.gz
+go-code_Darwin_arm64.tar.gz
+go-code_Darwin_x86_64.tar.gz
+go-code_Linux_x86_64.tar.gz
+go-code_Linux_arm64.tar.gz
 ```
 
 Each archive should contain:
@@ -103,7 +104,7 @@ Then copy `scripts/go-code.sh` to `dist/bin/go-code` and copy `prompts/` plus `c
 After release archives exist, extend `scripts/install.sh` with a download mode:
 
 ```bash
-curl -fsSL https://example.invalid/go-agent/install.sh | bash
+curl -fsSL https://dennisonbertram.github.io/go-code/install.sh | bash
 ```
 
 Download-mode requirements:
@@ -129,8 +130,8 @@ Formula responsibilities:
 Expected install UX:
 
 ```bash
-brew tap dennisonbertram/go-agent
-brew install go-agent
+brew tap dennisonbertram/go-code
+brew install go-code
 go-code
 ```
 

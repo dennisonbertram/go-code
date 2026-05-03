@@ -1,5 +1,17 @@
 # Engineering Log
 
+## 2026-05-03 (Repository Rename and Public README Cleanup)
+
+- Renamed the GitHub repository and public project surface from `go-agent-harness` to `go-code`.
+- Reworked the top-level README for first-time browsers with a watercolor hero, quick start, install modes, repository map, HTTP surface summary, testing commands, and documentation links.
+- Updated the GitHub Pages landing page and distribution runbook to use the new repository URL and Pages URL.
+- Added `docs/assets/` for public documentation media and removed tracked root-level scratch files that made the repository look less presentable.
+- Validation:
+  - `file docs/assets/go-code-watercolor-hero.png`
+  - `git diff --check`
+  - `bash -n scripts/install.sh scripts/go-code.sh`
+  - `ruby -e 'require "yaml"; YAML.load_file(".github/workflows/pages.yml")'`
+
 ## 2026-05-01 (User-Local Installer and Workspace-Aware TUI)
 
 - Added a sudo-free local installer for distribution testing.

@@ -4,7 +4,7 @@
 - `symphony.md`: How to run OpenAI Symphony for this repository with the wrapper script.
 - `symphony-issue-authoring.md`: How to write GitHub issues that Symphony can execute autonomously with strict TDD, behavior tests, regression gates, and merge rules.
 - `deployment.md`: MVP deployment runbook with security and verification checks.
-- `distribution.md`: Installer, GitHub Pages, release archive, Homebrew, and release checklist guidance for distributing Go Agent Harness.
+- `distribution.md`: Installer, GitHub Pages, release archive, Homebrew, and release checklist guidance for distributing go-code.
 - `worktree-flow.md`: Required worktree-first development and merge workflow.
 - `issue-triage.md`: How to capture bugs/problems as GitHub issues.
 - `documentation-maintenance.md`: How to maintain per-folder indexes and documentation quality.

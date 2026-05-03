@@ -1,294 +1,141 @@
-# Go Agent Harness
+<p align="center">
+  <img src="docs/assets/go-code-watercolor-hero.png" alt="Watercolor illustration of a terminal coding agent workspace" width="100%">
+</p>
 
-`go-agent-harness` is a Go service for running coding-oriented agent sessions with a streamed event API, conversation storage, optional subagent and cron helpers, and a thin CLI for live testing.
+# go-code
 
-The implementation is centered in:
+`go-code` is a local-first coding agent for working inside real repositories. It gives you an installable terminal command, a TUI for interactive development, a streamed HTTP runtime, provider and model routing, workspace-aware tool calls, and enough visibility to understand what the agent is doing while it works.
 
-- `cmd/harnessd`
-- `cmd/harnesscli`
-- `internal/server`
-- `internal/harness`
-- `internal/config`
+The project is implemented in Go. The public command is `go-code`; the internal module name is still `go-agent-harness` while the product surface settles.
 
-## Repository Layout
+## What You Get
 
-- `cmd/`: product entrypoints and operator CLIs.
-- `internal/`: main application packages for runner execution, HTTP APIs, provider integrations, config, storage, and workspace management.
-- `plugins/`: optional runtime plugins and plugin-side training helpers.
-- `playground/`: isolated experimental and training snippets in a separate Go module.
-- `docs/`: plans, logs, runbooks, and project context.
-- `scripts/`: regression, bootstrap, smoke, and workflow automation.
-
-The repo root is intentionally kept free of Go source now. If you want to work on snippet-style exercises, use `playground/` instead of adding ad hoc files at the top level.
-
-## What The Service Does
-
-- Starts runs with `POST /v1/runs`.
-- Streams run events from `GET /v1/runs/{id}/events`.
-- Exposes run control endpoints for input, continue, steer, compact, and replay.
-- Exposes conversation, agent, subagent, cron, skill, recipe, provider, model, search, and MCP discovery endpoints.
-- Builds a default tool registry from local file/shell helpers plus optional integrations enabled by config.
+- `go-code`: launch the TUI from any repository.
+- `go-code "prompt"`: run one coding prompt and stream the result.
+- `go-code --server`: start the local `harnessd` daemon and leave it running.
+- A streamed event API for runs, tool calls, model usage, approvals, subagents, conversations, and replay.
+- Provider catalog support for OpenAI, Anthropic, Google, DeepSeek, Z.ai, OpenRouter-style routes, and local catalog pricing.
+- Workspace-aware execution so the agent works in the project directory where you launched it.
 
 ## Quick Start
 
-### Installed Command
-
-For daily use, install the local `go-code` command:
+Clone the repo and install the command into your user-local bin directory:
 
 ```bash
+git clone https://github.com/dennisonbertram/go-code.git
+cd go-code
 ./scripts/install.sh --add-to-path
 ```
 
-The installer defaults to `~/.local`, copies `harnesscli`, `harnessd`, and `go-code` into `~/.local/bin`, and installs runtime prompts plus model catalogs into `~/.local/share/go-code`.
-
-After opening a new shell, or exporting `PATH="$HOME/.local/bin:$PATH"`, use:
+Open a new shell, or add the printed PATH line for your current shell, then run:
 
 ```bash
-go-code              # launch the TUI from the current project
-go-code "prompt"     # run one prompt from the current project
-go-code --server     # start harnessd and leave it running
+go-code
 ```
 
-Distribution and publishing notes live in `docs/runbooks/distribution.md`. The GitHub Pages source lives in `docs/site/`.
+Common modes:
 
-### Development From Source
+```bash
+go-code                         # interactive TUI in the current project
+go-code "summarize this repo"    # single-shot prompt
+go-code --server                # persistent local daemon
+```
 
-1. Set `OPENAI_API_KEY`.
-2. Start the server:
+## API Keys
+
+Set the provider keys you plan to use before starting a run:
+
+```bash
+export OPENAI_API_KEY="..."
+export ANTHROPIC_API_KEY="..."
+export GOOGLE_API_KEY="..."
+export DEEPSEEK_API_KEY="..."
+export ZAI_API_KEY="..."
+```
+
+You only need keys for the providers you use. You can also configure provider keys through the TUI and server APIs as the harness evolves.
+
+## Running From Source
+
+For development or debugging, run the server and CLI directly:
 
 ```bash
 go run ./cmd/harnessd
+go run ./cmd/harnesscli -base-url http://127.0.0.1:8080 -prompt "Summarize the repository"
 ```
 
-3. Start the CLI against the server:
+Long-running local servers should be started in tmux:
 
 ```bash
-go run ./cmd/harnesscli -base-url http://127.0.0.1:8080 -prompt "Summarize the repository docs"
+tmux new-session -d -s go-code-server 'cd /path/to/go-code && go run ./cmd/harnessd'
+tmux attach-session -t go-code-server
 ```
 
-## HTTP API
+## Repository Map
 
-### Health And Discovery
+- `cmd/harnesscli`: command-line client and terminal UI.
+- `cmd/harnessd`: local HTTP daemon and runtime bootstrap.
+- `internal/harness`: run loop, tools, event emission, and conversation behavior.
+- `internal/server`: HTTP API handlers.
+- `internal/provider`: provider clients, model catalogs, pricing, and routing.
+- `internal/workspace`: local, container, VM, and worktree workspace implementations.
+- `catalog/`: model and pricing catalogs used at runtime.
+- `prompts/`: bundled prompt assets installed with `go-code`.
+- `docs/`: runbooks, design notes, logs, Pages source, and project context.
+- `scripts/`: install, development, Symphony, and regression helpers.
 
-- `GET /healthz`
-- `GET /v1/models`
-- `GET /v1/providers`
-- `GET /v1/mcp/servers`
-- `POST /v1/mcp/servers`
-- `POST /v1/search/code`
-- `POST /v1/summarize`
-- `GET /v1/profiles`
-- `GET|POST|PUT|DELETE /v1/profiles/{name}`
+The repo root is kept for product entrypoints and project metadata. Scratch snippets and exercises should live under `playground/` or a dedicated test fixture.
 
-### Runs
+## HTTP Surface
 
-- `POST /v1/runs`
-- `GET /v1/runs`
-- `GET /v1/runs/{id}`
-- `GET /v1/runs/{id}/events`
-- `GET|POST /v1/runs/{id}/input`
-- `GET /v1/runs/{id}/summary`
-- `POST /v1/runs/{id}/continue` — request body: `{"prompt": "..."}`
-- `POST /v1/runs/{id}/steer` — request body: `{"prompt": "..."}`
-- `GET /v1/runs/{id}/context`
-- `POST /v1/runs/{id}/compact`
-- `GET|PUT /v1/runs/{id}/todos`
-- `POST /v1/runs/{id}/cancel`
-- `POST /v1/runs/{id}/approve`
-- `POST /v1/runs/{id}/deny`
-- `POST /v1/runs/replay`
+The server exposes a streamed coding-agent API. The most commonly used endpoints are:
 
-### Conversations
+```text
+GET  /healthz
+GET  /v1/models
+GET  /v1/providers
+POST /v1/runs
+GET  /v1/runs/{id}/events
+POST /v1/runs/{id}/continue
+POST /v1/runs/{id}/steer
+POST /v1/runs/{id}/compact
+POST /v1/runs/{id}/cancel
+GET  /v1/conversations/
+GET  /v1/skills
+GET  /v1/subagents
+POST /v1/subagents
+```
 
-- `GET /v1/conversations/`
-- `GET /v1/conversations/search`
-- `POST /v1/conversations/cleanup`
-- `DELETE /v1/conversations/{id}`
-- `GET /v1/conversations/{id}/messages`
-- `GET /v1/conversations/{id}/runs`
-- `GET /v1/conversations/{id}/export`
-- `POST /v1/conversations/{id}/compact`
+Run requests support prompt, model, provider, workspace, sandbox, approval, tool, profile, reasoning, and budget fields. Canonical event names live in `internal/harness/events.go`.
 
-### Agents And Subagents
+## Testing
 
-- `POST /v1/agents`
-- `GET /v1/subagents`
-- `POST /v1/subagents`
-- `GET /v1/subagents/{id}`
-- `DELETE /v1/subagents/{id}`
-- `POST /v1/subagents/{id}/wait`
-- `POST /v1/subagents/{id}/cancel`
+Focused checks for the install and TUI path:
 
-### Cron, Skills, And Recipes
+```bash
+bash -n scripts/install.sh scripts/go-code.sh
+HOME=$(mktemp -d) GOCACHE=/tmp/go-build go test ./cmd/harnesscli/... -count=1
+```
 
-- `GET /v1/cron/jobs`
-- `POST /v1/cron/jobs`
-- `GET /v1/cron/jobs/{id}`
-- `PATCH /v1/cron/jobs/{id}`
-- `DELETE /v1/cron/jobs/{id}`
-- `POST /v1/cron/jobs/{id}/pause`
-- `POST /v1/cron/jobs/{id}/resume`
-- `GET /v1/skills`
-- `GET /v1/skills/{name}`
-- `POST /v1/skills/{name}/verify`
-- `GET /v1/recipes/`
-- `GET /v1/recipes/{name}`
-- `GET /v1/recipes/{name}/schema`
-- `POST /v1/external/trigger`
-- `POST /v1/webhooks/github`
-- `POST /v1/webhooks/slack`
-- `POST /v1/webhooks/linear`
-- `PUT /v1/providers/{name}/key`
+Broader regression:
 
-## Run Request Shape
+```bash
+GOCACHE=/tmp/go-build ./scripts/test-regression.sh
+```
 
-`POST /v1/runs` accepts a richer request than the original MVP docs described. The current server supports:
+Follow `docs/runbooks/testing.md` for strict TDD expectations, behavior tests, regression tests, and merge gates.
 
-- Core prompt fields: `prompt`, `system_prompt`, `agent_intent`, `task_context`, `prompt_profile`, `prompt_extensions`
-- Model and provider fields: `model`, `provider_name`, `allow_fallback`, `reasoning_effort`
-- Budget and limits: `max_steps`, `max_cost_usd`
-- Tooling and integrations: `allowed_tools`, `mcp_servers`, `dynamic_rules`
-- Role models: `role_models.primary`, `role_models.summarizer`
-- Identity and tenancy: `tenant_id`, `agent_id`
-- Permissions: `permissions.sandbox`, `permissions.approval`
-- Profile selection: `profile`
+## Documentation
 
-The response includes identifiers such as `conversation_id`, `tenant_id`, `provider_name`, and `agent_id` when available.
+- Public page source: `docs/site/`
+- Distribution runbook: `docs/runbooks/distribution.md`
+- TUI visual testing: `docs/runbooks/tui-visual-testing.md`
+- Symphony issue authoring: `docs/runbooks/symphony-issue-authoring.md`
+- Worktree workflow: `docs/runbooks/worktree-flow.md`
+- Full docs index: `docs/INDEX.md`
 
-## Model Discovery
+The public project page is:
 
-The backend uses a hybrid model-discovery path.
-
-- The static catalog in `catalog/models.json` remains the baseline source for provider definitions, aliases, pricing, quirks, and default metadata.
-- Live discovery is currently implemented only for OpenRouter via `https://openrouter.ai/api/v1/models`.
-- Runtime provider resolution and `GET /v1/models` merge live OpenRouter results into the static catalog view.
-- When the same OpenRouter model exists in both places, static metadata wins.
-- OpenRouter-only live models are still routable and listable even when they are absent from the static catalog. This is what enables dynamic slugs such as `moonshotai/kimi-k2.5`.
-
-### Cache And Fallbacks
-
-- OpenRouter discovery is cached in memory with a TTL, so the backend does not fetch on every request.
-- Startup does not depend on a live discovery request.
-- If a refresh fails, the backend uses cached OpenRouter data when available.
-- If no cached discovery data exists, the backend falls back to the static catalog.
-- Providers that remain static-catalog-only are unchanged by this layer.
-
-## Event Stream
-
-Run events are streamed from `GET /v1/runs/{id}/events`. The catalog is broader than the original README and includes lifecycle, streaming, tool, context, hook, memory, and provider events.
-
-Common event families include:
-
-- Lifecycle: `run.started`, `run.completed`, `run.failed`, `run.cancelled`, `run.input.required`, `run.waiting_for_user`, `run.continued`, `run.cost_limit_reached`, `run.step.started`, `run.step.completed`
-- Model streaming: `assistant.message.delta`, `assistant.message.completed`, `assistant.thinking.delta`, `reasoning.complete`, `llm.request.snapshot`, `llm.response.meta`, `llm.empty_response.retry`, `provider.resolved`
-- Tooling: `tool.activated`, `tool.call.started`, `tool.call.completed`, `tool.output.delta`, `tool.decision`, `tool.antipattern`, `tool.call.blocked`
-- Context and compaction: `context.window.snapshot`, `context.window.warning`, `auto_compact.started`, `auto_compact.completed`, `compact_history.completed`, `context.reset`
-- Hooks and steering: `hook.*`, `callback.*`, `tool_hook.*`, `meta.message.injected`, `steering.received`
-- Memory and skills: `memory.*`, `skill.constraint.*`
-
-Some events are feature-gated or only emitted when the relevant subsystem is enabled. The canonical definitions live in `internal/harness/events.go`.
-
-## Tool Surface
-
-The default registry is broader than the old “coding toolset” list in the README. It currently includes:
-
-- Core file and shell helpers such as `read`, `write`, `edit`, `apply_patch`, and `bash`
-- Process and run helpers such as `job_output`, `job_kill`, `compact_history`, and context/status inspection
-- Clarification and memory helpers such as `ask_user_question` and observational memory
-- Optional conversation helpers when a conversation store is configured
-- Optional integrations exposed through the tool catalog, including MCP, skills, recipes, sourcegraph search, cron, subagent helpers, fetch/search helpers, and other catalog-backed tools
-
-If a tool is missing from a live run, check the corresponding config or integration guard in `internal/harness/tools_default.go` and `internal/harness/tools/catalog.go`.
-
-## Configuration
-
-The server is configured primarily through environment variables. The current code reads more settings than the original docs listed.
-
-### Server And Provider Settings
-
-- `HARNESS_ADDR`
-- `OPENAI_API_KEY`
-- `OPENAI_BASE_URL`
-- `HARNESS_MODEL`
-- `HARNESS_SYSTEM_PROMPT`
-- `HARNESS_DEFAULT_AGENT_INTENT`
-- `HARNESS_MAX_STEPS`
-- `HARNESS_MAX_COST_PER_RUN_USD`
-- `HARNESS_TOOL_APPROVAL_MODE`
-- `HARNESS_ASK_USER_TIMEOUT_SECONDS`
-- `HARNESS_MODEL_CATALOG_PATH`
-- `HARNESS_PRICING_CATALOG_PATH`
-
-If the loaded model catalog includes an `openrouter` provider, the server enables cached live OpenRouter discovery automatically. No additional discovery-specific environment variable is required in this pass.
-
-### Workspace And Content Roots
-
-- `HARNESS_WORKSPACE`
-- `HARNESS_PROMPTS_DIR`
-- `HARNESS_RECIPES_DIR`
-- `HARNESS_GLOBAL_DIR`
-- `HARNESS_ROLLOUT_DIR`
-- `HARNESS_SUBAGENT_BASE_REF`
-- `HARNESS_SUBAGENT_WORKTREE_ROOT`
-
-### Optional Integrations And Features
-
-- `HARNESS_SKILLS_ENABLED`
-- `HARNESS_WATCH_ENABLED`
-- `HARNESS_WATCH_INTERVAL_SECONDS`
-- `HARNESS_CRON_URL`
-- `HARNESS_ENABLE_CALLBACKS`
-- `HARNESS_SOURCEGRAPH_ENDPOINT`
-- `HARNESS_SOURCEGRAPH_TOKEN`
-- `HARNESS_MCP_SERVERS`
-- `HARNESS_ROLE_MODEL_PRIMARY`
-- `HARNESS_ROLE_MODEL_SUMMARIZER`
-
-### Memory, Retention, And Watcher Settings
-
-- `HARNESS_MEMORY_*`
-- `HARNESS_CONVERSATION_RETENTION_DAYS`
-- `HARNESS_CONVERSATION_DB`
-- `HARNESS_CONCLUSION_WATCHER_ENABLED`
-- `HARNESS_CONCLUSION_WATCHER_INTERVENTION_MODE`
-- `HARNESS_CONCLUSION_WATCHER_EVALUATOR_ENABLED`
-- `HARNESS_CONCLUSION_WATCHER_EVALUATOR_MODEL`
-
-## CLI Flags
-
-`cmd/harnesscli` currently supports:
-
-- `-base-url`
-- `-prompt`
-- `-model`
-- `-system-prompt`
-- `-agent-intent`
-- `-task-context`
-- `-prompt-profile`
-- `-prompt-behavior`
-- `-prompt-talent`
-- `-prompt-custom`
-- `-list-profiles`
-- `-tui`
-
-The prompt extension flags are forwarded into the run request so the CLI can exercise the same request shape the server accepts.
-
-`harnesscli` also supports an auth helper subcommand:
-
-- `harnesscli auth login` (flags: `-server`, `-tenant`, `-name`)
-
-Additional run-management subcommands:
-
-- `harnesscli list` (flags: `-base-url`, `-status`, `-conversation-id`)
-- `harnesscli status <run-id>` (flags: `-base-url`)
-- `harnesscli cancel <run-id>` (flags: `-base-url`)
-
-## Source Of Truth
-
-When in doubt, use the implementation as the source of truth:
-
-- HTTP routing and handlers: `internal/server/http.go` and the `internal/server/http_*.go` files
-- Run model and request/response types: `internal/harness/types.go`
-- Event definitions: `internal/harness/events.go`
-- Tool catalog and defaults: `internal/harness/tools_default.go` and `internal/harness/tools/catalog.go`
-- Config loading: `internal/config`
+```text
+https://dennisonbertram.github.io/go-code/
+```

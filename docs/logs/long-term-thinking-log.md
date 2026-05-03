@@ -1,5 +1,22 @@
 # Long-Term Thinking Log
 
+## 2026-05-03 (Repository Rename and Public README Cleanup)
+
+- Command intent: Rename the repository to `go-code` and make the public project presentation clear for first-time visitors.
+- User intent: Move the harness closer to a distributable, installable tool that feels understandable from the README and project page.
+- Success definition:
+  - GitHub repository and Pages URLs use `go-code`.
+  - README starts with a wide watercolor hero image and explains what the project is, how to install it, how to run it, and where the important code and docs live.
+  - Distribution docs, Pages copy, and docs indexes use the new public name.
+  - Tracked root scratch files are removed so the repository front door is cleaner.
+- Non-goals:
+  - Renaming the Go module path in this slice.
+  - Building release archives or a Homebrew tap in this slice.
+- Guardrails/constraints:
+  - Keep installed command behavior unchanged.
+  - Avoid broad import-path churn while the product rename lands.
+- Next verification step: confirm the Pages workflow publishes the updated site at `https://dennisonbertram.github.io/go-code/`.
+
 ## 2026-05-01 (User-Local Installer and Workspace-Aware TUI)
 
 - Command intent: Turn the repo-local `go-code` wrapper into a practical installer so the harness can be used from normal projects without manual sudo copy steps.

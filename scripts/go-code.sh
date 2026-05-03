@@ -31,7 +31,7 @@ Environment:
                  Example: HARNESS_ADDR=:9090 go-code "ls *.go"
 
 Description:
-  Single-command entry point for the go-agent-harness. Auto-starts harnessd
+  Single-command entry point for go-code. Auto-starts harnessd
   when no server is already running. The server is only stopped on exit when
   go-code started it — a pre-existing server is always left alone.
 EOF
