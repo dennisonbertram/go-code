@@ -636,6 +636,9 @@ func TestResponsesAPIRequestFormat(t *testing.T) {
 	if userMsg["type"] != "message" || userMsg["role"] != "user" {
 		t.Fatalf("unexpected user message item: %v", userMsg)
 	}
+	if _, hasArguments := userMsg["arguments"]; hasArguments {
+		t.Fatalf("message input items must not include arguments: %v", userMsg)
+	}
 
 	// Tool spec should be flat (no nested "function" wrapper).
 	tools, ok := req["tools"].([]any)
@@ -964,6 +967,51 @@ func TestResponsesAPIStreamingTextAndToolCalls(t *testing.T) {
 	}
 }
 
+func TestResponsesAPIStreamingToolCallArgumentsFromOutputItemDone(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"stream":true`) {
+			t.Fatalf("expected stream=true in request, got: %s", body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`event: response.output_item.done`,
+			`data: {"item":{"type":"function_call","call_id":"call_write","name":"write","arguments":"{\"path\":\"index.html\",\"content\":\"hi\"}"}}`,
+			``,
+			`event: response.completed`,
+			`data: {"response":{"id":"resp_abc","output":[],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClient(t, testServer.URL)
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "Write a file"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(result.ToolCalls))
+	}
+	if result.ToolCalls[0].ID != "call_write" {
+		t.Fatalf("unexpected tool call ID: %q", result.ToolCalls[0].ID)
+	}
+	if result.ToolCalls[0].Name != "write" {
+		t.Fatalf("unexpected tool call name: %q", result.ToolCalls[0].Name)
+	}
+	if result.ToolCalls[0].Arguments != `{"path":"index.html","content":"hi"}` {
+		t.Fatalf("unexpected tool call arguments: %q", result.ToolCalls[0].Arguments)
+	}
+}
+
 // TestResponsesAPIStreamingMissingCompleted verifies that an error is returned
 // if the stream ends without a response.completed event.
 func TestResponsesAPIStreamingMissingCompleted(t *testing.T) {
@@ -1084,6 +1132,11 @@ func TestResponsesAPIFunctionCallArgumentsNeverOmitted(t *testing.T) {
 
 			input := req["input"].([]any)
 			// input[0] = user message, input[1] = function_call item
+			userItem := input[0].(map[string]any)
+			if _, ok := userItem["arguments"]; ok {
+				t.Fatalf("message item must not include arguments: %v", userItem)
+			}
+
 			funcCallItem := input[1].(map[string]any)
 			if funcCallItem["type"] != "function_call" {
 				t.Fatalf("expected function_call item, got: %v", funcCallItem)

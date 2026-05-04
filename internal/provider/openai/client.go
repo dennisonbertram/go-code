@@ -767,9 +767,11 @@ type responsesInputItem struct {
 	Role    string `json:"role,omitempty"`
 	Content any    `json:"content,omitempty"` // string or []responsesContentBlock
 	// For type == "function_call"
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments"` // required by Responses API even when empty
+	CallID string `json:"call_id,omitempty"`
+	Name   string `json:"name,omitempty"`
+	// Arguments is required by the Responses API for function_call items, even
+	// when empty, but it is invalid on message and function_call_output items.
+	Arguments *string `json:"arguments,omitempty"`
 	// For type == "function_call_output"
 	Output string `json:"output,omitempty"`
 }
@@ -926,11 +928,12 @@ func mapToResponsesRequest(req harness.CompletionRequest, model string) response
 				})
 			}
 			for _, call := range msg.ToolCalls {
+				arguments := call.Arguments
 				rr.Input = append(rr.Input, responsesInputItem{
 					Type:      "function_call",
 					CallID:    call.ID,
 					Name:      call.Name,
-					Arguments: call.Arguments,
+					Arguments: &arguments,
 				})
 			}
 			// If no content and no tool calls (edge case), still emit an empty message.
@@ -1327,6 +1330,10 @@ func processResponsesSSEBlock(event, data string, state *responsesStreamState, s
 			tc := state.ensureToolCall(ev.Item.CallID)
 			if ev.Item.Name != "" {
 				tc.Name = ev.Item.Name
+			}
+			if ev.Item.Arguments != "" {
+				tc.Arguments.Reset()
+				tc.Arguments.WriteString(ev.Item.Arguments)
 			}
 		}
 
