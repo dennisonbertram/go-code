@@ -31,6 +31,52 @@ func TestNewFileEngineLoadsCatalog(t *testing.T) {
 	}
 }
 
+func TestRepositoryCatalogMapsDeepSeekToApprovedProfile(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join("..", "..", "prompts")
+
+	engine, err := NewFileEngine(root)
+	if err != nil {
+		t.Fatalf("new file engine: %v", err)
+	}
+
+	out, err := engine.Resolve(ResolveRequest{Model: "deepseek-v4-pro"})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if out.ResolvedModelProfile != "deepseek" {
+		t.Fatalf("expected deepseek profile, got %q", out.ResolvedModelProfile)
+	}
+	if out.ModelFallback {
+		t.Fatalf("expected deepseek profile to be catalog-approved, not fallback")
+	}
+	if !strings.Contains(out.StaticPrompt, "Before each tool call, pass this checklist") {
+		t.Fatalf("resolved prompt missing DeepSeek checklist:\n%s", out.StaticPrompt)
+	}
+}
+
+func TestGeneratedEvalProfileArtifactDoesNotChangePromptResolution(t *testing.T) {
+	t.Parallel()
+	root := makePromptFixture(t)
+	writeFixtureFile(t, root, "profiles/deepseek/deepseek-v4-pro.json", `{"model":"deepseek-v4-pro","candidate_runtime_prompt_profile":{"content":"SHOULD_NOT_LOAD"}}`)
+
+	engine, err := NewFileEngine(root)
+	if err != nil {
+		t.Fatalf("new file engine: %v", err)
+	}
+
+	out, err := engine.Resolve(ResolveRequest{Model: "deepseek-v4-pro"})
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if out.ResolvedModelProfile != "default" {
+		t.Fatalf("expected default profile without catalog mapping, got %q", out.ResolvedModelProfile)
+	}
+	if strings.Contains(out.StaticPrompt, "SHOULD_NOT_LOAD") {
+		t.Fatalf("generated eval artifact leaked into runtime prompt:\n%s", out.StaticPrompt)
+	}
+}
+
 func TestResolveUsesExplicitAutoresearchPromptProfile(t *testing.T) {
 	t.Parallel()
 	root := makePromptFixture(t)

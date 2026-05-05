@@ -7,6 +7,9 @@ intents:
   code_review: intents/code_review.md
   frontend_design: intents/frontend_design.md
 model_profiles:
+  - name: deepseek
+    match: deepseek-*
+    file: models/deepseek.md
   - name: openai_gpt5
     match: gpt-5-*
     file: models/openai_gpt5.md

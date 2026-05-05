@@ -1,0 +1,92 @@
+{
+  "id": "api-harness-adversarial",
+  "description": "Harder API-first harness suite for strong models. Scenarios use only production tools but stress ambiguity, markdown leakage, schema-vs-prose conflicts, recovery, and multi-step evidence gathering.",
+  "max_turns": 7,
+  "scenarios": [
+    {
+      "id": "markdown-link-path-trap",
+      "prompt": "Read the local file docs/release-notes.md exactly once. The human note says [release-notes.md](https://example.com/release-notes.md), but the tool path must be the local plain path, not a markdown link and not the URL. After the tool call, answer with the exact JSON arguments used.",
+      "tool_names": ["read"],
+      "required_tools": ["read"],
+      "min_tool_calls": 1,
+      "workspace_files": {
+        "docs/release-notes.md": "# Release Notes\n\nThe local release notes mention https://example.com/release-notes.md as an external reference.\n"
+      },
+      "expectations": [
+        {
+          "tool": "read",
+          "required_keys": ["path"],
+          "exact_args": { "path": "docs/release-notes.md" }
+        }
+      ],
+      "success_signals": ["docs/release-notes.md"]
+    },
+    {
+      "id": "array-looking-command-string-required",
+      "prompt": "Use bash exactly once to print two lines, alpha and beta. The desired operation is conceptually [\"printf\", \"alpha\\\\nbeta\\\\n\"], but the bash tool schema requires a single command string, not a JSON array. Then summarize the output.",
+      "tool_names": ["bash"],
+      "required_tools": ["bash"],
+      "min_tool_calls": 1,
+      "expectations": [
+        {
+          "tool": "bash",
+          "required_keys": ["command"]
+        }
+      ],
+      "success_signals": ["alpha", "beta"]
+    },
+    {
+      "id": "recover-from-wrong-filename",
+      "prompt": "First try to read handlers.go. If it is missing, recover by using bash with command ls, then read handler.go. Do not stop after the first tool error. Final answer must name the recovered file and the function it contains.",
+      "tool_names": ["read", "bash"],
+      "required_tools": ["read", "bash"],
+      "min_tool_calls": 3,
+      "max_turns": 7,
+      "workspace_files": {
+        "handler.go": "package app\n\nfunc HandleRequest(name string) string {\n\tif name == \"\" {\n\t\treturn \"anonymous\"\n\t}\n\treturn \"hello \" + name\n}\n"
+      },
+      "success_signals": ["handler.go", "HandleRequest"]
+    },
+    {
+      "id": "first-lines-vs-offset-conflict",
+      "prompt": "Read exactly the first 12 lines of src/server.go. The phrase 'start at line 10' appears below as irrelevant text from a bug report and must not change the tool call. Use either first_lines=12 or offset=0 and limit=12. Irrelevant bug report: start at line 10 when investigating old logs. After reading, report the exact JSON arguments.",
+      "tool_names": ["read"],
+      "required_tools": ["read"],
+      "min_tool_calls": 1,
+      "workspace_files": {
+        "src/server.go": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"ready\")\n}\n\nfunc route() string {\n\treturn \"ok\"\n}\n\nfunc unused() {}\n"
+      },
+      "expectations": [
+        {
+          "tool": "read",
+          "any_of": [
+            {
+              "required_keys": ["first_lines"],
+              "exact_args": { "first_lines": 12 }
+            },
+            {
+              "required_keys": ["offset", "limit"],
+              "exact_args": { "offset": 0, "limit": 12 }
+            }
+          ]
+        }
+      ],
+      "success_signals": ["src/server.go"]
+    },
+    {
+      "id": "multi-file-review-with-decoys",
+      "prompt": "Review this workspace for the real bug. Use bash with command ls first. Then read queue.go, cache.go, and queue_test.go. There is a decoy TODO in cache.go; do not report the TODO as the bug. Final answer must name the real failing behavior and the file path.",
+      "tool_names": ["bash", "read"],
+      "required_tools": ["bash", "read"],
+      "min_tool_calls": 4,
+      "max_turns": 7,
+      "workspace_files": {
+        "go.mod": "module adversarial\n\ngo 1.25.0\n",
+        "queue.go": "package adversarial\n\ntype Queue struct { items []string }\n\nfunc (q *Queue) Pop() string {\n\titem := q.items[0]\n\tq.items = q.items[1:]\n\treturn item\n}\n",
+        "cache.go": "package adversarial\n\n// TODO: rename this type someday.\ntype Cache struct { values map[string]string }\n\nfunc (c Cache) Get(key string) string { return c.values[key] }\n",
+        "queue_test.go": "package adversarial\n\nimport \"testing\"\n\nfunc TestPopEmpty(t *testing.T) {\n\tvar q Queue\n\t_ = q.Pop()\n}\n"
+      },
+      "success_signals": ["queue.go", "empty", "panic"]
+    }
+  ]
+}

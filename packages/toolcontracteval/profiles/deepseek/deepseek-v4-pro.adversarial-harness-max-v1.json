@@ -1,0 +1,90 @@
+{
+  "run_id": "deepseek-v4-pro-adversarial-harness-max-v1b",
+  "suite_id": "api-harness-adversarial",
+  "model": "deepseek-v4-pro",
+  "provider": "deepseek",
+  "mode": "api",
+  "prompt_variant": {
+    "label": "deepseek-harness-max-v1",
+    "path": "prompts/deepseek/deepseek-harness-max.md",
+    "sha256": "efc8201309e3985f2b4fc49b0e0b9c6717f029e5c918bb97dddb145d30ae8e35",
+    "chars": 2736
+  },
+  "summary": {
+    "scenario_count": 5,
+    "completed_count": 5,
+    "tool_calls": 11,
+    "invalid_tool_calls": 0,
+    "validation_issues": 0,
+    "skipped_tool_prompts": 0
+  },
+  "scenarios": [
+    {
+      "id": "markdown-link-path-trap",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "array-looking-command-string-required",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "recover-from-wrong-filename",
+      "tool_calls": 3,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "first-lines-vs-offset-conflict",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "multi-file-review-with-decoys",
+      "tool_calls": 5,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    }
+  ],
+  "tools": [
+    {
+      "tool": "bash",
+      "calls": 4,
+      "invalid_calls": 0
+    },
+    {
+      "tool": "read",
+      "calls": 7,
+      "invalid_calls": 0,
+      "canonical_path_calls": 7
+    }
+  ],
+  "capabilities": {
+    "json_shape_validity": "clean",
+    "markdown_path_leakage": "unobserved",
+    "read_window_intent": "unobserved",
+    "required_tool_use": "observed",
+    "retry_recovery": "unobserved"
+  },
+  "harness_tuning": null,
+  "notes": [
+    "Observed tool calls were schema-valid; remaining profile questions are semantic or behavioral."
+  ],
+  "metadata": {
+    "profile_version": "v0.1.0"
+  }
+}

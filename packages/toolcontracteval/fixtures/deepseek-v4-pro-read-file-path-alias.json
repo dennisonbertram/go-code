@@ -1,0 +1,19 @@
+{
+  "name": "deepseek-v4-pro-read-file-path-alias",
+  "model": "deepseek-v4-pro",
+  "provider": "deepseek",
+  "scenario": "minimal-evidence-no-bash",
+  "tool": "read",
+  "arguments_raw": "{\"file_path\": \"math.go\"}",
+  "issues": [
+    {
+      "path": ["path"],
+      "code": "required",
+      "expected": "present",
+      "received": "missing",
+      "message": "path is required"
+    }
+  ],
+  "learning": "In the robust API suite, DeepSeek used file_path instead of path for read calls when asked to read named files without bash.",
+  "candidate_harness_change": "Consider accepting file_path as a safe alias for read.path, or strengthen the read schema description to say the field is named path, not file_path."
+}

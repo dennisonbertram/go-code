@@ -1,0 +1,115 @@
+{
+  "run_id": "deepseek-v4-pro-api-harness-robust-alias3",
+  "suite_id": "api-harness-robust",
+  "model": "deepseek-v4-pro",
+  "provider": "deepseek",
+  "mode": "api",
+  "summary": {
+    "scenario_count": 8,
+    "completed_count": 8,
+    "tool_calls": 15,
+    "invalid_tool_calls": 0,
+    "validation_issues": 0,
+    "skipped_tool_prompts": 0
+  },
+  "scenarios": [
+    {
+      "id": "workspace-discipline-no-absolute-cd",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "bounded-review-no-test-running",
+      "tool_calls": 4,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "markdown-link-and-url-decoy",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "recover-after-two-missing-paths",
+      "tool_calls": 4,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "offset-limit-relational-pressure",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "do-not-overread-secret",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "quote-preserving-bash-command",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "minimal-evidence-no-bash",
+      "tool_calls": 2,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    }
+  ],
+  "tools": [
+    {
+      "tool": "bash",
+      "calls": 4,
+      "invalid_calls": 0
+    },
+    {
+      "tool": "read",
+      "calls": 11,
+      "invalid_calls": 0,
+      "canonical_path_calls": 7,
+      "file_path_alias_calls": 4
+    }
+  ],
+  "capabilities": {
+    "json_shape_validity": "clean",
+    "markdown_path_leakage": "unobserved",
+    "read_window_intent": "unobserved",
+    "required_tool_use": "observed",
+    "retry_recovery": "unobserved"
+  },
+  "harness_tuning": [
+    {
+      "area": "read",
+      "recommendation": "Treat file_path as an observed model alias preference while keeping path as the canonical contract field.",
+      "evidence": "4/11 read calls used file_path; 7 calls used path."
+    }
+  ],
+  "notes": [
+    "Observed tool calls were schema-valid; remaining profile questions are semantic or behavioral."
+  ],
+  "metadata": {
+    "profile_version": "v0.1.0"
+  }
+}

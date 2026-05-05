@@ -1,0 +1,19 @@
+{
+  "name": "deepseek-v4-pro-read-file-path-with-max-bytes",
+  "model": "deepseek-v4-pro",
+  "provider": "deepseek",
+  "scenario": "max-bytes-and-first-lines",
+  "tool": "read",
+  "arguments_raw": "{\"file_path\": \"audit.log\", \"first_lines\": 4, \"max_bytes\": 200}",
+  "issues": [
+    {
+      "path": ["path"],
+      "code": "required",
+      "expected": "present",
+      "received": "missing",
+      "message": "path is required"
+    }
+  ],
+  "learning": "In the gauntlet API suite, DeepSeek used file_path instead of path on a multi-field read call that also included first_lines and max_bytes, even after passing a simpler explicit path-over-file_path bait scenario.",
+  "candidate_harness_change": "Treat file_path versus path as a schema-dialect mismatch. Either make file_path a formally valid alias in the JSON schema, rename read.path to file_path after cross-model evidence, or remove the advertised alias from the schema description."
+}

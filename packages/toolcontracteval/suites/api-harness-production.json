@@ -1,0 +1,100 @@
+{
+  "id": "api-harness-production",
+  "description": "API-first production harness profile suite. It exercises real harness tools through harnessd over /v1/runs and /events, focusing on model behavior inside the full server path.",
+  "max_turns": 5,
+  "scenarios": [
+    {
+      "id": "read-first-lines-contract",
+      "prompt": "Use the read tool exactly once to inspect the first 30 lines of cmd/harnessd/main.go. Do not answer until after the tool call. Then report the exact JSON arguments you used.",
+      "tool_names": ["read"],
+      "required_tools": ["read"],
+      "min_tool_calls": 1,
+      "workspace_files": {
+        "cmd/harnessd/main.go": "package main\n\nimport \"fmt\"\n\nfunc main() {\n\tfmt.Println(\"harnessd\")\n}\n\nfunc serve() string {\n\treturn \"ready\"\n}\n"
+      },
+      "expectations": [
+        {
+          "tool": "read",
+          "any_of": [
+            {
+              "required_keys": ["first_lines"],
+              "exact_args": { "first_lines": 30 }
+            },
+            {
+              "required_keys": ["offset", "limit"],
+              "exact_args": { "offset": 0, "limit": 30 }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "read-bad-path-recovery",
+      "prompt": "Use the read tool to inspect missing.go. If the tool says the file is missing, use bash exactly once with command ls, then read service.go, then summarize what happened.",
+      "tool_names": ["read", "bash"],
+      "required_tools": ["read", "bash"],
+      "min_tool_calls": 3,
+      "max_turns": 5,
+      "workspace_files": {
+        "service.go": "package service\n\nfunc Ready() bool { return true }\n"
+      },
+      "expectations": [
+        {
+          "tool": "bash",
+          "required_keys": ["command"]
+        }
+      ]
+    },
+    {
+      "id": "path-string-no-markdown",
+      "prompt": "Use the read tool exactly once on docs/notes.md. The path must be a plain file path string, not markdown. Then answer with the exact JSON arguments you used.",
+      "tool_names": ["read"],
+      "required_tools": ["read"],
+      "min_tool_calls": 1,
+      "workspace_files": {
+        "docs/notes.md": "# Notes\n\nSee https://x.ai for the public URL.\n"
+      },
+      "expectations": [
+        {
+          "tool": "read",
+          "required_keys": ["path"],
+          "exact_args": { "path": "docs/notes.md" }
+        }
+      ]
+    },
+    {
+      "id": "bash-json-array-command",
+      "prompt": "Use the bash tool exactly once to run printf 'alpha\\nbeta\\n'. Keep the command as a plain string and do not wrap it in markdown. Then summarize the output.",
+      "tool_names": ["bash"],
+      "required_tools": ["bash"],
+      "min_tool_calls": 1,
+      "max_turns": 4,
+      "expectations": [
+        {
+          "tool": "bash",
+          "required_keys": ["command"]
+        }
+      ]
+    },
+    {
+      "id": "review-multi-tool-workflow",
+      "prompt": "Review this small Go workspace for one concrete bug. First use bash with command ls, then read queue.go and queue_test.go, then answer with the bug and the file path. Keep all tool arguments strict JSON.",
+      "tool_names": ["bash", "read"],
+      "required_tools": ["bash", "read"],
+      "min_tool_calls": 3,
+      "max_turns": 6,
+      "workspace_files": {
+        "go.mod": "module demo\n\ngo 1.25.0\n",
+        "queue.go": "package demo\n\ntype Queue struct { items []string }\n\nfunc (q *Queue) Pop() string {\n\titem := q.items[0]\n\tq.items = q.items[1:]\n\treturn item\n}\n",
+        "queue_test.go": "package demo\n\nimport \"testing\"\n\nfunc TestPopEmpty(t *testing.T) {\n\tvar q Queue\n\t_ = q.Pop()\n}\n"
+      },
+      "expectations": [
+        {
+          "tool": "bash",
+          "required_keys": ["command"]
+        }
+      ],
+      "success_signals": ["queue.go", "Pop", "empty"]
+    }
+  ]
+}

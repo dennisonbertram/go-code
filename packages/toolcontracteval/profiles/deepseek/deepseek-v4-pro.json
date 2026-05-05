@@ -1,0 +1,89 @@
+{
+  "run_id": "deepseek-v4-pro-api-harness-production",
+  "suite_id": "api-harness-production",
+  "model": "deepseek-v4-pro",
+  "provider": "deepseek",
+  "mode": "api",
+  "summary": {
+    "scenario_count": 5,
+    "completed_count": 5,
+    "tool_calls": 9,
+    "invalid_tool_calls": 0,
+    "validation_issues": 0,
+    "skipped_tool_prompts": 0
+  },
+  "scenarios": [
+    {
+      "id": "read-first-lines-contract",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "read-bad-path-recovery",
+      "tool_calls": 3,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "path-string-no-markdown",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "bash-json-array-command",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "review-multi-tool-workflow",
+      "tool_calls": 3,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    }
+  ],
+  "tools": [
+    {
+      "tool": "bash",
+      "calls": 3,
+      "invalid_calls": 0
+    },
+    {
+      "tool": "read",
+      "calls": 6,
+      "invalid_calls": 0
+    }
+  ],
+  "capabilities": {
+    "json_shape_validity": "clean",
+    "markdown_path_leakage": "clean",
+    "read_window_intent": "clean",
+    "required_tool_use": "observed",
+    "retry_recovery": "clean"
+  },
+  "harness_tuning": [
+    {
+      "area": "read",
+      "recommendation": "Keep semantic convenience fields such as first_lines visible for this model.",
+      "evidence": "Read-window scenario completed without validation failures."
+    }
+  ],
+  "notes": [
+    "Observed tool calls were schema-valid; remaining profile questions are semantic or behavioral."
+  ],
+  "metadata": {
+    "profile_version": "v0.1.0"
+  }
+}

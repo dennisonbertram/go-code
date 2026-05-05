@@ -1,0 +1,113 @@
+{
+  "run_id": "deepseek-v4-pro-api-harness-robust",
+  "suite_id": "api-harness-robust",
+  "model": "deepseek-v4-pro",
+  "provider": "deepseek",
+  "mode": "api",
+  "summary": {
+    "scenario_count": 8,
+    "completed_count": 8,
+    "tool_calls": 15,
+    "invalid_tool_calls": 2,
+    "validation_issues": 2,
+    "skipped_tool_prompts": 0
+  },
+  "scenarios": [
+    {
+      "id": "workspace-discipline-no-absolute-cd",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "bounded-review-no-test-running",
+      "tool_calls": 4,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "markdown-link-and-url-decoy",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "recover-after-two-missing-paths",
+      "tool_calls": 4,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "offset-limit-relational-pressure",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "do-not-overread-secret",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "quote-preserving-bash-command",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "minimal-evidence-no-bash",
+      "tool_calls": 2,
+      "invalid_calls": 2,
+      "validation_hits": 2,
+      "completed": true,
+      "assessment": "tool contract mismatch"
+    }
+  ],
+  "tools": [
+    {
+      "tool": "bash",
+      "calls": 4,
+      "invalid_calls": 0
+    },
+    {
+      "tool": "read",
+      "calls": 11,
+      "invalid_calls": 2,
+      "common_issue_kinds": [
+        "required"
+      ]
+    }
+  ],
+  "capabilities": {
+    "json_shape_validity": "mixed",
+    "markdown_path_leakage": "unobserved",
+    "read_window_intent": "unobserved",
+    "required_tool_use": "observed",
+    "retry_recovery": "needs profiling"
+  },
+  "harness_tuning": [
+    {
+      "area": "read",
+      "recommendation": "Consider accepting file_path as a safe alias for path, or strengthen the read schema description for this model.",
+      "evidence": "2 read calls used file_path where path was required."
+    }
+  ],
+  "metadata": {
+    "profile_version": "v0.1.0"
+  }
+}

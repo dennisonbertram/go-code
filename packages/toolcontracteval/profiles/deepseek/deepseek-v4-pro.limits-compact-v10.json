@@ -1,0 +1,155 @@
+{
+  "run_id": "deepseek-v4-pro-limits-compact-v10",
+  "suite_id": "api-harness-deepseek-limits",
+  "model": "deepseek-v4-pro",
+  "provider": "deepseek",
+  "mode": "api",
+  "prompt_variant": {
+    "label": "deepseek-harness-compact-v10",
+    "path": "prompts/deepseek/deepseek-harness-compact-v10.md",
+    "sha256": "bc02f080ace96894c5c452aef83f01fa0f8b6569bca278004ce458e8c6cb1358",
+    "chars": 1121
+  },
+  "summary": {
+    "scenario_count": 10,
+    "completed_count": 10,
+    "tool_calls": 16,
+    "invalid_tool_calls": 0,
+    "validation_issues": 0,
+    "skipped_tool_prompts": 0
+  },
+  "scenarios": [
+    {
+      "id": "exact-test-command-no-redirect",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "forbidden-final-token-decoy",
+      "tool_calls": 3,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "apply-patch-one-call-no-preinspect",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "named-files-no-discovery",
+      "tool_calls": 2,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "missing-file-one-recovery-no-find",
+      "tool_calls": 3,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "review-no-test-command-bait",
+      "tool_calls": 2,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "write-one-call-exact-content",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "working-dir-exact-command",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "public-only-secret-neighbor",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "edit-one-call-known-old-text",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    }
+  ],
+  "tools": [
+    {
+      "tool": "apply_patch",
+      "calls": 1,
+      "invalid_calls": 0,
+      "canonical_path_calls": 1
+    },
+    {
+      "tool": "bash",
+      "calls": 3,
+      "invalid_calls": 0
+    },
+    {
+      "tool": "edit",
+      "calls": 1,
+      "invalid_calls": 0,
+      "canonical_path_calls": 1
+    },
+    {
+      "tool": "read",
+      "calls": 10,
+      "invalid_calls": 0,
+      "canonical_path_calls": 8,
+      "file_path_alias_calls": 2
+    },
+    {
+      "tool": "write",
+      "calls": 1,
+      "invalid_calls": 0,
+      "canonical_path_calls": 1
+    }
+  ],
+  "capabilities": {
+    "json_shape_validity": "clean",
+    "markdown_path_leakage": "unobserved",
+    "read_window_intent": "unobserved",
+    "required_tool_use": "observed",
+    "retry_recovery": "unobserved"
+  },
+  "harness_tuning": [
+    {
+      "area": "read",
+      "recommendation": "Treat file_path as an observed model alias preference while keeping path as the canonical contract field.",
+      "evidence": "2/10 read calls used file_path; 8 calls used path."
+    }
+  ],
+  "notes": [
+    "Observed tool calls were schema-valid; remaining profile questions are semantic or behavioral."
+  ],
+  "metadata": {
+    "profile_version": "v0.1.0"
+  }
+}

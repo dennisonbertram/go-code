@@ -1,0 +1,130 @@
+{
+  "run_id": "deepseek-v4-pro-gauntlet-harness-max-v1",
+  "suite_id": "api-harness-gauntlet",
+  "model": "deepseek-v4-pro",
+  "provider": "deepseek",
+  "mode": "api",
+  "prompt_variant": {
+    "label": "deepseek-harness-max-v1",
+    "path": "prompts/deepseek/deepseek-harness-max-v1.md",
+    "sha256": "efc8201309e3985f2b4fc49b0e0b9c6717f029e5c918bb97dddb145d30ae8e35",
+    "chars": 2736
+  },
+  "summary": {
+    "scenario_count": 10,
+    "completed_count": 10,
+    "tool_calls": 16,
+    "invalid_tool_calls": 0,
+    "validation_issues": 1,
+    "skipped_tool_prompts": 0
+  },
+  "scenarios": [
+    {
+      "id": "path-field-over-file-path-bait",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "working-dir-field-not-cd",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "timeout-field-no-background",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "max-bytes-and-first-lines",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "legacy-limit-lines-decoy",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "three-file-no-bash-file-path-bait",
+      "tool_calls": 3,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "decoy-todo-must-not-report",
+      "tool_calls": 3,
+      "invalid_calls": 0,
+      "validation_hits": 1,
+      "completed": true,
+      "assessment": "scenario contract mismatch"
+    },
+    {
+      "id": "secret-overread-via-bash-bait",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "recover-with-ls-but-no-find",
+      "tool_calls": 3,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    },
+    {
+      "id": "quote-heavy-command-single-string",
+      "tool_calls": 1,
+      "invalid_calls": 0,
+      "validation_hits": 0,
+      "completed": true,
+      "assessment": "clean"
+    }
+  ],
+  "tools": [
+    {
+      "tool": "bash",
+      "calls": 4,
+      "invalid_calls": 0
+    },
+    {
+      "tool": "read",
+      "calls": 12,
+      "invalid_calls": 0,
+      "canonical_path_calls": 12
+    }
+  ],
+  "capabilities": {
+    "json_shape_validity": "clean",
+    "markdown_path_leakage": "unobserved",
+    "read_window_intent": "unobserved",
+    "required_tool_use": "observed",
+    "retry_recovery": "needs profiling"
+  },
+  "harness_tuning": null,
+  "notes": [
+    "Observed tool calls were schema-valid; remaining profile questions are semantic or behavioral."
+  ],
+  "metadata": {
+    "profile_version": "v0.1.0"
+  }
+}
