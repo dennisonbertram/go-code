@@ -3,8 +3,8 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="go-code is a local-first coding-agent runtime with a terminal UI, streamed HTTP API, workspace-aware tools, and model routing.">
-    <title>go-code | Local-first coding agent runtime</title>
+    <meta name="description" content="go-code is a local-first coding agent for developers who want visible, steerable help inside real repositories.">
+    <title>go-code | A coding agent you can supervise</title>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%230f6b58'/%3E%3Ctext x='32' y='39' text-anchor='middle' font-family='Arial,sans-serif' font-size='24' font-weight='700' fill='%23fffdf8'%3Egc%3C/text%3E%3C/svg%3E">
     <link rel="stylesheet" href="styles.css">
   </head>
@@ -15,10 +15,10 @@
         <span>go-code</span>
       </a>
       <nav class="nav" aria-label="Page sections">
+        <a href="#why">Why</a>
         <a href="#install">Install</a>
         <a href="#workflow">Workflow</a>
-        <a href="#api">API</a>
-        <a href="#deploy">Pages</a>
+        <a href="#trust">Trust</a>
       </nav>
     </header>
 
@@ -26,29 +26,56 @@
       <section class="hero" aria-labelledby="hero-title">
         <div class="hero-bg" aria-hidden="true"></div>
         <div class="hero-inner">
-          <p class="eyebrow">Local-first agent harness for real repositories</p>
+          <p class="eyebrow">For developers working in real repositories</p>
           <h1 id="hero-title">go-code</h1>
           <p class="lede">
-            A clear, inspectable coding-agent runtime with a terminal UI, streamed HTTP events, workspace-aware tools, model routing, steering, approvals, and cost feedback.
+            A coding agent you can actually supervise: open it in your repo, ask for a fix, watch what it reads and runs, steer it mid-flight, and keep control of the workspace.
           </p>
           <div class="hero-actions" aria-label="Primary actions">
-            <a class="button primary" href="#install">Install locally</a>
-            <a class="button secondary" href="#api">See the API</a>
+            <a class="button primary" href="#install">Try it locally</a>
+            <a class="button secondary" href="#why">Why it exists</a>
           </div>
           <div class="command-strip" aria-label="Quick command examples">
             <code>go-code</code>
             <code>go-code "fix the failing test"</code>
-            <code>go-code --server</code>
+            <code>go-code "explain this package"</code>
           </div>
+        </div>
+      </section>
+
+      <section id="why" class="section intro-section" aria-labelledby="why-title">
+        <div class="section-heading">
+          <p class="eyebrow">Why go-code</p>
+          <h2 id="why-title">Coding agents are useful. Losing track of them is not.</h2>
+          <p>
+            go-code is for engineers who want agent help without handing the whole repo to an opaque chat box. It keeps the work local, shows the moving parts, and gives you practical controls when the task changes.
+          </p>
+        </div>
+        <div class="workflow-grid">
+          <article class="feature">
+            <span class="feature-number">Use it for</span>
+            <h3>Failing tests</h3>
+            <p>Ask it to reproduce a failure, inspect the relevant code, make a focused patch, and run the verification command.</p>
+          </article>
+          <article class="feature accent">
+            <span class="feature-number">Use it for</span>
+            <h3>Codebase orientation</h3>
+            <p>Drop into an unfamiliar repo and ask for the files, flows, and risks that matter before you start editing.</p>
+          </article>
+          <article class="feature">
+            <span class="feature-number">Use it for</span>
+            <h3>Careful refactors</h3>
+            <p>Keep a long task visible: tool calls, test output, costs, approvals, and the reasoning trail stay attached to the run.</p>
+          </article>
         </div>
       </section>
 
       <section id="install" class="install-panel" aria-labelledby="install-title">
         <div class="install-copy">
-          <p class="eyebrow">Start here</p>
-          <h2 id="install-title">One command for interactive and scripted coding loops.</h2>
+          <p class="eyebrow">Start in your terminal</p>
+          <h2 id="install-title">Install it, then open it from the project you are already working in.</h2>
           <p>
-            Install from source today. The script builds the daemon and terminal client, then installs the user-facing `go-code` command plus its runtime assets.
+            The current install path is source-based. It builds the local daemon and terminal client, then installs the <code>go-code</code> command and the assets it needs to run outside the checkout.
           </p>
         </div>
         <div class="terminal" aria-label="Install commands">
@@ -60,60 +87,60 @@ cd go-code
 ./scripts/install.sh --add-to-path
 
 go-code                          # open the TUI
-go-code "summarize this repo"     # run once, then exit
-go-code --server                 # start the local API daemon</code></pre>
+go-code "fix the flaky test"      # run once, then exit
+go-code --server                 # use the HTTP runtime directly</code></pre>
         </div>
       </section>
 
       <section id="workflow" class="section" aria-labelledby="workflow-title">
         <div class="section-heading">
-          <p class="eyebrow">How it feels</p>
-          <h2 id="workflow-title">Keep the loop visible while the agent works.</h2>
+          <p class="eyebrow">The working loop</p>
+          <h2 id="workflow-title">It behaves like a pair programmer you can interrupt.</h2>
           <p>
-            go-code is built around ordinary repository work: open a project, ask for a change, watch tool calls happen, steer when needed, and keep enough state to continue later.
+            Start with a plain request. As the run unfolds, you can see the tools, approve sensitive steps, add new context, cancel a bad direction, or continue the conversation later.
           </p>
         </div>
-        <div class="workflow-grid">
+        <div class="step-list">
           <article class="feature">
             <span class="feature-number">01</span>
-            <h3>Open from any repo</h3>
-            <p>The command resolves the current project and sends that workspace to the local harness so file and shell tools stay grounded.</p>
+            <h3>Launch inside a repo</h3>
+            <p>Run <code>go-code</code> from the project root. The agent works against that workspace instead of a vague cloud copy.</p>
           </article>
           <article class="feature accent">
             <span class="feature-number">02</span>
-            <h3>Observe every step</h3>
-            <p>Runs stream assistant deltas, tool calls, tool results, approvals, token usage, costs, and terminal status as they happen.</p>
+            <h3>Watch the work</h3>
+            <p>See file reads, shell commands, patches, tool output, token usage, and costs while the run is still active.</p>
           </article>
           <article class="feature">
             <span class="feature-number">03</span>
-            <h3>Steer mid-run</h3>
-            <p>Send new context into an active session, cancel a bad path, approve sensitive work, or continue from an existing conversation.</p>
+            <h3>Decide what happens next</h3>
+            <p>Steer the task, approve or deny work, switch direction, continue a session, or stop the run when enough is enough.</p>
           </article>
         </div>
       </section>
 
-      <section class="dark-band" aria-labelledby="runtime-title">
+      <section id="trust" class="dark-band" aria-labelledby="trust-title">
         <div class="runtime-layout">
           <div>
-            <p class="eyebrow invert">Runtime primitives</p>
-            <h2 id="runtime-title">A harness you can adapt instead of work around.</h2>
+            <p class="eyebrow invert">Built for trust</p>
+            <h2 id="trust-title">The important parts stay inspectable.</h2>
           </div>
           <div class="runtime-list">
             <div>
-              <strong>Workspaces</strong>
-              <span>Local directories and git worktrees, with observable lifecycle events.</span>
+              <strong>Local first</strong>
+              <span>Run it from your machine against the repository you choose.</span>
             </div>
             <div>
-              <strong>Providers</strong>
-              <span>Catalog-backed models, aliases, pricing metadata, gateways, and direct provider routing.</span>
+              <strong>Visible tools</strong>
+              <span>File reads, edits, shell commands, approvals, and failures show up in the run stream.</span>
             </div>
             <div>
-              <strong>Controls</strong>
-              <span>Sandbox scope, approval policy, max steps, max cost, role models, and allowed tools per run.</span>
+              <strong>Bounded runs</strong>
+              <span>Set model, provider, sandbox scope, approval policy, maximum steps, and cost limits per task.</span>
             </div>
             <div>
-              <strong>Context</strong>
-              <span>Conversation storage, replay, compaction, project instructions, skills, MCP, and subagents.</span>
+              <strong>Recoverable context</strong>
+              <span>Keep conversations, replay runs, compact long context, and continue without starting from scratch.</span>
             </div>
           </div>
         </div>
@@ -121,13 +148,13 @@ go-code --server                 # start the local API daemon</code></pre>
 
       <section id="api" class="section api-section" aria-labelledby="api-title">
         <div class="section-heading compact">
-          <p class="eyebrow">API first</p>
-          <h2 id="api-title">The terminal is a client. The stream is the product surface.</h2>
+          <p class="eyebrow">For tool builders</p>
+          <h2 id="api-title">The same engine has a streamed HTTP API.</h2>
         </div>
         <div class="api-grid">
           <div class="api-copy">
             <p>
-              Start `harnessd`, create a run, and subscribe to Server-Sent Events. Integrations can inspect lifecycle state, tool activity, usage, approvals, summaries, todos, and conversation history.
+              The terminal client is the easiest way in, but the runtime is scriptable. Start <code>harnessd</code>, create a run, and subscribe to Server-Sent Events for lifecycle state, tool activity, usage, approvals, summaries, todos, and conversation history.
             </p>
             <div class="endpoint-list" aria-label="Common endpoints">
               <code>POST /v1/runs</code>
@@ -152,27 +179,6 @@ go-code --server                 # start the local API daemon</code></pre>
 
 curl -N "http://127.0.0.1:8080/v1/runs/$RUN_ID/events"</code></pre>
           </div>
-        </div>
-      </section>
-
-      <section id="deploy" class="section deploy-section" aria-labelledby="deploy-title">
-        <div class="section-heading compact">
-          <p class="eyebrow">GitHub Pages</p>
-          <h2 id="deploy-title">A static site that ships with the repo.</h2>
-        </div>
-        <div class="deploy-grid">
-          <article>
-            <h3>Simple hosting</h3>
-            <p>The Pages workflow publishes `docs/site` on pushes to `main`, so the product page stays close to the code it explains.</p>
-          </article>
-          <article>
-            <h3>Plain files</h3>
-            <p>No frontend framework is required. The site is one HTML file, one CSS file, and a checked-in visual asset.</p>
-          </article>
-          <article>
-            <h3>Easy to review</h3>
-            <p>Every claim is visible in the source and tied to implemented go-code behavior from the README and runtime contracts.</p>
-          </article>
         </div>
       </section>
     </main>

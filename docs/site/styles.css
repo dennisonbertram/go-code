@@ -250,7 +250,6 @@ h3 {
 .install-copy p,
 .section-heading p,
 .api-copy p,
-.deploy-grid p,
 .feature p,
 .runtime-list span {
   color: var(--muted);
@@ -302,7 +301,6 @@ pre {
 .workflow-grid,
 .runtime-layout,
 .api-grid,
-.deploy-grid,
 .footer {
   max-width: 1120px;
   margin: 0 auto;
@@ -321,14 +319,13 @@ pre {
 }
 
 .workflow-grid,
-.deploy-grid {
+.step-list {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 16px;
 }
 
-.feature,
-.deploy-grid article {
+.feature {
   border: 1px solid var(--line);
   background: var(--paper);
   padding: 22px;
@@ -345,6 +342,19 @@ pre {
   color: var(--clay);
   font-size: 13px;
   font-weight: 900;
+}
+
+.step-list {
+  max-width: 1120px;
+  margin: 0 auto;
+}
+
+.feature p code,
+.install-copy p code,
+.api-copy p code {
+  color: var(--green-dark);
+  font-size: 0.95em;
+  font-weight: 800;
 }
 
 .dark-band {
@@ -409,15 +419,6 @@ pre {
   box-shadow: none;
 }
 
-.deploy-section {
-  border-top: 1px solid var(--line);
-  background: var(--paper);
-}
-
-.deploy-grid article {
-  background: #f9f5eb;
-}
-
 .footer {
   display: flex;
   justify-content: space-between;
@@ -456,7 +457,7 @@ pre {
   .runtime-layout,
   .api-grid,
   .workflow-grid,
-  .deploy-grid {
+  .step-list {
     grid-template-columns: 1fr;
   }
 

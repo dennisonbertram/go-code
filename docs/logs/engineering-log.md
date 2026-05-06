@@ -1,5 +1,15 @@
 # Engineering Log
 
+## 2026-05-05 (GitHub Pages User Repositioning)
+
+- Recentered the go-code GitHub Pages copy around the developer visitor.
+- Shifted the page from runtime/API-first positioning to the user problem: getting visible, steerable coding help inside a real repository.
+- Added concrete use cases for failing tests, codebase orientation, and careful refactors.
+- Reframed trust language around local-first work, visible tools, bounded runs, and recoverable context.
+- Validation:
+  - `python3` HTML parser sanity check for `docs/site/index.html`
+  - Local browser preview at `http://127.0.0.1:4188/` with desktop and mobile viewport screenshots
+
 ## 2026-05-03 (Repository Rename and Public README Cleanup)
 
 - Renamed the GitHub repository and public project surface from `go-agent-harness` to `go-code`.
