@@ -75,16 +75,14 @@
           <p class="eyebrow">Start in your terminal</p>
           <h2 id="install-title">Install it, then open it from the project you are already working in.</h2>
           <p>
-            The current install path is source-based. It builds the local daemon and terminal client, then installs the <code>go-code</code> command and the assets it needs to run outside the checkout.
+            Homebrew builds the local daemon and terminal client, then installs the <code>go-code</code> command and the runtime assets it needs outside the checkout.
           </p>
         </div>
         <div class="terminal" aria-label="Install commands">
           <div class="terminal-bar" aria-hidden="true">
             <span></span><span></span><span></span>
           </div>
-          <pre><code>git clone https://github.com/dennisonbertram/go-code.git
-cd go-code
-./scripts/install.sh --add-to-path
+          <pre><code>brew install --HEAD dennisonbertram/go-code/go-code
 
 go-code                          # open the TUI
 go-code "fix the flaky test"      # run once, then exit

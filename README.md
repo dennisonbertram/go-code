@@ -17,9 +17,21 @@ The project is implemented in Go. The public command is `go-code`; the internal 
 - Provider catalog support for OpenAI, Anthropic, Google, DeepSeek, Z.ai, OpenRouter-style routes, and local catalog pricing.
 - Workspace-aware execution so the agent works in the project directory where you launched it.
 
-## Quick Start
+## Install
 
-Clone the repo and install the command into your user-local bin directory:
+Install the latest `main` build with Homebrew:
+
+```bash
+brew install --HEAD dennisonbertram/go-code/go-code
+```
+
+Then run it from any repository:
+
+```bash
+go-code
+```
+
+Source install is still available if you do not use Homebrew:
 
 ```bash
 git clone https://github.com/dennisonbertram/go-code.git
@@ -27,11 +39,7 @@ cd go-code
 ./scripts/install.sh --add-to-path
 ```
 
-Open a new shell, or add the printed PATH line for your current shell, then run:
-
-```bash
-go-code
-```
+Open a new shell, or add the printed PATH line for your current shell.
 
 Common modes:
 

@@ -118,20 +118,26 @@ Download-mode requirements:
 
 ## Homebrew Tap
 
-Homebrew is the first polished macOS distribution target.
+Homebrew is the first polished macOS distribution target. The repo includes
+`Formula/go-code.rb`, so users can install the latest `main` build with one
+command:
+
+```bash
+brew install --HEAD dennisonbertram/go-code/go-code
+```
 
 Formula responsibilities:
 
 - install `go-code`, `harnesscli`, and `harnessd`
 - install `prompts/` and `catalog/` under `share/go-code`
-- patch or wrap `go-code` so it can find `share/go-code`
+- keep `go-code` able to find `share/go-code`
 - run a lightweight smoke command such as `go-code --help`
 
-Expected install UX:
+The explicit tap flow also works:
 
 ```bash
 brew tap dennisonbertram/go-code
-brew install go-code
+brew install --HEAD go-code
 go-code
 ```
 
