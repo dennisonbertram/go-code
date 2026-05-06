@@ -126,6 +126,10 @@ command:
 brew install --HEAD dennisonbertram/go-code/go-code
 ```
 
+Homebrew resolves that command through the separate tap repository
+`dennisonbertram/homebrew-go-code`. When `Formula/go-code.rb` changes here,
+mirror the same formula into that tap before advertising the command.
+
 Formula responsibilities:
 
 - install `go-code`, `harnesscli`, and `harnessd`
