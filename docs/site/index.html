@@ -3,145 +3,177 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="go-code is a local coding-agent runtime with a TUI, streamed API, workspaces, tool calls, and an installable command.">
-    <title>go-code</title>
+    <meta name="description" content="go-code is a local-first coding-agent runtime with a terminal UI, streamed HTTP API, workspace-aware tools, and model routing.">
+    <title>go-code | Local-first coding agent runtime</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' fill='%230f6b58'/%3E%3Ctext x='32' y='39' text-anchor='middle' font-family='Arial,sans-serif' font-size='24' font-weight='700' fill='%23fffdf8'%3Egc%3C/text%3E%3C/svg%3E">
     <link rel="stylesheet" href="styles.css">
   </head>
   <body>
-    <header class="topbar" aria-label="Primary">
+    <header class="topbar" aria-label="Primary navigation">
       <a class="brand" href="#top" aria-label="go-code home">
-        <span class="brand-mark" aria-hidden="true">go</span>
+        <span class="brand-mark" aria-hidden="true">gc</span>
         <span>go-code</span>
       </a>
       <nav class="nav" aria-label="Page sections">
         <a href="#install">Install</a>
-        <a href="#why">Why</a>
-        <a href="#modes">Modes</a>
-        <a href="#roadmap">Distribution</a>
+        <a href="#workflow">Workflow</a>
+        <a href="#api">API</a>
+        <a href="#deploy">Pages</a>
       </nav>
     </header>
 
     <main id="top">
-      <section class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Local agent runtime for serious coding loops</p>
-          <h1>go-code</h1>
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-bg" aria-hidden="true"></div>
+        <div class="hero-inner">
+          <p class="eyebrow">Local-first agent harness for real repositories</p>
+          <h1 id="hero-title">go-code</h1>
           <p class="lede">
-            Install one command, open the TUI from any repository, and run agent sessions against a local harness with streamed events, workspace-aware tools, model routing, and cost feedback.
+            A clear, inspectable coding-agent runtime with a terminal UI, streamed HTTP events, workspace-aware tools, model routing, steering, approvals, and cost feedback.
           </p>
-          <div class="hero-actions">
+          <div class="hero-actions" aria-label="Primary actions">
             <a class="button primary" href="#install">Install locally</a>
-            <a class="button secondary" href="#roadmap">Distribution plan</a>
+            <a class="button secondary" href="#api">See the API</a>
+          </div>
+          <div class="command-strip" aria-label="Quick command examples">
+            <code>go-code</code>
+            <code>go-code "fix the failing test"</code>
+            <code>go-code --server</code>
           </div>
         </div>
-
-        <aside class="terminal-shot" aria-label="Example terminal session">
-          <div class="terminal-bar">
-            <span></span>
-            <span></span>
-            <span></span>
-          </div>
-          <div class="terminal-body">
-            <p><span class="prompt">$</span> go-code</p>
-            <p class="dim">project root: /Users/me/Develop/app</p>
-            <p><span class="agent">Go Agent</span> working with DeepSeek V4 Flash</p>
-            <p class="tool">bash called 3x (ctrl+o to open)</p>
-            <p class="reply">Implemented tests first, updated the TUI, and rebuilt the harness.</p>
-            <p class="status">model: deepseek-v4-flash | cost: $0.01 | 62 tok/s</p>
-          </div>
-        </aside>
       </section>
 
-      <section id="install" class="band install-band">
-        <div class="section-grid">
-          <div>
-            <p class="eyebrow">Current install path</p>
-            <h2>Source install, no sudo by default.</h2>
-            <p>
-              The installer builds the harness, installs the user-facing command, and copies runtime prompts and model catalogs so the command works outside the repository checkout.
-            </p>
+      <section id="install" class="install-panel" aria-labelledby="install-title">
+        <div class="install-copy">
+          <p class="eyebrow">Start here</p>
+          <h2 id="install-title">One command for interactive and scripted coding loops.</h2>
+          <p>
+            Install from source today. The script builds the daemon and terminal client, then installs the user-facing `go-code` command plus its runtime assets.
+          </p>
+        </div>
+        <div class="terminal" aria-label="Install commands">
+          <div class="terminal-bar" aria-hidden="true">
+            <span></span><span></span><span></span>
           </div>
-          <div class="code-panel" aria-label="Install commands">
-            <pre><code>git clone https://github.com/dennisonbertram/go-code.git
+          <pre><code>git clone https://github.com/dennisonbertram/go-code.git
 cd go-code
 ./scripts/install.sh --add-to-path
 
-go-code              # TUI
-go-code "fix tests"  # single-shot
-go-code --server     # persistent daemon</code></pre>
+go-code                          # open the TUI
+go-code "summarize this repo"     # run once, then exit
+go-code --server                 # start the local API daemon</code></pre>
+        </div>
+      </section>
+
+      <section id="workflow" class="section" aria-labelledby="workflow-title">
+        <div class="section-heading">
+          <p class="eyebrow">How it feels</p>
+          <h2 id="workflow-title">Keep the loop visible while the agent works.</h2>
+          <p>
+            go-code is built around ordinary repository work: open a project, ask for a change, watch tool calls happen, steer when needed, and keep enough state to continue later.
+          </p>
+        </div>
+        <div class="workflow-grid">
+          <article class="feature">
+            <span class="feature-number">01</span>
+            <h3>Open from any repo</h3>
+            <p>The command resolves the current project and sends that workspace to the local harness so file and shell tools stay grounded.</p>
+          </article>
+          <article class="feature accent">
+            <span class="feature-number">02</span>
+            <h3>Observe every step</h3>
+            <p>Runs stream assistant deltas, tool calls, tool results, approvals, token usage, costs, and terminal status as they happen.</p>
+          </article>
+          <article class="feature">
+            <span class="feature-number">03</span>
+            <h3>Steer mid-run</h3>
+            <p>Send new context into an active session, cancel a bad path, approve sensitive work, or continue from an existing conversation.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="dark-band" aria-labelledby="runtime-title">
+        <div class="runtime-layout">
+          <div>
+            <p class="eyebrow invert">Runtime primitives</p>
+            <h2 id="runtime-title">A harness you can adapt instead of work around.</h2>
+          </div>
+          <div class="runtime-list">
+            <div>
+              <strong>Workspaces</strong>
+              <span>Local directories and git worktrees, with observable lifecycle events.</span>
+            </div>
+            <div>
+              <strong>Providers</strong>
+              <span>Catalog-backed models, aliases, pricing metadata, gateways, and direct provider routing.</span>
+            </div>
+            <div>
+              <strong>Controls</strong>
+              <span>Sandbox scope, approval policy, max steps, max cost, role models, and allowed tools per run.</span>
+            </div>
+            <div>
+              <strong>Context</strong>
+              <span>Conversation storage, replay, compaction, project instructions, skills, MCP, and subagents.</span>
+            </div>
           </div>
         </div>
       </section>
 
-      <section id="why" class="section">
-        <div class="section-heading">
-          <p class="eyebrow">Built for everyday development</p>
-          <h2>A harness you can actually live inside.</h2>
-        </div>
-        <div class="feature-grid">
-          <article class="feature">
-            <h3>Workspace-aware</h3>
-            <p>Launch from any repository. Runs carry that project path through to the server so tools operate in the place you intended.</p>
-          </article>
-          <article class="feature">
-            <h3>Readable tool flow</h3>
-            <p>Tool calls stay visible while work is active, then collapse after the assistant reply so the conversation stays usable.</p>
-          </article>
-          <article class="feature">
-            <h3>Model-flexible</h3>
-            <p>Use direct providers or gateways with catalog-backed model metadata, pricing, reasoning effort, and last-selected model memory.</p>
-          </article>
-          <article class="feature">
-            <h3>Streamed and inspectable</h3>
-            <p>The HTTP event stream exposes assistant deltas, tool events, usage, context, approvals, and run lifecycle state.</p>
-          </article>
-        </div>
-      </section>
-
-      <section id="modes" class="band">
+      <section id="api" class="section api-section" aria-labelledby="api-title">
         <div class="section-heading compact">
-          <p class="eyebrow">Three entrypoints</p>
-          <h2>One command for interactive and scripted work.</h2>
+          <p class="eyebrow">API first</p>
+          <h2 id="api-title">The terminal is a client. The stream is the product surface.</h2>
         </div>
-        <div class="mode-table" role="table" aria-label="go-code command modes">
-          <div role="row">
-            <code>go-code</code>
-            <span>Launch the terminal UI in the current project.</span>
+        <div class="api-grid">
+          <div class="api-copy">
+            <p>
+              Start `harnessd`, create a run, and subscribe to Server-Sent Events. Integrations can inspect lifecycle state, tool activity, usage, approvals, summaries, todos, and conversation history.
+            </p>
+            <div class="endpoint-list" aria-label="Common endpoints">
+              <code>POST /v1/runs</code>
+              <code>GET /v1/runs/{id}/events</code>
+              <code>POST /v1/runs/{id}/steer</code>
+              <code>POST /v1/runs/{id}/approve</code>
+              <code>GET /v1/models</code>
+              <code>GET /v1/conversations/{id}/messages</code>
+            </div>
           </div>
-          <div role="row">
-            <code>go-code "prompt"</code>
-            <span>Run one prompt, stream output, then exit.</span>
-          </div>
-          <div role="row">
-            <code>go-code --server</code>
-            <span>Start the local harness daemon and leave it running.</span>
+          <div class="code-window" aria-label="API example">
+            <pre><code>RUN_ID=$(
+  curl -s http://127.0.0.1:8080/v1/runs \
+    -H 'content-type: application/json' \
+    -d '{
+      "prompt": "Find the risky code path",
+      "workspace_path": "'$PWD'",
+      "model": "deepseek-v4-pro",
+      "max_steps": 8
+    }' | jq -r .run_id
+)
+
+curl -N "http://127.0.0.1:8080/v1/runs/$RUN_ID/events"</code></pre>
           </div>
         </div>
       </section>
 
-      <section id="roadmap" class="section roadmap">
-        <div class="section-heading">
-          <p class="eyebrow">Distribution ladder</p>
-          <h2>From local installer to release-quality packaging.</h2>
+      <section id="deploy" class="section deploy-section" aria-labelledby="deploy-title">
+        <div class="section-heading compact">
+          <p class="eyebrow">GitHub Pages</p>
+          <h2 id="deploy-title">A static site that ships with the repo.</h2>
         </div>
-        <ol class="timeline">
-          <li>
-            <strong>Source installer</strong>
-            <span>Current channel for daily use and early testers.</span>
-          </li>
-          <li>
-            <strong>GitHub Releases</strong>
-            <span>Per-platform archives containing binaries plus `share/go-code` assets.</span>
-          </li>
-          <li>
-            <strong>Homebrew tap</strong>
-            <span>Preferred polished macOS path once release archives exist.</span>
-          </li>
-          <li>
-            <strong>Single binary</strong>
-            <span>Long-term simplification: embed assets and make `go-code` the whole product surface.</span>
-          </li>
-        </ol>
+        <div class="deploy-grid">
+          <article>
+            <h3>Simple hosting</h3>
+            <p>The Pages workflow publishes `docs/site` on pushes to `main`, so the product page stays close to the code it explains.</p>
+          </article>
+          <article>
+            <h3>Plain files</h3>
+            <p>No frontend framework is required. The site is one HTML file, one CSS file, and a checked-in visual asset.</p>
+          </article>
+          <article>
+            <h3>Easy to review</h3>
+            <p>Every claim is visible in the source and tied to implemented go-code behavior from the README and runtime contracts.</p>
+          </article>
+        </div>
       </section>
     </main>
 
