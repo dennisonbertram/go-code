@@ -2501,11 +2501,25 @@ func formatSubagentsLines(items []RemoteSubagent) []string {
 
 // effectiveModelAndProvider returns the model ID and provider to use for run requests,
 // accounting for the selected gateway.
+//
+// When the gateway is "openrouter" the model is mapped to its OpenRouter slug and
+// the provider is forced to "openrouter".
+//
+// When the gateway is direct (non-openrouter) and the selected model is an
+// OpenRouter-qualified slug (e.g. "deepseek/deepseek-v4-flash"), the slug is
+// normalised back to a native provider model ID via NativeFromOpenRouterSlug.
 func (m Model) effectiveModelAndProvider() (model, provider string) {
 	if m.selectedGateway == "openrouter" {
 		return modelswitcher.OpenRouterSlug(m.selectedModel), "openrouter"
 	}
-	return m.selectedModel, m.selectedProvider
+	modelID := m.selectedModel
+	// When the model list was sourced from OpenRouter, selectedModel may be
+	// an OpenRouter slug (e.g. "deepseek/deepseek-v4-flash"). For a direct
+	// provider call we must send the native model ID instead.
+	if strings.Contains(modelID, "/") {
+		modelID = modelswitcher.NativeFromOpenRouterSlug(modelID)
+	}
+	return modelID, m.selectedProvider
 }
 
 // statusBarModelLabel returns the status bar label for the currently selected model,

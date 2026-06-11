@@ -400,3 +400,86 @@ func (r *ProviderRegistry) ModelAliasesContext(ctx context.Context, providerName
 	}
 	return aliases
 }
+
+// CanonicalModelForProvider resolves a model slug to its canonical form when
+// routing to a specific (non-OpenRouter) provider. When the slug contains a
+// "/" separator and the prefix corresponds to the target provider, the prefix
+// is stripped to yield the native provider model ID (e.g.
+// "deepseek/deepseek-v4-flash" becomes "deepseek-v4-flash" for provider
+// "deepseek").
+//
+// Aliases in the provider catalog are also resolved against the given provider.
+//
+// The raw modelID is returned unchanged when:
+//   - The provider is OpenRouter.
+//   - The modelID does not contain a "/" separator.
+//   - The prefix does not correspond to the target provider.
+func (r *ProviderRegistry) CanonicalModelForProvider(modelID, providerName string) string {
+	modelID = strings.TrimSpace(modelID)
+	providerName = strings.TrimSpace(providerName)
+
+	// OpenRouter keeps its qualified slugs; no stripping needed.
+	if strings.EqualFold(providerName, "openrouter") {
+		return modelID
+	}
+	if modelID == "" || providerName == "" {
+		return modelID
+	}
+
+	// No "/" means it is already a bare native ID.
+	if !strings.Contains(modelID, "/") {
+		// Resolve aliases within the provider's catalog entry.
+		if r != nil && r.catalog != nil {
+			if entry, ok := r.catalog.Providers[providerName]; ok {
+				if resolved := resolveAlias(entry.Aliases, modelID); resolved != "" {
+					return resolved
+				}
+			}
+		}
+		return modelID
+	}
+
+	// Strip a known OpenRouter provider prefix. The slug "deepseek/deepseek-v4-flash"
+	// should become "deepseek-v4-flash" when the target provider is "deepseek".
+	idx := strings.Index(modelID, "/")
+	prefix := modelID[:idx]
+	suffix := modelID[idx+1:]
+
+	// Check whether the prefix corresponds to the target provider.
+	if matchesProviderPrefix(prefix, providerName) {
+		return suffix
+	}
+
+	// For unknown prefixes that are not the target provider, return the slug as-is
+	// (this lets callers fall through to OpenRouter resolution).
+	return modelID
+}
+
+// matchesProviderPrefix checks whether an OpenRouter-style provider prefix
+// (e.g. "deepseek", "openai", "anthropic") corresponds to the target provider
+// key. The mapping handles known OpenRouter provider prefix aliases.
+func matchesProviderPrefix(prefix, provider string) bool {
+	prefix = strings.TrimSpace(strings.ToLower(prefix))
+	provider = strings.TrimSpace(strings.ToLower(provider))
+	if prefix == "" || provider == "" {
+		return false
+	}
+
+	// Direct match.
+	if prefix == provider {
+		return true
+	}
+
+	// Known OpenRouter prefix aliases for common providers.
+	knownAliases := map[string]string{
+		"x-ai":       "xai",
+		"meta-llama": "groq",    // meta-llama models are often routed via groq
+		"moonshotai": "kimi",
+		"google":     "gemini",
+	}
+	if mapped, ok := knownAliases[prefix]; ok {
+		return mapped == provider
+	}
+
+	return false
+}
