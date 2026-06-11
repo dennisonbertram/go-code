@@ -183,6 +183,11 @@ func (g *Gateway) processMessage(ctx context.Context, telegramID, chatID int64, 
 		ConversationID: user.ConversationID,
 		SystemPrompt:   renderedPrompt,
 		TenantID:       user.ID,
+		Permissions: &harness.PermissionConfig{
+			Sandbox:  harness.SandboxScopeWorkspace,
+			Approval: harness.ApprovalPolicyAll,
+		},
+		MaxCostUSD: 0.50,
 		AllowedTools: []string{
 			"compact_history",
 			"context_status",
