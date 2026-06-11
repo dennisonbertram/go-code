@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"go-agent-harness/internal/harness"
 	"go-agent-harness/internal/store"
 )
+
+const defaultSSEPingInterval = 15 * time.Second
 
 func (s *Server) registerRunRoutes(mux *http.ServeMux, auth func(http.Handler) http.Handler) {
 	mux.Handle("/v1/runs", auth(http.HandlerFunc(s.handleRuns)))
@@ -649,10 +652,22 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request, runID s
 		}
 	}
 
+	pingInterval := s.ssePingInterval
+	if pingInterval <= 0 {
+		pingInterval = defaultSSEPingInterval
+	}
+	pingTicker := time.NewTicker(pingInterval)
+	defer pingTicker.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-pingTicker.C:
+			if err := writeSSEPing(w); err != nil {
+				return
+			}
+			flusher.Flush()
 		case event, ok := <-stream:
 			if !ok {
 				return

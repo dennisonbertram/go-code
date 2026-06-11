@@ -103,6 +103,10 @@ type ServerOptions struct {
 	// LinearAdapter is an optional Linear webhook adapter for POST /v1/webhooks/linear.
 	// When nil, the endpoint returns 401 for all requests.
 	LinearAdapter *linearadapter.LinearAdapter
+	// SSEPingInterval controls how often the SSE event stream emits a keep-alive
+	// ping (an SSE comment line) when no events have been sent. Defaults to 15s.
+	// Set to 0 to disable.
+	SSEPingInterval time.Duration
 }
 
 // NewWithOptions creates an HTTP handler with the full set of optional dependencies.
@@ -137,6 +141,7 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		githubAdapter:     opts.GitHubAdapter,
 		slackAdapter:      opts.SlackAdapter,
 		linearAdapter:     opts.LinearAdapter,
+		ssePingInterval:   opts.SSEPingInterval,
 	}
 	// If runner config has an approval broker, use it as default when none
 	// is explicitly supplied in ServerOptions.
@@ -307,6 +312,8 @@ type Server struct {
 	// linearAdapter converts Linear webhook requests into trigger envelopes (issue #413).
 	// When nil, POST /v1/webhooks/linear returns 401.
 	linearAdapter *linearadapter.LinearAdapter
+	// ssePingInterval controls how often the SSE event stream emits keep-alive pings.
+	ssePingInterval time.Duration
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -342,6 +349,14 @@ func writeSSE(w http.ResponseWriter, event harness.Event) error {
 		return err
 	}
 	return nil
+}
+
+// writeSSEPing writes an SSE comment line as a keep-alive ping.
+// SSE comments (lines starting with ":") are ignored by EventSource clients
+// but keep the underlying TCP connection alive through proxies and load balancers.
+func writeSSEPing(w http.ResponseWriter) error {
+	_, err := fmt.Fprintf(w, ": ping\n\n")
+	return err
 }
 
 func writeMethodNotAllowed(w http.ResponseWriter, allowed string) {
