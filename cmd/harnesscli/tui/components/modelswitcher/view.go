@@ -124,8 +124,8 @@ func (m Model) viewProviderList(width int) string {
 		// Right-align the count column. Compute right portion width: " (NNN)" → max 6 chars.
 		// We'll right-pad the label and right-align the count.
 		// Format: "  {Label}...{spaces}({Count})"
-		// Available inner text width after the 2-char indent.
-		textWidth := innerWidth - 2
+		// Available inner text width after the 2-char indent and 2-char box L/R padding.
+		textWidth := innerWidth - 4
 		if textWidth < 10 {
 			textWidth = 10
 		}
@@ -157,8 +157,8 @@ func (m Model) viewProviderList(width int) string {
 				full := p.Label + currentSuffix + indicator
 				countPart := "  " + countStr
 				runes := []rune("> " + full + countPart)
-				// Pad to innerWidth for consistent highlight width.
-				padNeeded := innerWidth - len(runes)
+				// Pad to innerWidth-2 for consistent highlight width (accounting for box L/R padding).
+				padNeeded := innerWidth - 2 - len(runes)
 				if padNeeded < 0 {
 					padNeeded = 0
 				}
@@ -261,7 +261,7 @@ func (m Model) viewModelsForProvider(width int) string {
 					starRaw = "  "
 				}
 				runes := []rune("> " + starRaw + nameAndSuffix)
-				padNeeded := innerWidth - len(runes)
+				padNeeded := innerWidth - 2 - len(runes)
 				if padNeeded < 0 {
 					padNeeded = 0
 				}
@@ -399,7 +399,7 @@ func (m Model) viewFlatModelList(width int) string {
 					starRaw = "  "
 				}
 				runes := []rune("> " + starRaw + nameAndSuffix)
-				padNeeded := innerWidth - len(runes)
+				padNeeded := innerWidth - 2 - len(runes)
 				if padNeeded < 0 {
 					padNeeded = 0
 				}
@@ -522,7 +522,7 @@ func (m Model) viewReasoning(width int) string {
 				nameAndSuffix += "  ← current"
 			}
 			runes := []rune(prefix + nameAndSuffix)
-			padNeeded := innerWidth - len(runes)
+			padNeeded := innerWidth - 2 - len(runes)
 			if padNeeded < 0 {
 				padNeeded = 0
 			}
