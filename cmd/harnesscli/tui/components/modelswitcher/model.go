@@ -278,12 +278,12 @@ func (m Model) providers() []ProviderSummary {
 	return result
 }
 
-// FilteredProviders returns providers filtered by searchQuery (case-insensitive match on Label).
+// FilteredProviders returns providers filtered by searchQuery (case-insensitive match on Label or ProviderID).
 func (m Model) FilteredProviders() []ProviderSummary {
 	return m.filteredProviders()
 }
 
-// filteredProviders returns providers filtered by searchQuery (case-insensitive match on Label).
+// filteredProviders returns providers filtered by searchQuery (case-insensitive match on Label or ProviderID).
 func (m Model) filteredProviders() []ProviderSummary {
 	q := strings.ToLower(m.searchQuery)
 	if q == "" {
@@ -292,7 +292,7 @@ func (m Model) filteredProviders() []ProviderSummary {
 	all := m.providers()
 	var result []ProviderSummary
 	for _, p := range all {
-		if strings.Contains(strings.ToLower(p.Label), q) {
+		if strings.Contains(strings.ToLower(p.Label), q) || strings.Contains(strings.ToLower(p.ProviderID), q) {
 			result = append(result, p)
 		}
 	}
@@ -324,6 +324,12 @@ func (m Model) modelsForActiveProvider() []ModelEntry {
 // - When browseLevel == 0: all models (for Accept() compatibility).
 // Starred models appear first in all cases, filtered by searchQuery.
 // IsCurrent is set dynamically based on currentModelID.
+//
+// Search matches across DisplayName, ProviderLabel, Provider key, and model ID.
+// Results are ranked: prefix matches before substring matches, with starred
+// models first within each tier. This ensures queries like "d" or "de" surface
+// DeepSeek models ahead of e.g. Anthropic models that merely contain "d"/"de"
+// in their DisplayName.
 func (m Model) visibleModels() []ModelEntry {
 	q := strings.ToLower(m.searchQuery)
 
@@ -342,19 +348,68 @@ func (m Model) visibleModels() []ModelEntry {
 	}
 
 	// For browseLevel==0 OR search active: use full model list (with search filter when active).
-	var starred, rest []ModelEntry
+	// Search matches against DisplayName, ProviderLabel, Provider key, and model ID.
+	// Rank: prefix matches first (starred, then rest), then substring matches (starred, then rest).
+	var prefixStarred, prefixRest, substrStarred, substrRest []ModelEntry
 	for _, e := range m.Models {
-		if q != "" && !strings.Contains(strings.ToLower(e.DisplayName), q) {
-			continue
-		}
 		e.IsCurrent = e.ID == m.currentModelID
-		if m.starred[e.ID] {
-			starred = append(starred, e)
+		if q != "" {
+			queryFields := []string{
+				strings.ToLower(e.DisplayName),
+				strings.ToLower(e.ProviderLabel),
+				strings.ToLower(e.Provider),
+				strings.ToLower(e.ID),
+			}
+			matched := false
+			isPrefix := false
+			for _, f := range queryFields {
+				if strings.HasPrefix(f, q) {
+					matched = true
+					isPrefix = true
+					break
+				}
+			}
+			if !isPrefix {
+				for _, f := range queryFields {
+					if strings.Contains(f, q) {
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				continue
+			}
+			starred := m.starred[e.ID]
+			if isPrefix {
+				if starred {
+					prefixStarred = append(prefixStarred, e)
+				} else {
+					prefixRest = append(prefixRest, e)
+				}
+			} else {
+				if starred {
+					substrStarred = append(substrStarred, e)
+				} else {
+					substrRest = append(substrRest, e)
+				}
+			}
 		} else {
-			rest = append(rest, e)
+			// No search query: preserve original order.
+			if m.starred[e.ID] {
+				prefixStarred = append(prefixStarred, e) // reuse prefixStarred for starred
+			} else {
+				prefixRest = append(prefixRest, e) // reuse prefixRest for rest
+			}
 		}
 	}
-	return append(starred, rest...)
+	// Concatenate in priority order.
+	var result []ModelEntry
+	result = append(result, prefixStarred...)
+	result = append(result, prefixRest...)
+	result = append(result, substrStarred...)
+	result = append(result, substrRest...)
+	return result
 }
 
 // ProviderUp moves providerCursor up by one (wraps around).
