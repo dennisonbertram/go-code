@@ -2099,7 +2099,12 @@ func (r *Runner) filteredToolsForRun(runID string) []ToolDefinition {
 		allowed[name] = true
 	}
 	for name := range AlwaysAvailableTools {
-		allowed[name] = true
+		// Only AskUserQuestion is truly unconditional infrastructure.
+		// find_tool and skill must be in baseAllowed to prevent
+		// bypassing the allowed_tools security boundary (issue #527).
+		if name == "AskUserQuestion" or allowed[name] {
+			allowed[name] = true
+		}
 	}
 	filtered := make([]ToolDefinition, 0, len(allowed))
 	for _, def := range defs {
@@ -3208,10 +3213,27 @@ func (r *Runner) loadConversationHistory(runID string) []Message {
 		return nil
 	}
 	convID := state.run.ConversationID
+	// Snapshot allowedTools while holding the read lock so we can build a
+	// filter set for stripping stale tool definitions from prior-run history.
+	hasFilter := len(state.allowedTools) > 0
+	var filterSet map[string]bool
+	if hasFilter {
+		filterSet = make(map[string]bool, len(state.allowedTools)+len(AlwaysAvailableTools))
+		for _, name := range state.allowedTools {
+			filterSet[name] = true
+		}
+		for name := range AlwaysAvailableTools {
+			filterSet[name] = true
+		}
+	}
 	msgs, found := r.conversations[convID]
 	if found {
 		r.mu.RUnlock()
-		return copyMessages(msgs)
+		messages := copyMessages(msgs)
+		if hasFilter {
+			messages = filterConversationTools(messages, filterSet)
+		}
+		return messages
 	}
 	r.mu.RUnlock()
 
@@ -3225,7 +3247,11 @@ func (r *Runner) loadConversationHistory(runID string) []Message {
 			return nil
 		}
 		if len(loaded) > 0 {
-			return copyMessages(loaded)
+			messages := copyMessages(loaded)
+			if hasFilter {
+				messages = filterConversationTools(messages, filterSet)
+			}
+			return messages
 		}
 		owner, ownerErr := r.config.ConversationStore.GetConversationOwner(context.Background(), convID)
 		if ownerErr != nil {
@@ -3235,11 +3261,68 @@ func (r *Runner) loadConversationHistory(runID string) []Message {
 			return nil
 		}
 		if owner != nil {
-			return copyMessages(loaded)
+			messages := copyMessages(loaded)
+			if hasFilter {
+				messages = filterConversationTools(messages, filterSet)
+			}
+			return messages
 		}
 	}
 	return nil
 }
+
+// filterConversationTools removes tool calls and tool results from a
+// conversation history that reference tools not in the allowed set. This
+// prevents the LLM from seeing stale tool definitions from prior runs when
+// the current run has a restricted AllowedTools list.
+//
+// The function:
+//   - Drops "tool" role messages whose Name is not in the allowed set.
+//   - Strips tool_calls entries from "assistant" messages that reference
+//     disallowed tools. If all tool_calls are stripped and the message has
+//     no text content, the entire message is dropped.
+//   - Passes through user, system, and other non-tool messages unchanged.
+//
+// The input filterSet must already include AlwaysAvailableTools.
+func filterConversationTools(messages []Message, filterSet map[string]bool) []Message {
+	filtered := make([]Message, 0, len(messages))
+	for _, msg := range messages {
+		switch msg.Role {
+		case "tool":
+			// Drop tool results for tools no longer in the allowed set.
+			if !filterSet[msg.Name] {
+				continue
+			}
+			filtered = append(filtered, msg)
+		case "assistant":
+			if len(msg.ToolCalls) > 0 {
+				keptCalls := make([]ToolCall, 0, len(msg.ToolCalls))
+				for _, tc := range msg.ToolCalls {
+					if filterSet[tc.Name] {
+						keptCalls = append(keptCalls, tc)
+					}
+				}
+				// If all tool calls were filtered out and the message had no
+				// text content, drop the entire message — an empty assistant
+				// message with no content and no tool calls is meaningless.
+				if len(keptCalls) == 0 && msg.Content == "" {
+					continue
+				}
+				m := msg.Clone()
+				m.ToolCalls = keptCalls
+				filtered = append(filtered, m)
+			} else {
+				filtered = append(filtered, msg)
+			}
+		default:
+			// user, system, and any other roles pass through unchanged.
+			filtered = append(filtered, msg)
+		}
+	}
+	return filtered
+}
+
+
 
 func (r *Runner) conversationID(runID string) string {
 	r.mu.RLock()
