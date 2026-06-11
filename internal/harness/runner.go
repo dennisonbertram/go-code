@@ -2102,7 +2102,7 @@ func (r *Runner) filteredToolsForRun(runID string) []ToolDefinition {
 		// Only AskUserQuestion is truly unconditional infrastructure.
 		// find_tool and skill must be in baseAllowed to prevent
 		// bypassing the allowed_tools security boundary (issue #527).
-		if name == "AskUserQuestion" or allowed[name] {
+		if name == "AskUserQuestion" || allowed[name] {
 			allowed[name] = true
 		}
 	}
