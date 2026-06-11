@@ -1121,6 +1121,21 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 		model = r.config.DefaultModel
 	}
 
+	// Canonicalize the model for the target provider: when a non-OpenRouter
+	// provider is explicitly requested, strip any OpenRouter-qualified prefix
+	// from the model slug (e.g. "deepseek/deepseek-v4-flash" -> "deepseek-v4-flash").
+	if req.ProviderName != "" && !strings.EqualFold(req.ProviderName, "openrouter") && r.providerRegistry != nil {
+		canonical := r.providerRegistry.CanonicalModelForProvider(model, req.ProviderName)
+		if canonical != model {
+			r.mu.Lock()
+			if state, ok := r.runs[runID]; ok {
+				state.run.Model = canonical
+			}
+			r.mu.Unlock()
+			model = canonical
+		}
+	}
+
 	// Resolve per-role model overrides. primaryModel is used in CompletionRequests
 	// for the main step loop. An empty Primary falls back to the base model.
 	roleModels := r.resolveRoleModels(req)

@@ -861,6 +861,74 @@ func TestOpenRouterSlug_UnknownFallback(t *testing.T) {
 	}
 }
 
+// ─── NativeFromOpenRouterSlug tests ──────────────────────────────────────────────
+
+// TestNativeFromOpenRouterSlug_KnownModels verifies each mapped OpenRouter slug
+// returns the correct native model ID.
+func TestNativeFromOpenRouterSlug_KnownModels(t *testing.T) {
+	cases := []struct {
+		slug string
+		want string
+	}{
+		{"openai/gpt-4.1", "gpt-4.1"},
+		{"openai/gpt-4.1-mini", "gpt-4.1-mini"},
+		{"anthropic/claude-sonnet-4-6", "claude-sonnet-4-6"},
+		{"anthropic/claude-opus-4-6", "claude-opus-4-6"},
+		{"anthropic/claude-haiku-4-5-20251001", "claude-haiku-4-5-20251001"},
+		{"google/gemini-2.5-flash", "gemini-2.5-flash"},
+		{"google/gemini-2.0-flash", "gemini-2.0-flash"},
+		{"deepseek/deepseek-chat", "deepseek-chat"},
+		{"deepseek/deepseek-r1", "deepseek-reasoner"},
+		{"deepseek/deepseek-v4-pro", "deepseek-v4"},
+		{"deepseek/deepseek-v4-flash", "deepseek-v4-flash"},
+		{"x-ai/grok-3-mini", "grok-3-mini"},
+		{"x-ai/grok-4", "grok-4-1-fast-reasoning"},
+		{"meta-llama/llama-3.3-70b-instruct", "llama-3.3-70b-versatile"},
+		{"qwen/qwq-32b", "qwen-qwq-32b"},
+		{"qwen/qwen-plus", "qwen-plus"},
+		{"qwen/qwen-turbo", "qwen-turbo"},
+		{"moonshotai/kimi-k2.5", "kimi-k2.5"},
+	}
+	for _, tc := range cases {
+		got := modelswitcher.NativeFromOpenRouterSlug(tc.slug)
+		if got != tc.want {
+			t.Errorf("NativeFromOpenRouterSlug(%q) = %q, want %q", tc.slug, got, tc.want)
+		}
+	}
+}
+
+// TestNativeFromOpenRouterSlug_GenericPrefix verifies that unknown slugs with a
+// "/" separator get their prefix stripped generically.
+func TestNativeFromOpenRouterSlug_GenericPrefix(t *testing.T) {
+	cases := []struct {
+		slug string
+		want string
+	}{
+		{"some-provider/some-model", "some-model"},
+		{"a/b", "b"},
+		{"a/b/c", "b/c"},
+		{"novita/deepseek-v4-flash", "deepseek-v4-flash"},
+	}
+	for _, tc := range cases {
+		got := modelswitcher.NativeFromOpenRouterSlug(tc.slug)
+		if got != tc.want {
+			t.Errorf("NativeFromOpenRouterSlug(%q) = %q, want %q", tc.slug, got, tc.want)
+		}
+	}
+}
+
+// TestNativeFromOpenRouterSlug_PlainID verifies that plain IDs without a "/"
+// are returned unchanged.
+func TestNativeFromOpenRouterSlug_PlainID(t *testing.T) {
+	ids := []string{"gpt-4.1", "claude-sonnet-4-6", "deepseek-chat", "", "some-future-model"}
+	for _, id := range ids {
+		got := modelswitcher.NativeFromOpenRouterSlug(id)
+		if got != id {
+			t.Errorf("NativeFromOpenRouterSlug(%q) = %q, want %q unchanged", id, got, id)
+		}
+	}
+}
+
 // TestFilteredProviders_EmptyQuery returns all providers when no search query is set.
 func TestFilteredProviders_EmptyQuery(t *testing.T) {
 	m := modelswitcher.New("gpt-4o")

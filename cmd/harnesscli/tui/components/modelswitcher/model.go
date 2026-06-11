@@ -938,6 +938,33 @@ func OpenRouterSlug(modelID string) string {
 	return modelID
 }
 
+// nativeFromOpenRouterSlugs is the inverse of openRouterSlugs: it maps
+// OpenRouter-qualified slugs back to native model IDs.
+var nativeFromOpenRouterSlugs = initNativeFromOpenRouter()
+
+func initNativeFromOpenRouter() map[string]string {
+	result := make(map[string]string, len(openRouterSlugs))
+	for native, slug := range openRouterSlugs {
+		result[slug] = native
+	}
+	return result
+}
+
+// NativeFromOpenRouterSlug strips the known OpenRouter provider prefix from a
+// model slug and returns the native model ID. Falls back to the raw ID when no
+// inverse mapping exists or when the slug does not contain a known prefix.
+func NativeFromOpenRouterSlug(slug string) string {
+	if native, ok := nativeFromOpenRouterSlugs[slug]; ok {
+		return native
+	}
+	// When the slug has a "/" separator but no hard-coded inverse mapping,
+	// try stripping the prefix generically (e.g. "openai/gpt-4.1" -> "gpt-4.1").
+	if idx := strings.Index(slug, "/"); idx >= 0 {
+		return slug[idx+1:]
+	}
+	return slug
+}
+
 // AvailabilityKnown returns true when WithAvailability has been called at least
 // once for this model (i.e. provider info has been loaded). When false, all
 // ModelEntry.Available fields are zero (false) — do not treat that as

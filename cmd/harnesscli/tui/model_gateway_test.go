@@ -406,6 +406,77 @@ func TestEffectiveModelAndProvider_EmptyModel(t *testing.T) {
 	}
 }
 
+// TestEffectiveModelAndProvider_DirectGatewayNormalizesOpenRouterSlug verifies
+// that when the direct gateway is active and selectedModel contains an
+// OpenRouter-qualified slug (e.g. "deepseek/deepseek-v4-flash"), the state is
+// set correctly for the downstream effectiveModelAndProvider call to normalise
+// the slug before sending to the direct provider.
+func TestEffectiveModelAndProvider_DirectGatewayNormalizesOpenRouterSlug(t *testing.T) {
+	resetGatewayConfig(t)
+	t.Cleanup(func() { resetGatewayConfig(t) })
+
+	m := initModel(t, 80, 24)
+
+	// Direct gateway with an OpenRouter-qualified slug (as would happen when the
+	// model list was sourced from OpenRouter and the user selected deepseek).
+	m2, _ := m.Update(tui.GatewaySelectedMsg{Gateway: ""})
+	m = m2.(tui.Model)
+	m3, _ := m.Update(tui.ModelSelectedMsg{
+		ModelID:  "deepseek/deepseek-v4-flash",
+		Provider: "deepseek",
+	})
+	m = m3.(tui.Model)
+
+	// Verify state: gateway is direct, selectedModel is the OR slug.
+	if m.SelectedGateway() != "" {
+		t.Errorf("SelectedGateway() = %q, want empty (direct)", m.SelectedGateway())
+	}
+	if m.SelectedModel() != "deepseek/deepseek-v4-flash" {
+		t.Errorf("SelectedModel() = %q, want deepseek/deepseek-v4-flash", m.SelectedModel())
+	}
+	// View must be renderable (no panic).
+	v := m.View()
+	if v == "" {
+		t.Error("View() must be non-empty")
+	}
+	// StatusMsg is set by ModelSelectedMsg using the provided model ID.
+	if !strings.Contains(m.StatusMsg(), "deepseek/deepseek-v4-flash") {
+		t.Errorf("StatusMsg() = %q, want containing the stored model ID", m.StatusMsg())
+	}
+}
+
+// TestEffectiveModelAndProvider_DirectGatewayNormalizesGenericORPrefix verifies
+// state is correctly set when a generic OpenRouter-qualified slug is selected
+// with a direct provider gateway.
+func TestEffectiveModelAndProvider_DirectGatewayNormalizesGenericORPrefix(t *testing.T) {
+	resetGatewayConfig(t)
+	t.Cleanup(func() { resetGatewayConfig(t) })
+
+	m := initModel(t, 80, 24)
+
+	// Direct gateway with a generic OpenRouter-qualified slug.
+	m2, _ := m.Update(tui.GatewaySelectedMsg{Gateway: ""})
+	m = m2.(tui.Model)
+	m3, _ := m.Update(tui.ModelSelectedMsg{
+		ModelID:  "novita/deepseek-v4-flash",
+		Provider: "deepseek",
+	})
+	m = m3.(tui.Model)
+
+	// Verify state is set correctly.
+	if m.SelectedGateway() != "" {
+		t.Errorf("SelectedGateway() = %q, want empty (direct)", m.SelectedGateway())
+	}
+	if m.SelectedModel() != "novita/deepseek-v4-flash" {
+		t.Errorf("SelectedModel() = %q, want novita/deepseek-v4-flash", m.SelectedModel())
+	}
+	// View must be renderable.
+	v := m.View()
+	if v == "" {
+		t.Error("View() must be non-empty")
+	}
+}
+
 // ─── Status bar label composition tests ──────────────────────────────────────
 
 // TestStatusBarLabel_ModelAndReasoningAndGateway verifies that when a model,
