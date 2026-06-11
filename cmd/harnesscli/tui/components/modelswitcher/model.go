@@ -128,6 +128,7 @@ type Model struct {
 	Selected int  // index into visibleModels()
 	IsOpen   bool
 	Width    int
+	MaxHeight int
 
 	reasoningMode     bool   // true = Level-1 (reasoning effort) active
 	reasoningSelected int    // cursor in ReasoningLevels
@@ -751,3 +752,11 @@ func OpenRouterSlug(modelID string) string {
 // ModelEntry.Available fields are zero (false) — do not treat that as
 // "confirmed unconfigured".
 func (m Model) AvailabilityKnown() bool { return m.availabilitySet }
+
+// WithMaxHeight returns a copy with MaxHeight set to h. When h > 0, the view
+// windows the list around the active selection and shows scroll indicators
+// when items exceed the available height.
+func (m Model) WithMaxHeight(h int) Model {
+	m.MaxHeight = h
+	return m
+}
