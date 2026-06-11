@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -159,6 +160,16 @@ func (w *ContainerWorkspace) HarnessURL() string { return w.harnessURL }
 // container. Returns an empty string if Provision has not been called.
 func (w *ContainerWorkspace) WorkspacePath() string { return w.workspacePath }
 
+// WaitReady polls the harnessd /healthz endpoint inside the container with
+// exponential backoff. It returns nil when /healthz responds with 200 OK,
+// or a descriptive error if the container never becomes ready within 2 minutes.
+func (w *ContainerWorkspace) WaitReady(ctx context.Context) error {
+	if w.harnessURL == "" {
+		return fmt.Errorf("workspace: container not provisioned")
+	}
+	return waitForHealthz(ctx, w.harnessURL, "container")
+}
+
 // Destroy stops and removes the Docker container. It is a no-op if the
 // workspace has not been provisioned.
 func (w *ContainerWorkspace) Destroy(ctx context.Context) error {
@@ -186,6 +197,62 @@ func getFreePort() (int, error) {
 	}
 	defer ln.Close()
 	return ln.Addr().(*net.TCPAddr).Port, nil
+}
+
+// waitForHealthz polls harnessURL+"/healthz" with exponential backoff up to a
+// 2-minute timeout. It returns nil on the first 200 OK response, or a
+// descriptive error if the deadline expires with the last probe error.
+func waitForHealthz(ctx context.Context, harnessURL, wsType string) error {
+	const (
+		initialBackoff = 200 * time.Millisecond
+		maxBackoff     = 10 * time.Second
+		timeout        = 2 * time.Minute
+	)
+
+	deadline := time.Now().Add(timeout)
+	client := &http.Client{Timeout: 3 * time.Second}
+	backoff := initialBackoff
+
+	var lastErr error
+	for {
+		if ctx.Err() != nil {
+			return fmt.Errorf("workspace: WaitReady %s cancelled: %w", wsType, ctx.Err())
+		}
+		if time.Now().After(deadline) {
+			detail := "no response"
+			if lastErr != nil {
+				detail = lastErr.Error()
+			}
+			return fmt.Errorf("harnessd inside %s never became ready: %s", wsType, detail)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, harnessURL+"/healthz", nil)
+		if err != nil {
+			return fmt.Errorf("workspace: WaitReady %s request: %w", wsType, err)
+		}
+
+		resp, err := client.Do(req)
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return nil
+			}
+			lastErr = fmt.Errorf("healthz returned %d", resp.StatusCode)
+		} else {
+			lastErr = err
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("workspace: WaitReady %s cancelled: %w", wsType, ctx.Err())
+		case <-time.After(backoff):
+		}
+
+		backoff *= 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+	}
 }
 
 func init() {

@@ -14,6 +14,13 @@ type Workspace interface {
 	// It must be called before HarnessURL or WorkspacePath are valid.
 	Provision(ctx context.Context, opts Options) error
 
+	// WaitReady blocks until the harnessd instance inside the workspace is
+	// actually serving requests (not just running at the OS/container level).
+	// It returns nil when HarnessURL()+/healthz responds with 200 OK, or a
+	// descriptive error on timeout. For workspaces without an inner harnessd
+	// (local, worktree), it is a no-op returning nil.
+	WaitReady(ctx context.Context) error
+
 	// HarnessURL returns the HTTP endpoint of the harnessd instance
 	// running inside this workspace. Valid only after Provision succeeds.
 	HarnessURL() string

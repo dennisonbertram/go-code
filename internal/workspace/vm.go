@@ -54,6 +54,16 @@ func (w *VMWorkspace) HarnessURL() string { return w.harnessURL }
 // Returns an empty string before Provision succeeds.
 func (w *VMWorkspace) WorkspacePath() string { return w.workspacePath }
 
+// WaitReady polls the harnessd /healthz endpoint on the VM with exponential
+// backoff. It returns nil when /healthz responds with 200 OK, or a descriptive
+// error if the VM never becomes ready within 2 minutes.
+func (w *VMWorkspace) WaitReady(ctx context.Context) error {
+	if w.harnessURL == "" {
+		return fmt.Errorf("workspace: vm not provisioned")
+	}
+	return waitForHealthz(ctx, w.harnessURL, "vm")
+}
+
 // Destroy deletes the cloud VM. It is a no-op if Provision was not called.
 func (w *VMWorkspace) Destroy(ctx context.Context) error {
 	if w.vmID == "" {

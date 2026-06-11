@@ -58,6 +58,15 @@ func (w *PoolWorkspace) WorkspacePath() string {
 	return w.ws.WorkspacePath()
 }
 
+// WaitReady delegates to the inner workspace's WaitReady. It returns an error
+// if the pool workspace has not been provisioned.
+func (w *PoolWorkspace) WaitReady(ctx context.Context) error {
+	if w.ws == nil {
+		return fmt.Errorf("workspace: pool workspace not provisioned")
+	}
+	return w.ws.WaitReady(ctx)
+}
+
 // Destroy returns the leased workspace to the pool for reuse.
 // It does not destroy the underlying workspace resource.
 // It is safe to call Destroy on an un-provisioned PoolWorkspace (no-op).

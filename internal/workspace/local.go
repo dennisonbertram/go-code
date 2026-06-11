@@ -86,6 +86,12 @@ func (w *LocalWorkspace) WorkspacePath() string {
 	return w.path
 }
 
+// WaitReady is a no-op for local workspaces — there is no inner harnessd to
+// wait for. The local harnessd is expected to be running externally.
+func (w *LocalWorkspace) WaitReady(_ context.Context) error {
+	return nil
+}
+
 // Destroy removes the workspace directory. It is a no-op (returns nil) if the
 // workspace has not been provisioned.
 func (w *LocalWorkspace) Destroy(_ context.Context) error {

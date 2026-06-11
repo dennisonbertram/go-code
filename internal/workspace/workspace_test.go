@@ -44,6 +44,12 @@ func (m *mockWorkspace) WorkspacePath() string {
 	return m.workspacePath
 }
 
+func (m *mockWorkspace) WaitReady(_ context.Context) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return nil
+}
+
 func (m *mockWorkspace) Destroy(_ context.Context) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

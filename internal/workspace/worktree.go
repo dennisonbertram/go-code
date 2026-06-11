@@ -160,6 +160,12 @@ func (w *WorktreeWorkspace) BaseRef() string {
 	return w.baseRef
 }
 
+// WaitReady is a no-op for worktree workspaces — there is no inner harnessd to
+// wait for. The worktree is a thin git wrapper around a local directory.
+func (w *WorktreeWorkspace) WaitReady(_ context.Context) error {
+	return nil
+}
+
 // Destroy tears down the git worktree and deletes the associated branch.
 // If the workspace has not been provisioned (path is empty), Destroy is a no-op.
 // Errors from "not found" conditions (already removed worktrees/branches) are

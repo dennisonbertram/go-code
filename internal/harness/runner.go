@@ -717,6 +717,15 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 			})
 			return nil, fmt.Errorf("workspace provisioning failed: %w", provisionErr)
 		}
+		// Wait for harnessd to be actually serving (not just kernel-level running).
+		// For local/worktree backends this is an immediate no-op.
+		if waitErr := ws.WaitReady(ctx); waitErr != nil {
+			r.emit(runID, EventWorkspaceProvisionFailed, map[string]any{
+				"workspace_type": effectiveWorkspaceType,
+				"error":          waitErr.Error(),
+			})
+			return nil, fmt.Errorf("workspace provisioning failed: %w", waitErr)
+		}
 		wsPath := ws.WorkspacePath()
 		r.emit(runID, EventWorkspaceProvisioned, map[string]any{
 			"workspace_type": effectiveWorkspaceType,
