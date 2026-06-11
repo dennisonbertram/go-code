@@ -68,6 +68,7 @@ func main() {
 		sum,
 		store,
 		cfg.MCPServerURL,
+		nil,
 	)
 
 	mux := http.NewServeMux()

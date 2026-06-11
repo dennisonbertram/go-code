@@ -34,14 +34,38 @@ type MCPServer struct {
 }
 
 // RunRequest is the payload sent to POST /v1/runs.
+// SandboxScope specifies the filesystem confinement mode for a run.
+type SandboxScope string
+
+const (
+	// SandboxScopeWorkspace confines filesystem access to the per-run workspace.
+	SandboxScopeWorkspace SandboxScope = "workspace"
+)
+
+// ApprovalPolicy controls whether tool calls require human approval.
+type ApprovalPolicy string
+
+const (
+	// ApprovalPolicyAll requires human approval for every tool call.
+	ApprovalPolicyAll ApprovalPolicy = "all"
+)
+
+// PermissionConfig controls tool execution permissions for a run.
+type PermissionConfig struct {
+	Sandbox  SandboxScope   `json:"sandbox,omitempty"`
+	Approval ApprovalPolicy `json:"approval,omitempty"`
+}
+
 type RunRequest struct {
-	Prompt         string      `json:"prompt"`
-	ConversationID string      `json:"conversation_id"`
-	SystemPrompt   string      `json:"system_prompt,omitempty"`
-	TenantID       string      `json:"tenant_id,omitempty"`
-	Model          string      `json:"model,omitempty"`
-	MCPServers     []MCPServer `json:"mcp_servers,omitempty"`
-	AllowedTools   []string    `json:"allowed_tools,omitempty"`
+	Prompt         string            `json:"prompt"`
+	ConversationID string            `json:"conversation_id"`
+	SystemPrompt   string            `json:"system_prompt,omitempty"`
+	TenantID       string            `json:"tenant_id,omitempty"`
+	Model          string            `json:"model,omitempty"`
+	MCPServers     []MCPServer       `json:"mcp_servers,omitempty"`
+	AllowedTools   []string          `json:"allowed_tools,omitempty"`
+	Permissions    *PermissionConfig `json:"permissions,omitempty"`
+	MaxCostUSD     float64           `json:"max_cost_usd,omitempty"`
 }
 
 // RunResponse is the response from POST /v1/runs.
