@@ -31,6 +31,7 @@ func main() {
 	log.Printf("  listen_addr    = %s", cfg.ListenAddr)
 	log.Printf("  database_url   = %s", redact(cfg.DatabaseURL))
 	log.Printf("  bot_token      = %s", redact(cfg.TelegramBotToken))
+	log.Printf("  telegram_base  = %s", cfg.TelegramBaseURL)
 	log.Printf("  mcp_server_url = %s", cfg.MCPServerURL)
 
 	store, err := db.NewStore(cfg.DatabaseURL)
@@ -40,7 +41,12 @@ func main() {
 	}
 	defer store.Close()
 
-	bot := telegram.NewBot(cfg.TelegramBotToken)
+	var bot *telegram.Bot
+	if cfg.TelegramBaseURL != "" {
+		bot = telegram.NewBotWithBaseURL(cfg.TelegramBotToken, cfg.TelegramBaseURL)
+	} else {
+		bot = telegram.NewBot(cfg.TelegramBotToken)
+	}
 	harnessClient := harness.NewClient(cfg.HarnessURL)
 
 	// Start MCP server on :8082 in the background (same process).

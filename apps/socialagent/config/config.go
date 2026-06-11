@@ -27,6 +27,12 @@ type Config struct {
 	// TelegramBotToken is the bot token issued by @BotFather. Required.
 	TelegramBotToken string
 
+	// TelegramBaseURL is the base URL of the Telegram Bot API. When empty,
+	// the default https://api.telegram.org is used. Set to a local simulator
+	// URL (e.g., http://localhost:8084) for testing without real Telegram.
+	// Optional.
+	TelegramBaseURL string
+
 	// WebhookSecret is the secret token used to authenticate incoming webhook
 	// requests from Telegram via the X-Telegram-Bot-Api-Secret-Token header.
 	// Required.
@@ -57,6 +63,7 @@ type Config struct {
 func Load() (*Config, error) {
 	cfg := &Config{
 		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
+		TelegramBaseURL:  os.Getenv("TELEGRAM_BASE_URL"),
 		WebhookSecret:    os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
 		HarnessURL:       os.Getenv("HARNESS_URL"),
 		DatabaseURL:      os.Getenv("DATABASE_URL"),
