@@ -76,6 +76,14 @@ func WriteTool(opts tools.BuildOptions) tools.Tool {
 		}
 		content := *contentPtr
 
+		// Reject writes when the configured workspace root is not a usable
+		// directory (missing, not a directory, or not writable). Without this
+		// guard the MkdirAll below would silently create a missing root on the
+		// host, landing files in the wrong place for VM/container runs.
+		if err := tools.EnsureWorkspaceRootUsable(workspaceRoot); err != nil {
+			return "", err
+		}
+
 		absPath, err := tools.ResolveWorkspacePath(workspaceRoot, args.Path)
 		if err != nil {
 			return "", err

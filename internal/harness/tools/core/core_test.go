@@ -342,6 +342,22 @@ func TestWriteToolNonStructuredPassesThrough(t *testing.T) {
 	}
 }
 
+
+// TestWriteTool_Handler_MissingWorkspaceRootFailsLoudly verifies that the write
+// handler rejects a configured workspace root that does not exist on the
+// filesystem, rather than silently creating it via MkdirAll.
+func TestWriteTool_Handler_MissingWorkspaceRootFailsLoudly(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	tool := WriteTool(tools.BuildOptions{WorkspaceRoot: missing})
+	_, err := tool.Handler(context.Background(), json.RawMessage(`{"path":"test.txt","content":"hello"}`))
+	if err == nil {
+		t.Fatal("expected error when workspace root does not exist")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("error %q should mention missing root", err.Error())
+	}
+}
+
 // TestEditTool_Definition verifies the edit tool constructor.
 func TestEditTool_Definition(t *testing.T) {
 	tool := EditTool(tools.BuildOptions{WorkspaceRoot: t.TempDir()})

@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -14,6 +15,37 @@ func validateWorkspaceRelativePattern(pattern string) error {
 	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
 		return fmt.Errorf("pattern %q escapes workspace", pattern)
 	}
+	return nil
+}
+
+// EnsureWorkspaceRootUsable returns an error if the configured workspace root
+// does not exist, is not a directory, or is not writable. This prevents tools
+// from silently creating a missing configured root (e.g. /workspace from a
+// VM-mode workspace that shouldn't exist on the host) and landing files in
+// the wrong place.
+func EnsureWorkspaceRootUsable(workspaceRoot string) error {
+	if workspaceRoot == "" {
+		return fmt.Errorf("workspace root is required")
+	}
+	info, err := os.Stat(workspaceRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("workspace root %q does not exist", workspaceRoot)
+		}
+		return fmt.Errorf("workspace root %q: %w", workspaceRoot, err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("workspace root %q is not a directory", workspaceRoot)
+	}
+	f, err := os.CreateTemp(workspaceRoot, ".writable-check-*")
+	if err != nil {
+		if os.IsPermission(err) {
+			return fmt.Errorf("workspace root %q is not writable", workspaceRoot)
+		}
+		return fmt.Errorf("workspace root %q writability check: %w", workspaceRoot, err)
+	}
+	_ = f.Close()
+	_ = os.Remove(f.Name())
 	return nil
 }
 

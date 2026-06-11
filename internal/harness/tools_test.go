@@ -176,6 +176,26 @@ func TestBashTool(t *testing.T) {
 	}
 }
 
+
+// TestDefaultRegistryWriteRejectsUnrealWorkspaceRoot verifies that a default registry
+// built against a workspace root that does not exist on the filesystem rejects write
+// calls with a clear error rather than silently creating the missing root and landing
+// files in the wrong place.
+func TestDefaultRegistryWriteRejectsUnrealWorkspaceRoot(t *testing.T) {
+	t.Parallel()
+
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
+	registry := NewDefaultRegistry(missing)
+
+	_, err := registry.Execute(context.Background(), "write", []byte(`{"path":"test.txt","content":"hello"}`))
+	if err == nil {
+		t.Fatal("expected error when workspace root does not exist")
+	}
+	if !strings.Contains(err.Error(), "does not exist") {
+		t.Fatalf("error %q should mention missing root", err.Error())
+	}
+}
+
 func TestBashToolOutputUsesHeadTailBuffer(t *testing.T) {
 	t.Parallel()
 
