@@ -13,25 +13,32 @@ import (
 
 // Scheduler manages scheduled jobs using robfig/cron.
 type Scheduler struct {
-	store    Store
-	executor Executor
-	clock    Clock
-	cron     *robfigcron.Cron
-	sem      chan struct{} // concurrency semaphore
-	wg       sync.WaitGroup
-	mu       sync.Mutex
-	entries  map[string]robfigcron.EntryID // jobID -> entryID
+	store       Store
+	executor    Executor
+	clock       Clock
+	cron        *robfigcron.Cron
+	sem         chan struct{} // concurrency semaphore
+	wg          sync.WaitGroup
+	mu          sync.Mutex
+	entries     map[string]robfigcron.EntryID // jobID -> entryID
+	jitterCfg   JitterConfig
+	jitterCache map[string]time.Duration // jobID|schedule -> jitter offset
+	sleepFn     func(time.Duration)      // injectable sleep for testing; defaults to time.Sleep
 }
 
 // SchedulerConfig holds scheduler configuration.
 type SchedulerConfig struct {
 	MaxConcurrent int
+	Jitter        JitterConfig
 }
 
 // NewScheduler creates a new Scheduler.
 func NewScheduler(store Store, executor Executor, clock Clock, cfg SchedulerConfig) *Scheduler {
 	if cfg.MaxConcurrent <= 0 {
 		cfg.MaxConcurrent = 5
+	}
+	if cfg.Jitter.MinSec <= 0 && cfg.Jitter.MaxSec <= 0 {
+		cfg.Jitter = DefaultJitterConfig()
 	}
 	c := robfigcron.New(
 		robfigcron.WithLocation(time.UTC),
@@ -40,12 +47,15 @@ func NewScheduler(store Store, executor Executor, clock Clock, cfg SchedulerConf
 		)),
 	)
 	return &Scheduler{
-		store:    store,
-		executor: executor,
-		clock:    clock,
-		cron:     c,
-		sem:      make(chan struct{}, cfg.MaxConcurrent),
-		entries:  make(map[string]robfigcron.EntryID),
+		store:       store,
+		executor:    executor,
+		clock:       clock,
+		cron:        c,
+		sem:         make(chan struct{}, cfg.MaxConcurrent),
+		entries:     make(map[string]robfigcron.EntryID),
+		jitterCfg:   cfg.Jitter,
+		jitterCache: make(map[string]time.Duration),
+		sleepFn:     time.Sleep,
 	}
 }
 
@@ -79,6 +89,11 @@ func (s *Scheduler) AddJob(job Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Compute and cache a deterministic jitter offset for this job.
+	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = computeJitter(
+		s.jitterCfg, job.ID, job.Schedule,
+	)
+
 	// Capture job for the closure.
 	j := job
 	entryID, err := s.cron.AddFunc(job.Schedule, func() {
@@ -105,6 +120,12 @@ func (s *Scheduler) RemoveJob(jobID string) {
 // UpdateJobSchedule removes the old cron entry and adds a new one.
 func (s *Scheduler) UpdateJobSchedule(job Job) error {
 	s.RemoveJob(job.ID)
+	// Recompute jitter for the new schedule.
+	s.mu.Lock()
+	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = computeJitter(
+		s.jitterCfg, job.ID, job.Schedule,
+	)
+	s.mu.Unlock()
 	return s.AddJob(job)
 }
 
@@ -113,6 +134,20 @@ func (s *Scheduler) UpdateJobSchedule(job Job) error {
 func (s *Scheduler) fireJob(job Job) {
 	ctx := context.Background()
 	now := s.clock.Now()
+
+	// Apply jitter delay before execution work.
+	// The base jitter offset is computed deterministically at registration time.
+	// Minute-mark avoidance is applied now using the actual fire time.
+	jitterKey := jitterCacheKey(job.ID, job.Schedule)
+	baseJitter := s.jitterCache[jitterKey]
+	if baseJitter > 0 {
+		jitterOffset := avoidMinuteMarks(baseJitter, now, s.jitterCfg.AvoidMarks)
+		if s.jitterCfg.LogJitteredTimes {
+			log.Printf("cron: job %s jittered by %v (original schedule: %s, base jitter: %v)",
+				job.ID, jitterOffset, job.Schedule, baseJitter)
+		}
+		s.sleepFn(jitterOffset)
+	}
 
 	exec := Execution{
 		ID:        uuid.New().String(),

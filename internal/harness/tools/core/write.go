@@ -76,6 +76,10 @@ func WriteTool(opts tools.BuildOptions) tools.Tool {
 		}
 		content := *contentPtr
 
+		if err := tools.EnsureWorkspaceRootUsable(workspaceRoot); err != nil {
+			return "", err
+		}
+
 		absPath, err := tools.ResolveWorkspacePath(workspaceRoot, args.Path)
 		if err != nil {
 			return "", err
