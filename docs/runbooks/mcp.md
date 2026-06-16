@@ -85,9 +85,9 @@ The HTTP transport (`internal/mcp/http_conn.go`) validates that the URL scheme i
 
 ### HTTP MCP server package (`internal/mcpserver`)
 
-`internal/mcpserver` provides an HTTP MCP server handler for `POST /mcp` and `GET /mcp` (SSE), but this handler is not mounted by `harnessd` by default.
+`internal/mcpserver` provides an HTTP MCP server handler for `POST /mcp` and `GET /mcp` (SSE). The `/mcp` endpoint is mounted by `harnessd` by default alongside the main HTTP API.
 
-`harnessd` currently exposes MCP **client management** endpoints at:
+`harnessd` also exposes MCP **client management** endpoints at:
 
 - `GET /v1/mcp/servers`
 - `POST /v1/mcp/servers`
@@ -145,7 +145,7 @@ Subscribe to live run events:
 1. Call `subscribe_run` via `POST /mcp` with `{"run_id": "<id>"}`.
 2. Open a persistent `GET /mcp` connection — server sends SSE events.
 
-These steps apply to an HTTP server where `internal/mcpserver.Server.Handler()` is mounted.
+These steps work out of the box with `harnessd` — the `/mcp` endpoint is mounted by default.
 
 Event format:
 ```

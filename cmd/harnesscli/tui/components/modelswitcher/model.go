@@ -128,7 +128,6 @@ type Model struct {
 	Selected int  // index into visibleModels()
 	IsOpen   bool
 	Width    int
-	MaxHeight int
 
 	reasoningMode     bool   // true = Level-1 (reasoning effort) active
 	reasoningSelected int    // cursor in ReasoningLevels
@@ -173,6 +172,18 @@ type Model struct {
 
 	// providerCursor is the cursor position in the provider list (level 0).
 	providerCursor int
+
+	// MaxHeight limits the rendered output height (lines). When 0 (default),
+	// no limit is enforced — all items are rendered.
+	MaxHeight int
+
+	// scrollOffset tracks the starting index of the visible window in the
+	// model list (level 1 and search views).
+	scrollOffset int
+
+	// providerScrollOffset tracks the starting index of the visible window
+	// in the provider list (level 0).
+	providerScrollOffset int
 }
 
 // New constructs a Model pre-loaded with DefaultModels, marking the entry
@@ -200,10 +211,13 @@ func New(currentModelID string) Model {
 
 // Open opens the dropdown overlay, starting at level 0 (provider list).
 // providerCursor is set to the index of the current model's provider.
+// Scroll offsets are reset.
 func (m Model) Open() Model {
 	m.IsOpen = true
 	m.browseLevel = 0
 	m.activeProvider = ""
+	m.scrollOffset = 0
+	m.providerScrollOffset = 0
 	// Position providerCursor at the current model's provider.
 	provs := m.providers()
 	cur := m.CurrentModel()
@@ -224,7 +238,78 @@ func (m Model) Close() Model {
 	m.browseLevel = 0
 	m.activeProvider = ""
 	m.providerCursor = 0
+	m.scrollOffset = 0
+	m.providerScrollOffset = 0
 	return m
+}
+
+// WithMaxHeight returns a copy with MaxHeight set to h. When h <= 0, no height
+// limit is enforced and all items are rendered.
+func (m Model) WithMaxHeight(h int) Model {
+	m.MaxHeight = h
+	return m
+}
+
+// maxVisibleContentRows returns the number of content rows that fit within
+// MaxHeight after accounting for title, footer, search bar, scroll indicators,
+// and box border chrome.
+func (m Model) maxVisibleContentRows() int {
+	if m.MaxHeight <= 0 {
+		return 1<<31 - 1 // effectively unlimited
+	}
+	const overhead = 10
+	visible := m.MaxHeight - overhead
+	if visible < 1 {
+		visible = 1
+	}
+	return visible
+}
+
+// adjustModelScroll keeps the model cursor visible within the scroll window.
+func (m Model) adjustModelScroll(total int) Model {
+	if total == 0 {
+		m.scrollOffset = 0
+		return m
+	}
+	maxVisible := m.maxVisibleContentRows()
+	m.scrollOffset = adjustScroll(m.scrollOffset, m.Selected, total, maxVisible)
+	return m
+}
+
+// adjustProviderScroll keeps the provider cursor visible within the scroll window.
+func (m Model) adjustProviderScroll(total int) Model {
+	if total == 0 {
+		m.providerScrollOffset = 0
+		return m
+	}
+	maxVisible := m.maxVisibleContentRows()
+	m.providerScrollOffset = adjustScroll(m.providerScrollOffset, m.providerCursor, total, maxVisible)
+	return m
+}
+
+// adjustScroll ensures the selected index is visible within the scroll window.
+// Follows the pattern from profilepicker/model.go.
+func adjustScroll(offset, selected, total, maxVisible int) int {
+	if total <= maxVisible {
+		return 0
+	}
+	// Scroll down if selected moved below visible window.
+	if selected >= offset+maxVisible {
+		offset = selected - maxVisible + 1
+	}
+	// Scroll up if selected moved above visible window.
+	if selected < offset {
+		offset = selected
+	}
+	// Clamp offset to valid range.
+	maxOffset := total - maxVisible
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return offset
 }
 
 // IsVisible reports whether the dropdown is currently shown.
@@ -279,12 +364,12 @@ func (m Model) providers() []ProviderSummary {
 	return result
 }
 
-// FilteredProviders returns providers filtered by searchQuery (case-insensitive match on Label).
+// FilteredProviders returns providers filtered by searchQuery (case-insensitive match on Label or ProviderID).
 func (m Model) FilteredProviders() []ProviderSummary {
 	return m.filteredProviders()
 }
 
-// filteredProviders returns providers filtered by searchQuery (case-insensitive match on Label).
+// filteredProviders returns providers filtered by searchQuery (case-insensitive match on Label or ProviderID).
 func (m Model) filteredProviders() []ProviderSummary {
 	q := strings.ToLower(m.searchQuery)
 	if q == "" {
@@ -293,7 +378,7 @@ func (m Model) filteredProviders() []ProviderSummary {
 	all := m.providers()
 	var result []ProviderSummary
 	for _, p := range all {
-		if strings.Contains(strings.ToLower(p.Label), q) {
+		if strings.Contains(strings.ToLower(p.Label), q) || strings.Contains(strings.ToLower(p.ProviderID), q) {
 			result = append(result, p)
 		}
 	}
@@ -325,6 +410,12 @@ func (m Model) modelsForActiveProvider() []ModelEntry {
 // - When browseLevel == 0: all models (for Accept() compatibility).
 // Starred models appear first in all cases, filtered by searchQuery.
 // IsCurrent is set dynamically based on currentModelID.
+//
+// Search matches across DisplayName, ProviderLabel, Provider key, and model ID.
+// Results are ranked: prefix matches before substring matches, with starred
+// models first within each tier. This ensures queries like "d" or "de" surface
+// DeepSeek models ahead of e.g. Anthropic models that merely contain "d"/"de"
+// in their DisplayName.
 func (m Model) visibleModels() []ModelEntry {
 	q := strings.ToLower(m.searchQuery)
 
@@ -343,22 +434,72 @@ func (m Model) visibleModels() []ModelEntry {
 	}
 
 	// For browseLevel==0 OR search active: use full model list (with search filter when active).
-	var starred, rest []ModelEntry
+	// Search matches against DisplayName, ProviderLabel, Provider key, and model ID.
+	// Rank: prefix matches first (starred, then rest), then substring matches (starred, then rest).
+	var prefixStarred, prefixRest, substrStarred, substrRest []ModelEntry
 	for _, e := range m.Models {
-		if q != "" && !strings.Contains(strings.ToLower(e.DisplayName), q) {
-			continue
-		}
 		e.IsCurrent = e.ID == m.currentModelID
-		if m.starred[e.ID] {
-			starred = append(starred, e)
+		if q != "" {
+			queryFields := []string{
+				strings.ToLower(e.DisplayName),
+				strings.ToLower(e.ProviderLabel),
+				strings.ToLower(e.Provider),
+				strings.ToLower(e.ID),
+			}
+			matched := false
+			isPrefix := false
+			for _, f := range queryFields {
+				if strings.HasPrefix(f, q) {
+					matched = true
+					isPrefix = true
+					break
+				}
+			}
+			if !isPrefix {
+				for _, f := range queryFields {
+					if strings.Contains(f, q) {
+						matched = true
+						break
+					}
+				}
+			}
+			if !matched {
+				continue
+			}
+			starred := m.starred[e.ID]
+			if isPrefix {
+				if starred {
+					prefixStarred = append(prefixStarred, e)
+				} else {
+					prefixRest = append(prefixRest, e)
+				}
+			} else {
+				if starred {
+					substrStarred = append(substrStarred, e)
+				} else {
+					substrRest = append(substrRest, e)
+				}
+			}
 		} else {
-			rest = append(rest, e)
+			// No search query: preserve original order.
+			if m.starred[e.ID] {
+				prefixStarred = append(prefixStarred, e) // reuse prefixStarred for starred
+			} else {
+				prefixRest = append(prefixRest, e) // reuse prefixRest for rest
+			}
 		}
 	}
-	return append(starred, rest...)
+	// Concatenate in priority order.
+	var result []ModelEntry
+	result = append(result, prefixStarred...)
+	result = append(result, prefixRest...)
+	result = append(result, substrStarred...)
+	result = append(result, substrRest...)
+	return result
 }
 
 // ProviderUp moves providerCursor up by one (wraps around).
+// The scroll window is adjusted so the cursor remains visible.
 func (m Model) ProviderUp() Model {
 	provs := m.providers()
 	n := len(provs)
@@ -366,10 +507,11 @@ func (m Model) ProviderUp() Model {
 		return m
 	}
 	m.providerCursor = (m.providerCursor - 1 + n) % n
-	return m
+	return m.adjustProviderScroll(n)
 }
 
 // ProviderDown moves providerCursor down by one (wraps around).
+// The scroll window is adjusted so the cursor remains visible.
 func (m Model) ProviderDown() Model {
 	provs := m.providers()
 	n := len(provs)
@@ -377,12 +519,12 @@ func (m Model) ProviderDown() Model {
 		return m
 	}
 	m.providerCursor = (m.providerCursor + 1) % n
-	return m
+	return m.adjustProviderScroll(n)
 }
 
 // DrillIntoProvider sets browseLevel=1 and activeProvider to the currently
 // highlighted provider. Selected is reset to the current model if it is in
-// this provider, otherwise 0.
+// this provider, otherwise 0. Scroll offset is reset.
 func (m Model) DrillIntoProvider() Model {
 	provs := m.providers()
 	if len(provs) == 0 {
@@ -394,6 +536,7 @@ func (m Model) DrillIntoProvider() Model {
 	}
 	m.browseLevel = 1
 	m.activeProvider = provs[idx].Label
+	m.scrollOffset = 0
 	// Pre-select current model if it belongs to this provider.
 	m.Selected = 0
 	provModels := m.modelsForActiveProvider()
@@ -407,7 +550,7 @@ func (m Model) DrillIntoProvider() Model {
 }
 
 // ExitToProviderList returns to level 0, keeping providerCursor positioned at
-// the activeProvider's index in the provider list.
+// the activeProvider's index in the provider list. Scroll offset is reset.
 func (m Model) ExitToProviderList() Model {
 	provs := m.providers()
 	// Find and restore cursor position.
@@ -419,6 +562,7 @@ func (m Model) ExitToProviderList() Model {
 	}
 	m.browseLevel = 0
 	m.activeProvider = ""
+	m.scrollOffset = 0
 	return m
 }
 
@@ -435,6 +579,7 @@ func (m Model) Providers() []ProviderSummary { return m.providers() }
 func (m Model) ProviderCursorIndex() int { return m.providerCursor }
 
 // SelectUp moves the cursor up by one in the visible list, wrapping around to the last entry.
+// The scroll window is adjusted so the cursor remains visible.
 func (m Model) SelectUp() Model {
 	visible := m.visibleModels()
 	n := len(visible)
@@ -442,10 +587,11 @@ func (m Model) SelectUp() Model {
 		return m
 	}
 	m.Selected = (m.Selected - 1 + n) % n
-	return m
+	return m.adjustModelScroll(n)
 }
 
 // SelectDown moves the cursor down by one in the visible list, wrapping around to the first entry.
+// The scroll window is adjusted so the cursor remains visible.
 func (m Model) SelectDown() Model {
 	visible := m.visibleModels()
 	n := len(visible)
@@ -453,7 +599,7 @@ func (m Model) SelectDown() Model {
 		return m
 	}
 	m.Selected = (m.Selected + 1) % n
-	return m
+	return m.adjustModelScroll(n)
 }
 
 // Accept returns the currently selected ModelEntry from the visible list and whether
@@ -681,11 +827,12 @@ func (m Model) ToggleStar() Model {
 	return result
 }
 
-// SetSearch sets the search query and resets Selected to 0.
+// SetSearch sets the search query and resets Selected and scroll offset to 0.
 func (m Model) SetSearch(q string) Model {
 	result := m
 	result.searchQuery = q
 	result.Selected = 0
+	result.scrollOffset = 0
 	return result
 }
 
@@ -753,10 +900,3 @@ func OpenRouterSlug(modelID string) string {
 // "confirmed unconfigured".
 func (m Model) AvailabilityKnown() bool { return m.availabilitySet }
 
-// WithMaxHeight returns a copy with MaxHeight set to h. When h > 0, the view
-// windows the list around the active selection and shows scroll indicators
-// when items exceed the available height.
-func (m Model) WithMaxHeight(h int) Model {
-	m.MaxHeight = h
-	return m
-}

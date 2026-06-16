@@ -1759,8 +1759,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return m, tea.Batch(cmds...)
 						}
 					}
-					// 's' toggles star at level 1 or during search (not at level 0 provider list).
-					if msg.String() == "s" && (m.modelSwitcher.BrowseLevel() == 1 || m.modelSwitcher.SearchQuery() != "") {
+					// 's' toggles star only when browsing at level 1 with no active search.
+					// During search, 's' is treated as a literal character so users
+					// can type queries containing "s" (e.g. "deeps").
+					if msg.String() == "s" && m.modelSwitcher.BrowseLevel() == 1 && m.modelSwitcher.SearchQuery() == "" {
 						m.modelSwitcher = m.modelSwitcher.ToggleStar()
 						// Persist to config.
 						if persistCfg, err := harnessconfig.Load(); err == nil {
