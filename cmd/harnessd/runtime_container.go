@@ -79,6 +79,7 @@ type httpRuntimeOptions struct {
 type httpRuntime struct {
 	runner          *harness.Runner
 	subagentManager subagents.Manager
+	mcpServer       *mcpserver.Server
 	handler         http.Handler
 	httpServer      *http.Server
 }
@@ -127,7 +128,7 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		opts.msgSummarizer.mu.Unlock()
 	}
 
-	handler := server.NewWithOptions(buildServerOptions(serverBootstrapOptions{
+	mainHandler := server.NewWithOptions(buildServerOptions(serverBootstrapOptions{
 		runner:           runner,
 		modelCatalog:     opts.modelCatalog,
 		skillLister:      opts.skillLister,
@@ -142,16 +143,24 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		triggers:         opts.triggers,
 	}))
 
+	// Mount the MCP server at /mcp so external MCP clients can drive the harness.
+	mcpSrv := mcpserver.NewServer(&mcpRunnerAdapter{runner: runner, store: opts.runStore})
+
+	topMux := http.NewServeMux()
+	topMux.Handle("/mcp", mcpSrv.Handler())
+	topMux.Handle("/", mainHandler)
+
 	httpServer := &http.Server{
 		Addr:              opts.addr,
-		Handler:           handler,
+		Handler:           topMux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
 	return httpRuntime{
 		runner:          runner,
 		subagentManager: subagentMgr,
-		handler:         handler,
+		mcpServer:       mcpSrv,
+		handler:         topMux,
 		httpServer:      httpServer,
 	}, nil
 }

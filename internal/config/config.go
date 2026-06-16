@@ -151,6 +151,20 @@ type MCPServerConfig struct {
 	URL string `toml:"url"`
 }
 
+// CronConfig holds cron scheduler configuration.
+type CronConfig struct {
+	// JitterEnabled controls whether jitter is applied to scheduled task execution times.
+	JitterEnabled bool `toml:"jitter_enabled"`
+	// JitterMinSec is the minimum jitter offset in seconds.
+	JitterMinSec int `toml:"jitter_min_sec"`
+	// JitterMaxSec is the maximum jitter offset in seconds.
+	JitterMaxSec int `toml:"jitter_max_sec"`
+	// AvoidMinuteMarks lists the minute marks (0-59) to avoid landing on.
+	AvoidMinuteMarks []int `toml:"avoid_minute_marks"`
+	// LogJitteredTimes controls whether jittered execution times are logged.
+	LogJitteredTimes bool `toml:"log_jittered_times"`
+}
+
 // Config is the merged, resolved configuration for a harness instance.
 // It represents the final result after all config layers have been applied.
 type Config struct {
@@ -177,6 +191,9 @@ type Config struct {
 
 	// ConclusionWatcher holds conclusion-jumping detector plugin settings.
 	ConclusionWatcher ConclusionWatcherConfig `toml:"conclusion_watcher"`
+
+	// Cron holds cron scheduler configuration.
+	Cron CronConfig `toml:"cron"`
 
 	// MCPServers is the map of named external MCP server configurations.
 	// Keys are the logical server names (used as prefixes for tool names).
@@ -215,6 +232,13 @@ func Defaults() Config {
 			InterventionMode: "inject_validation_prompt",
 			EvaluatorEnabled: false,
 			EvaluatorModel:   "gpt-4o-mini",
+		},
+		Cron: CronConfig{
+			JitterEnabled:    true,
+			JitterMinSec:     60,
+			JitterMaxSec:     300,
+			AvoidMinuteMarks: []int{0, 30},
+			LogJitteredTimes: true,
 		},
 	}
 }
@@ -258,6 +282,7 @@ type rawLayer struct {
 	AutoCompact       *rawAutoCompact            `toml:"auto_compact"`
 	Forensics         *rawForensics              `toml:"forensics"`
 	ConclusionWatcher *rawConclusionWatcher      `toml:"conclusion_watcher"`
+	Cron              *rawCron                   `toml:"cron"`
 	MCPServers        map[string]MCPServerConfig `toml:"mcp_servers"`
 }
 
@@ -313,6 +338,14 @@ type rawConclusionWatcher struct {
 	EvaluatorEnabled *bool   `toml:"evaluator_enabled"`
 	EvaluatorModel   *string `toml:"evaluator_model"`
 	EvaluatorAPIKey  *string `toml:"evaluator_api_key"`
+}
+
+type rawCron struct {
+	JitterEnabled    *bool  `toml:"jitter_enabled"`
+	JitterMinSec     *int   `toml:"jitter_min_sec"`
+	JitterMaxSec     *int   `toml:"jitter_max_sec"`
+	AvoidMinuteMarks []int  `toml:"avoid_minute_marks"`
+	LogJitteredTimes *bool  `toml:"log_jittered_times"`
 }
 
 // Load builds the merged Config by walking through all layers in priority
@@ -535,6 +568,25 @@ func applyLayer(cfg *Config, layer rawLayer) {
 			cfg.ConclusionWatcher.EvaluatorAPIKey = *cw.EvaluatorAPIKey
 		}
 	}
+	if layer.Cron != nil {
+		c := layer.Cron
+		if c.JitterEnabled != nil {
+			cfg.Cron.JitterEnabled = *c.JitterEnabled
+		}
+		if c.JitterMinSec != nil {
+			cfg.Cron.JitterMinSec = *c.JitterMinSec
+		}
+		if c.JitterMaxSec != nil {
+			cfg.Cron.JitterMaxSec = *c.JitterMaxSec
+		}
+		if len(c.AvoidMinuteMarks) > 0 {
+			cfg.Cron.AvoidMinuteMarks = append([]int(nil), c.AvoidMinuteMarks...)
+		}
+		if c.LogJitteredTimes != nil {
+			cfg.Cron.LogJitteredTimes = *c.LogJitteredTimes
+		}
+	}
+
 	if len(layer.MCPServers) > 0 {
 		if cfg.MCPServers == nil {
 			cfg.MCPServers = make(map[string]MCPServerConfig)
@@ -625,6 +677,21 @@ func applyEnvLayer(cfg *Config, getenv func(string) string) {
 	}
 	if v := strings.TrimSpace(getenv("HARNESS_CONCLUSION_WATCHER_EVALUATOR_MODEL")); v != "" {
 		cfg.ConclusionWatcher.EvaluatorModel = v
+	}
+	if v := strings.TrimSpace(getenv("HARNESS_CRON_JITTER_ENABLED")); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			cfg.Cron.JitterEnabled = b
+		}
+	}
+	if v := strings.TrimSpace(getenv("HARNESS_CRON_JITTER_MIN_SEC")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Cron.JitterMinSec = n
+		}
+	}
+	if v := strings.TrimSpace(getenv("HARNESS_CRON_JITTER_MAX_SEC")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Cron.JitterMaxSec = n
+		}
 	}
 }
 

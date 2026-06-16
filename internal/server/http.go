@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -349,6 +351,20 @@ func writeSSE(w http.ResponseWriter, event harness.Event) error {
 		return err
 	}
 	return nil
+}
+
+// sseKeepaliveInterval reads HARNESS_SSE_KEEPALIVE_SECONDS from the environment
+// and returns the duration. Defaults to 15 seconds.
+func sseKeepaliveInterval() time.Duration {
+	s := os.Getenv("HARNESS_SSE_KEEPALIVE_SECONDS")
+	if s == "" {
+		return 15 * time.Second
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 15 * time.Second
+	}
+	return time.Duration(n) * time.Second
 }
 
 // writeSSEPing writes an SSE comment line as a keep-alive ping.
