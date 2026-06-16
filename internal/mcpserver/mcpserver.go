@@ -29,6 +29,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -171,6 +173,9 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 	ch, cancel := s.broker.SubscribeAll()
 	defer cancel()
 
+	ticker := time.NewTicker(sseKeepaliveInterval())
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
@@ -190,8 +195,25 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 			}
 			fmt.Fprintf(w, "data: %s\n\n", b)
 			flusher.Flush()
+		case <-ticker.C:
+			fmt.Fprintf(w, ": ping\n\n")
+			flusher.Flush()
 		}
 	}
+}
+
+// sseKeepaliveInterval reads HARNESS_SSE_KEEPALIVE_SECONDS from the environment
+// and returns the duration. Defaults to 15 seconds.
+func sseKeepaliveInterval() time.Duration {
+	s := os.Getenv("HARNESS_SSE_KEEPALIVE_SECONDS")
+	if s == "" {
+		return 15 * time.Second
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 15 * time.Second
+	}
+	return time.Duration(n) * time.Second
 }
 
 // --- JSON-RPC 2.0 types ---
@@ -262,7 +284,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 // handleInitialize responds to the MCP initialize handshake.
 func (s *Server) handleInitialize(w http.ResponseWriter, id json.RawMessage, _ json.RawMessage) {
 	result := map[string]any{
-		"protocolVersion": "2024-11-05",
+		"protocolVersion": "2025-11-25",
 		"capabilities": map[string]any{
 			"tools": map[string]any{},
 		},

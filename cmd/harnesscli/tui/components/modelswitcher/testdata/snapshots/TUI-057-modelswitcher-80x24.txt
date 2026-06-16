@@ -1,21 +1,14 @@
 ╭────────────────────────────────────────────────────────────────────────────╮
 │ Switch Model                                                               │
 │                                                                            │
-│   Anthropic                                                                │
-│ (3)                                                                        │
-│   DeepSeek                                                                 │
-│ (2)                                                                        │
-│   Google                                                                   │
-│ (2)                                                                        │
-│   Groq                                                                     │
-│ (2)                                                                        │
-│   Kimi                                                                     │
-│ (1)                                                                        │
+│   Anthropic                                                            (3) │
+│   DeepSeek                                                             (2) │
+│   Google                                                               (2) │
+│   Groq                                                                 (2) │
+│   Kimi                                                                 (1) │
 │ > OpenAI  ← current  (2)                                                   │
-│   Qwen                                                                     │
-│ (2)                                                                        │
-│   xAI                                                                      │
-│ (2)                                                                        │
+│   Qwen                                                                 (2) │
+│   xAI                                                                  (2) │
 │                                                                            │
 │ ↑/↓ navigate  enter select  / search  esc cancel                           │
 ╰────────────────────────────────────────────────────────────────────────────╯
