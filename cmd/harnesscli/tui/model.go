@@ -2378,7 +2378,7 @@ func (m Model) View() string {
 			if m.modelConfigMode {
 				mainContent = m.viewModelConfigPanel()
 			} else {
-				mainContent = m.modelSwitcher.View(m.width)
+				mainContent = m.modelSwitcher.WithMaxHeight(m.layout.ViewportHeight).View(m.width)
 			}
 		case "provider":
 			mainContent = m.viewProviderOverlay()

@@ -301,6 +301,10 @@ type RunRequest struct {
 	// 0 means use the runner's config default (which may itself be 0 = unlimited).
 	// Negative values are rejected at StartRun time.
 	MaxSteps int `json:"max_steps,omitempty"`
+	// MaxTurns caps the number of assistant turns for this run.
+	// 0 means use the runner's config default (which may itself be 0 = unlimited).
+	// Negative values are rejected at StartRun time.
+	MaxTurns int `json:"max_turns,omitempty"`
 	// MaxCostUSD is a per-run spending ceiling in US dollars.
 	// After each LLM turn, if the cumulative cost (when pricing is available) is
 	// >= MaxCostUSD the run is terminated with a run.cost_limit_reached event and
@@ -393,6 +397,9 @@ type RunnerConfig struct {
 	DefaultSystemPrompt string
 	DefaultAgentIntent  string
 	MaxSteps            int
+	// MaxTurns caps the number of assistant turns per run at the runner level.
+	// 0 means unlimited. Per-run RunRequest.MaxTurns takes precedence.
+	MaxTurns int
 	// WorkerPoolSize caps the number of runs that execute concurrently.
 	// When > 0, at most WorkerPoolSize runs are in RunStatusRunning at any
 	// time; additional runs are placed in RunStatusQueued and started as

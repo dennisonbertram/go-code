@@ -848,6 +848,11 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		log.Printf("shutdown error: %v", err)
 	}
 
+	// Shut down the embedded MCP server (stops SSE broker and poller).
+	if err := runtime.mcpServer.Shutdown(ctx); err != nil {
+		log.Printf("mcp server shutdown error: %v", err)
+	}
+
 	// Explicitly close MCP connections after the HTTP server has drained
 	// in-flight requests. This ensures any tool calls that were in progress
 	// finish before their underlying MCP connections are torn down.

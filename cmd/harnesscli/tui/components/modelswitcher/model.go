@@ -172,6 +172,18 @@ type Model struct {
 
 	// providerCursor is the cursor position in the provider list (level 0).
 	providerCursor int
+
+	// MaxHeight limits the rendered output height (lines). When 0 (default),
+	// no limit is enforced — all items are rendered.
+	MaxHeight int
+
+	// scrollOffset tracks the starting index of the visible window in the
+	// model list (level 1 and search views).
+	scrollOffset int
+
+	// providerScrollOffset tracks the starting index of the visible window
+	// in the provider list (level 0).
+	providerScrollOffset int
 }
 
 // New constructs a Model pre-loaded with DefaultModels, marking the entry
@@ -199,10 +211,13 @@ func New(currentModelID string) Model {
 
 // Open opens the dropdown overlay, starting at level 0 (provider list).
 // providerCursor is set to the index of the current model's provider.
+// Scroll offsets are reset.
 func (m Model) Open() Model {
 	m.IsOpen = true
 	m.browseLevel = 0
 	m.activeProvider = ""
+	m.scrollOffset = 0
+	m.providerScrollOffset = 0
 	// Position providerCursor at the current model's provider.
 	provs := m.providers()
 	cur := m.CurrentModel()
@@ -223,7 +238,78 @@ func (m Model) Close() Model {
 	m.browseLevel = 0
 	m.activeProvider = ""
 	m.providerCursor = 0
+	m.scrollOffset = 0
+	m.providerScrollOffset = 0
 	return m
+}
+
+// WithMaxHeight returns a copy with MaxHeight set to h. When h <= 0, no height
+// limit is enforced and all items are rendered.
+func (m Model) WithMaxHeight(h int) Model {
+	m.MaxHeight = h
+	return m
+}
+
+// maxVisibleContentRows returns the number of content rows that fit within
+// MaxHeight after accounting for title, footer, search bar, scroll indicators,
+// and box border chrome.
+func (m Model) maxVisibleContentRows() int {
+	if m.MaxHeight <= 0 {
+		return 1<<31 - 1 // effectively unlimited
+	}
+	const overhead = 10
+	visible := m.MaxHeight - overhead
+	if visible < 1 {
+		visible = 1
+	}
+	return visible
+}
+
+// adjustModelScroll keeps the model cursor visible within the scroll window.
+func (m Model) adjustModelScroll(total int) Model {
+	if total == 0 {
+		m.scrollOffset = 0
+		return m
+	}
+	maxVisible := m.maxVisibleContentRows()
+	m.scrollOffset = adjustScroll(m.scrollOffset, m.Selected, total, maxVisible)
+	return m
+}
+
+// adjustProviderScroll keeps the provider cursor visible within the scroll window.
+func (m Model) adjustProviderScroll(total int) Model {
+	if total == 0 {
+		m.providerScrollOffset = 0
+		return m
+	}
+	maxVisible := m.maxVisibleContentRows()
+	m.providerScrollOffset = adjustScroll(m.providerScrollOffset, m.providerCursor, total, maxVisible)
+	return m
+}
+
+// adjustScroll ensures the selected index is visible within the scroll window.
+// Follows the pattern from profilepicker/model.go.
+func adjustScroll(offset, selected, total, maxVisible int) int {
+	if total <= maxVisible {
+		return 0
+	}
+	// Scroll down if selected moved below visible window.
+	if selected >= offset+maxVisible {
+		offset = selected - maxVisible + 1
+	}
+	// Scroll up if selected moved above visible window.
+	if selected < offset {
+		offset = selected
+	}
+	// Clamp offset to valid range.
+	maxOffset := total - maxVisible
+	if offset > maxOffset {
+		offset = maxOffset
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	return offset
 }
 
 // IsVisible reports whether the dropdown is currently shown.
@@ -413,6 +499,7 @@ func (m Model) visibleModels() []ModelEntry {
 }
 
 // ProviderUp moves providerCursor up by one (wraps around).
+// The scroll window is adjusted so the cursor remains visible.
 func (m Model) ProviderUp() Model {
 	provs := m.providers()
 	n := len(provs)
@@ -420,10 +507,11 @@ func (m Model) ProviderUp() Model {
 		return m
 	}
 	m.providerCursor = (m.providerCursor - 1 + n) % n
-	return m
+	return m.adjustProviderScroll(n)
 }
 
 // ProviderDown moves providerCursor down by one (wraps around).
+// The scroll window is adjusted so the cursor remains visible.
 func (m Model) ProviderDown() Model {
 	provs := m.providers()
 	n := len(provs)
@@ -431,12 +519,12 @@ func (m Model) ProviderDown() Model {
 		return m
 	}
 	m.providerCursor = (m.providerCursor + 1) % n
-	return m
+	return m.adjustProviderScroll(n)
 }
 
 // DrillIntoProvider sets browseLevel=1 and activeProvider to the currently
 // highlighted provider. Selected is reset to the current model if it is in
-// this provider, otherwise 0.
+// this provider, otherwise 0. Scroll offset is reset.
 func (m Model) DrillIntoProvider() Model {
 	provs := m.providers()
 	if len(provs) == 0 {
@@ -448,6 +536,7 @@ func (m Model) DrillIntoProvider() Model {
 	}
 	m.browseLevel = 1
 	m.activeProvider = provs[idx].Label
+	m.scrollOffset = 0
 	// Pre-select current model if it belongs to this provider.
 	m.Selected = 0
 	provModels := m.modelsForActiveProvider()
@@ -461,7 +550,7 @@ func (m Model) DrillIntoProvider() Model {
 }
 
 // ExitToProviderList returns to level 0, keeping providerCursor positioned at
-// the activeProvider's index in the provider list.
+// the activeProvider's index in the provider list. Scroll offset is reset.
 func (m Model) ExitToProviderList() Model {
 	provs := m.providers()
 	// Find and restore cursor position.
@@ -473,6 +562,7 @@ func (m Model) ExitToProviderList() Model {
 	}
 	m.browseLevel = 0
 	m.activeProvider = ""
+	m.scrollOffset = 0
 	return m
 }
 
@@ -489,6 +579,7 @@ func (m Model) Providers() []ProviderSummary { return m.providers() }
 func (m Model) ProviderCursorIndex() int { return m.providerCursor }
 
 // SelectUp moves the cursor up by one in the visible list, wrapping around to the last entry.
+// The scroll window is adjusted so the cursor remains visible.
 func (m Model) SelectUp() Model {
 	visible := m.visibleModels()
 	n := len(visible)
@@ -496,10 +587,11 @@ func (m Model) SelectUp() Model {
 		return m
 	}
 	m.Selected = (m.Selected - 1 + n) % n
-	return m
+	return m.adjustModelScroll(n)
 }
 
 // SelectDown moves the cursor down by one in the visible list, wrapping around to the first entry.
+// The scroll window is adjusted so the cursor remains visible.
 func (m Model) SelectDown() Model {
 	visible := m.visibleModels()
 	n := len(visible)
@@ -507,7 +599,7 @@ func (m Model) SelectDown() Model {
 		return m
 	}
 	m.Selected = (m.Selected + 1) % n
-	return m
+	return m.adjustModelScroll(n)
 }
 
 // Accept returns the currently selected ModelEntry from the visible list and whether
@@ -735,11 +827,12 @@ func (m Model) ToggleStar() Model {
 	return result
 }
 
-// SetSearch sets the search query and resets Selected to 0.
+// SetSearch sets the search query and resets Selected and scroll offset to 0.
 func (m Model) SetSearch(q string) Model {
 	result := m
 	result.searchQuery = q
 	result.Selected = 0
+	result.scrollOffset = 0
 	return result
 }
 
