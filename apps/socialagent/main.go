@@ -14,6 +14,7 @@ import (
 	"go-agent-harness/apps/socialagent/gateway"
 	"go-agent-harness/apps/socialagent/harness"
 	"go-agent-harness/apps/socialagent/mcpserver"
+	"go-agent-harness/apps/socialagent/safety"
 	"go-agent-harness/apps/socialagent/summarizer"
 	"go-agent-harness/apps/socialagent/telegram"
 )
@@ -63,6 +64,14 @@ func main() {
 	// Create summarizer backed by the harness client and the store.
 	sum := summarizer.New(harnessClient, store, cfg.HarnessURL)
 
+	// Create safety screener if configured. When SAFETY_SCREENER_URL is empty,
+	// the screener is nil and all messages pass through unscreened.
+	var scr gateway.Screener
+	if cfg.SafetyScreenerURL != "" {
+		scr = safety.NewLlamaGuardScreener(cfg.SafetyScreenerURL)
+		log.Printf("  safety_screener = %s", cfg.SafetyScreenerURL)
+	}
+
 	// Create gateway wiring all dependencies together.
 	// store satisfies ProfileFetcher and ActivityLogger in addition to UserStore.
 	gw := gateway.NewGateway(
@@ -73,6 +82,7 @@ func main() {
 		store,
 		sum,
 		store,
+		scr,
 		cfg.MCPServerURL,
 	)
 

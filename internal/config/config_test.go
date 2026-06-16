@@ -830,3 +830,92 @@ evaluator_api_key = "sk-test-key"
 		t.Errorf("ConclusionWatcher.EvaluatorAPIKey: got %q, want \"sk-test-key\"", cfg.ConclusionWatcher.EvaluatorAPIKey)
 	}
 }
+
+// TestCronConfig_Defaults verifies cron defaults.
+func TestCronConfig_Defaults(t *testing.T) {
+	cfg := config.Defaults()
+
+	if !cfg.Cron.JitterEnabled {
+		t.Error("Cron.JitterEnabled: got false, want true")
+	}
+	if cfg.Cron.JitterMinSec != 60 {
+		t.Errorf("Cron.JitterMinSec: got %d, want 60", cfg.Cron.JitterMinSec)
+	}
+	if cfg.Cron.JitterMaxSec != 300 {
+		t.Errorf("Cron.JitterMaxSec: got %d, want 300", cfg.Cron.JitterMaxSec)
+	}
+	if len(cfg.Cron.AvoidMinuteMarks) != 2 ||
+		cfg.Cron.AvoidMinuteMarks[0] != 0 ||
+		cfg.Cron.AvoidMinuteMarks[1] != 30 {
+		t.Errorf("Cron.AvoidMinuteMarks: got %v, want [0, 30]", cfg.Cron.AvoidMinuteMarks)
+	}
+	if !cfg.Cron.LogJitteredTimes {
+		t.Error("Cron.LogJitteredTimes: got false, want true")
+	}
+}
+
+// TestCronConfig_TOMLOverride verifies that the [cron] TOML section is parsed.
+func TestCronConfig_TOMLOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(`
+[cron]
+jitter_enabled = false
+jitter_min_sec = 30
+jitter_max_sec = 120
+avoid_minute_marks = [0, 15, 30, 45]
+log_jittered_times = false
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := config.LoadOptions{
+		UserConfigPath: cfgPath,
+		Getenv:         func(string) string { return "" },
+	}
+	cfg, err := config.Load(opts)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Cron.JitterEnabled {
+		t.Error("Cron.JitterEnabled: got true, want false")
+	}
+	if cfg.Cron.JitterMinSec != 30 {
+		t.Errorf("Cron.JitterMinSec: got %d, want 30", cfg.Cron.JitterMinSec)
+	}
+	if cfg.Cron.JitterMaxSec != 120 {
+		t.Errorf("Cron.JitterMaxSec: got %d, want 120", cfg.Cron.JitterMaxSec)
+	}
+	if len(cfg.Cron.AvoidMinuteMarks) != 4 {
+		t.Errorf("Cron.AvoidMinuteMarks: got %v, want [0, 15, 30, 45]", cfg.Cron.AvoidMinuteMarks)
+	}
+	if cfg.Cron.LogJitteredTimes {
+		t.Error("Cron.LogJitteredTimes: got true, want false")
+	}
+}
+
+// TestCronConfig_EnvVarOverrides verifies env vars override cron defaults.
+func TestCronConfig_EnvVarOverrides(t *testing.T) {
+	envMap := map[string]string{
+		"HARNESS_CRON_JITTER_ENABLED": "false",
+		"HARNESS_CRON_JITTER_MIN_SEC": "30",
+		"HARNESS_CRON_JITTER_MAX_SEC": "120",
+	}
+	opts := config.LoadOptions{
+		Getenv: func(key string) string { return envMap[key] },
+	}
+	cfg, err := config.Load(opts)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Cron.JitterEnabled {
+		t.Error("Cron.JitterEnabled: got true, want false")
+	}
+	if cfg.Cron.JitterMinSec != 30 {
+		t.Errorf("Cron.JitterMinSec: got %d, want 30", cfg.Cron.JitterMinSec)
+	}
+	if cfg.Cron.JitterMaxSec != 120 {
+		t.Errorf("Cron.JitterMaxSec: got %d, want 120", cfg.Cron.JitterMaxSec)
+	}
+}

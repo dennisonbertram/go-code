@@ -56,6 +56,14 @@ type Config struct {
 	// MCPServerURL is the URL of the MCP server embedded in the socialagent
 	// process.  Defaults to http://localhost:8082/mcp.
 	MCPServerURL string
+
+	// SafetyScreenerURL is the URL of the Llama Guard (or compatible) safety
+	// screening endpoint. When set, every incoming user message is screened
+	// before being forwarded to the agent harness. Messages flagged as unsafe
+	// receive a polite refusal response instead of being processed.
+	// When empty (default), safety screening is disabled and all messages are
+	// processed normally. Read from the SAFETY_SCREENER_URL env var.
+	SafetyScreenerURL string
 }
 
 // Load reads configuration from environment variables, applies defaults for
@@ -70,6 +78,7 @@ func Load() (*Config, error) {
 		ListenAddr:       os.Getenv("LISTEN_ADDR"),
 		SystemPrompt:     os.Getenv("SOCIALAGENT_SYSTEM_PROMPT"),
 		MCPServerURL:     os.Getenv("MCP_SERVER_URL"),
+		SafetyScreenerURL: os.Getenv("SAFETY_SCREENER_URL"),
 	}
 
 	// Apply defaults for optional fields.
