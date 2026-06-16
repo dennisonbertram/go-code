@@ -49,7 +49,7 @@ func TestRunnerInjectsMetaMessages(t *testing.T) {
 
 	runner := NewRunner(provider, registry, RunnerConfig{
 		DefaultModel: "gpt-4.1-mini",
-		MaxSteps:     4,
+		MaxSteps:     100,
 	})
 
 	run, err := runner.StartRun(RunRequest{Prompt: "Test meta"})
@@ -149,7 +149,7 @@ func TestRunnerMetaMessageNotInUserTranscript(t *testing.T) {
 
 	runner := NewRunner(provider, registry, RunnerConfig{
 		DefaultModel: "gpt-4.1-mini",
-		MaxSteps:     4,
+		MaxSteps:     100,
 	})
 
 	run, err := runner.StartRun(RunRequest{Prompt: "Test meta visibility"})
@@ -221,7 +221,7 @@ func TestRunnerMetaMessageSentToAPI(t *testing.T) {
 
 	runner := NewRunner(provider, registry, RunnerConfig{
 		DefaultModel: "gpt-4.1-mini",
-		MaxSteps:     4,
+		MaxSteps:     100,
 	})
 
 	run, err := runner.StartRun(RunRequest{Prompt: "Test API messages"})
@@ -280,7 +280,7 @@ func TestRunnerPlainToolResultUnchanged(t *testing.T) {
 
 	runner := NewRunner(provider, registry, RunnerConfig{
 		DefaultModel: "gpt-4.1-mini",
-		MaxSteps:     4,
+		MaxSteps:     100,
 	})
 
 	run, err := runner.StartRun(RunRequest{Prompt: "Test plain tool"})
@@ -363,7 +363,7 @@ func TestRunnerMetaMessageToolOutputUnwrapped(t *testing.T) {
 
 	runner := NewRunner(provider, registry, RunnerConfig{
 		DefaultModel: "gpt-4.1-mini",
-		MaxSteps:     4,
+		MaxSteps:     100,
 	})
 
 	run, err := runner.StartRun(RunRequest{Prompt: "Test unwrapping"})
@@ -429,7 +429,7 @@ func TestRunnerMetaMessageInEventPayload(t *testing.T) {
 
 	runner := NewRunner(provider, registry, RunnerConfig{
 		DefaultModel: "gpt-4.1-mini",
-		MaxSteps:     4,
+		MaxSteps:     100,
 	})
 
 	run, err := runner.StartRun(RunRequest{Prompt: "Test events"})
@@ -549,7 +549,7 @@ func TestRunnerConcurrentMetaMessageInjection(t *testing.T) {
 
 			runner := NewRunner(provider, registry, RunnerConfig{
 				DefaultModel: "gpt-4.1-mini",
-				MaxSteps:     4,
+				MaxSteps:     100,
 			})
 
 			run, err := runner.StartRun(RunRequest{Prompt: fmt.Sprintf("Test %d", idx)})

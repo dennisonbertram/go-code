@@ -11,6 +11,7 @@ import (
 
 	"go-agent-harness/apps/socialagent/db"
 	"go-agent-harness/apps/socialagent/harness"
+	"go-agent-harness/apps/socialagent/safety"
 	"go-agent-harness/apps/socialagent/systemprompt"
 	"go-agent-harness/apps/socialagent/telegram"
 )
@@ -47,6 +48,12 @@ type ActivityLogger interface {
 	LogActivity(ctx context.Context, userID, displayName, activityType, content string) error
 }
 
+// Screener screens user input for safety policy violations before the message
+// is forwarded to the harness. When nil, all messages pass through unscreened.
+type Screener interface {
+	Screen(ctx context.Context, text string) (*safety.Result, error)
+}
+
 // Gateway ties together the Telegram bot, user store, and harness runner.
 // It serializes requests per-user so that a single conversation_id is never
 // used by two concurrent harness runs.
@@ -58,7 +65,8 @@ type Gateway struct {
 	profiles       ProfileFetcher
 	summarizer     Summarizer
 	activityLogger ActivityLogger
-	mcpServerURL   string // URL of the MCP server (e.g., "http://localhost:8082/mcp")
+	screener       Screener   // optional safety screener; nil means disabled
+	mcpServerURL   string     // URL of the MCP server (e.g., "http://localhost:8082/mcp")
 	mu             sync.Map // map[int64]*sync.Mutex
 	wg             sync.WaitGroup
 	recentUpdates  sync.Map // map[int64]struct{} for deduplication
@@ -67,7 +75,7 @@ type Gateway struct {
 // NewGateway creates a Gateway.  bot, store, and harnessClient must be non-nil.
 // webhookSecret is the shared secret used to authenticate incoming Telegram
 // webhook requests via the X-Telegram-Bot-Api-Secret-Token header.
-// profiles, sum, and actLogger may be nil (features are skipped when nil).
+// profiles, sum, actLogger, and screener may be nil (features are skipped when nil).
 // mcpServerURL is the URL of the MCP server; empty string disables MCP.
 func NewGateway(
 	bot MessageSender,
@@ -77,6 +85,7 @@ func NewGateway(
 	profiles ProfileFetcher,
 	sum Summarizer,
 	actLogger ActivityLogger,
+	screener Screener,
 	mcpServerURL string,
 ) *Gateway {
 	return &Gateway{
@@ -87,6 +96,7 @@ func NewGateway(
 		profiles:       profiles,
 		summarizer:     sum,
 		activityLogger: actLogger,
+		screener:       screener,
 		mcpServerURL:   mcpServerURL,
 	}
 }
@@ -169,6 +179,26 @@ func (g *Gateway) processMessage(ctx context.Context, telegramID, chatID int64, 
 		log.Printf("gateway: GetOrCreateUser(%d): %v", telegramID, err)
 		g.sendError(ctx, chatID)
 		return
+	}
+
+	// Screen user input for safety before forwarding to the harness.
+	// When no screener is configured (nil), all messages pass through.
+	if g.screener != nil {
+		result, err := g.screener.Screen(ctx, text)
+		if err != nil {
+			log.Printf("gateway: screener.Screen: %v", err)
+			// Fail-open: continue processing even if screener errors.
+		} else if !result.Safe {
+			log.Printf("gateway: message blocked by safety screener (category=%s, reason=%s)", result.Category, result.Reason)
+			msg := safety.ParseCategory(result)
+			if msg == "" {
+				msg = "I'm not able to help with that request."
+			}
+			if sendErr := g.bot.SendMessage(ctx, chatID, msg); sendErr != nil {
+				log.Printf("gateway: SendMessage (chat=%d): %v", chatID, sendErr)
+			}
+			return
+		}
 	}
 
 	// Fetch the user's profile and render the system prompt with user context.

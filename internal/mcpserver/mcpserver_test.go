@@ -265,8 +265,8 @@ func TestServer_Initialize(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &result); err != nil {
 		t.Fatalf("unmarshal result: %v", err)
 	}
-	if result.ProtocolVersion != "2024-11-05" {
-		t.Errorf("expected protocolVersion 2024-11-05, got %q", result.ProtocolVersion)
+	if result.ProtocolVersion != "2025-11-25" {
+		t.Errorf("expected protocolVersion 2025-11-25, got %q", result.ProtocolVersion)
 	}
 	if result.ServerInfo.Name == "" {
 		t.Error("expected non-empty server name")

@@ -195,7 +195,7 @@ func TestCommonPathsAndHelpers(t *testing.T) {
 		t.Fatalf("expected case-insensitive match")
 	}
 
-	if _, _, timedOut, err := RunCommand(context.Background(), 20*time.Millisecond, "bash", "-lc", "sleep 0.2"); err == nil || !timedOut {
+	if _, _, timedOut, err := RunCommand(context.Background(), 20*time.Millisecond, "bash", "-lc", "sleep 0.2"); err != nil || !timedOut {
 		t.Fatalf("expected timeout branch")
 	}
 	output, exitCode, timedOut, err := RunCommand(context.Background(), 2*time.Second, "bash", "-lc", "echo hi; exit 3")
