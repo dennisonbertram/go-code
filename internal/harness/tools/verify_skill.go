@@ -16,6 +16,25 @@ import (
 // verifySkillMinBodyLen is the minimum number of characters required in a skill body.
 const verifySkillMinBodyLen = 50
 
+// computeVerdict returns "PASS", "FAIL", or "PARTIAL" based on the overall passed
+// flag and the individual check results.
+func computeVerdict(passed bool, checks []verifySkillCheck) string {
+	if passed {
+		return "PASS"
+	}
+	anyPassed := false
+	for _, c := range checks {
+		if c.Passed {
+			anyPassed = true
+			break
+		}
+	}
+	if anyPassed {
+		return "PARTIAL"
+	}
+	return "FAIL"
+}
+
 // verifySkillCheck is a single verification check result.
 type verifySkillCheck struct {
 	Name    string `json:"name"`
@@ -82,13 +101,15 @@ func runSkillVerification(ctx context.Context, verifier SkillVerifier, name stri
 	// Check 1: skill exists in the registry
 	_, ok := verifier.GetSkill(name)
 	if !ok {
+		checks := []verifySkillCheck{
+			{Name: "skill_exists", Passed: false, Message: fmt.Sprintf("skill %q not found in registry", name)},
+		}
 		result := map[string]any{
-			"skill":  name,
-			"passed": false,
-			"error":  fmt.Sprintf("skill %q not found in registry", name),
-			"checks": []verifySkillCheck{
-				{Name: "skill_exists", Passed: false, Message: fmt.Sprintf("skill %q not found in registry", name)},
-			},
+			"skill":   name,
+			"passed":  false,
+			"verdict": computeVerdict(false, checks),
+			"error":   fmt.Sprintf("skill %q not found in registry", name),
+			"checks":  checks,
 		}
 		return MarshalToolResult(result)
 	}
@@ -96,14 +117,16 @@ func runSkillVerification(ctx context.Context, verifier SkillVerifier, name stri
 	// Check 2: file path is available
 	filePath, hasPath := verifier.GetSkillFilePath(name)
 	if !hasPath || filePath == "" {
+		checks := []verifySkillCheck{
+			{Name: "skill_exists", Passed: true},
+			{Name: "file_readable", Passed: false, Message: "skill file path not registered; cannot perform structural validation"},
+		}
 		result := map[string]any{
-			"skill":  name,
-			"passed": false,
-			"error":  "skill file path is not available for structural validation",
-			"checks": []verifySkillCheck{
-				{Name: "skill_exists", Passed: true},
-				{Name: "file_readable", Passed: false, Message: "skill file path not registered; cannot perform structural validation"},
-			},
+			"skill":   name,
+			"passed":  false,
+			"verdict": computeVerdict(false, checks),
+			"error":   "skill file path is not available for structural validation",
+			"checks":  checks,
 		}
 		return MarshalToolResult(result)
 	}
@@ -113,9 +136,10 @@ func runSkillVerification(ctx context.Context, verifier SkillVerifier, name stri
 
 	if !passed {
 		result := map[string]any{
-			"skill":  name,
-			"passed": false,
-			"checks": checks,
+			"skill":   name,
+			"passed":  false,
+			"verdict": computeVerdict(false, checks),
+			"checks":  checks,
 		}
 		return MarshalToolResult(result)
 	}
@@ -129,6 +153,7 @@ func runSkillVerification(ctx context.Context, verifier SkillVerifier, name stri
 	result := map[string]any{
 		"skill":       name,
 		"passed":      true,
+		"verdict":     computeVerdict(true, checks),
 		"verified_by": "automated",
 		"verified_at": now.Format(time.RFC3339),
 		"checks":      checks,

@@ -72,6 +72,10 @@ func writeTool(workspaceRoot string) Tool {
 		}
 		content := *contentPtr
 
+		if err := EnsureWorkspaceRootUsable(workspaceRoot); err != nil {
+			return "", err
+		}
+
 		absPath, err := ResolveWorkspacePath(workspaceRoot, args.Path)
 		if err != nil {
 			return "", err

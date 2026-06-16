@@ -32,6 +32,22 @@ const (
 	// AntiPatternRetryLoop is emitted when the same tool is called with the
 	// same arguments 3 or more times within a single run.
 	AntiPatternRetryLoop AntiPatternType = "retry_loop"
+	// AntiPatternHedgeAssertion is emitted when the model qualifies its
+	// conclusions with hedging language instead of asserting definite findings.
+	AntiPatternHedgeAssertion AntiPatternType = "hedge_assertion"
+	// AntiPatternUnverifiedFileClaim is emitted when the model makes claims
+	// about file contents without executing a read or verification tool.
+	AntiPatternUnverifiedFileClaim AntiPatternType = "unverified_file_claim"
+	// AntiPatternPrematureCompletion is emitted when the model attempts to
+	// finish the task before completing all required verification steps.
+	AntiPatternPrematureCompletion AntiPatternType = "premature_completion"
+	// AntiPatternSkippedDiagnostic is emitted when the model skips a
+	// diagnostic step (e.g. running tests) that was explicitly requested.
+	AntiPatternSkippedDiagnostic AntiPatternType = "skipped_diagnostic"
+	// AntiPatternArchitectureAssumption is emitted when the model makes
+	// architectural decisions based on assumptions without verifying them
+	// against the actual codebase.
+	AntiPatternArchitectureAssumption AntiPatternType = "architecture_assumption"
 )
 
 // AntiPatternAlert describes a detected anti-pattern in tool call behaviour.

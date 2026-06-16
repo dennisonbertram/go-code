@@ -3,9 +3,11 @@ set -euo pipefail
 
 MIN_TOTAL_COVERAGE="${MIN_TOTAL_COVERAGE:-80.0}"
 COVERPROFILE_PATH="${COVERPROFILE_PATH:-coverage.out}"
-PKG_PATTERNS="./internal/... ./cmd/..."
-PKGS="$(go list ./internal/... ./cmd/...)"
-COVERPKG="$(printf '%s\n' ${PKGS} | paste -sd, -)"
+PKG_PATTERNS="${PKG_PATTERNS:-./...}"
+PKGS="$(go list ${PKG_PATTERNS})"
+COVER_PKG_PATTERNS="${COVER_PKG_PATTERNS:-./internal/... ./cmd/...}"
+COVERPKGS="$(go list ${COVER_PKG_PATTERNS})"
+COVERPKG="$(printf '%s\n' ${COVERPKGS} | paste -sd, -)"
 
 echo "[regression] go test ${PKG_PATTERNS}"
 go test ${PKGS}
