@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -342,6 +344,28 @@ func writeSSE(w http.ResponseWriter, event harness.Event) error {
 		return err
 	}
 	return nil
+}
+
+// sseKeepaliveInterval reads HARNESS_SSE_KEEPALIVE_SECONDS from the environment
+// and returns the duration. Defaults to 15 seconds.
+func sseKeepaliveInterval() time.Duration {
+	s := os.Getenv("HARNESS_SSE_KEEPALIVE_SECONDS")
+	if s == "" {
+		return 15 * time.Second
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return 15 * time.Second
+	}
+	return time.Duration(n) * time.Second
+}
+
+// writeSSEPing writes an SSE comment line. Per the SSE spec, lines starting with
+// ':' are comments that compliant clients MUST ignore. These keep connections
+// alive through proxies and load balancers without affecting EventSource clients.
+func writeSSEPing(w http.ResponseWriter) error {
+	_, err := fmt.Fprintf(w, ": ping\n\n")
+	return err
 }
 
 func writeMethodNotAllowed(w http.ResponseWriter, allowed string) {

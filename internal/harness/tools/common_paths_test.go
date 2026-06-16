@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -85,4 +86,65 @@ func TestResolveWorkspacePath(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEnsureWorkspaceRootUsable(t *testing.T) {
+	t.Run("missing root", func(t *testing.T) {
+		dir := t.TempDir()
+		err := EnsureWorkspaceRootUsable(filepath.Join(dir, "nonexistent"))
+		if err == nil {
+			t.Fatal("expected error for missing workspace root")
+		}
+		if !strings.Contains(err.Error(), "does not exist") {
+			t.Fatalf("error should mention 'does not exist', got: %v", err)
+		}
+	})
+
+	t.Run("empty root", func(t *testing.T) {
+		err := EnsureWorkspaceRootUsable("")
+		if err == nil {
+			t.Fatal("expected error for empty workspace root")
+		}
+		if !strings.Contains(err.Error(), "required") {
+			t.Fatalf("error should mention 'required', got: %v", err)
+		}
+	})
+
+	t.Run("non-directory root", func(t *testing.T) {
+		dir := t.TempDir()
+		f := filepath.Join(dir, "regular-file")
+		if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err := EnsureWorkspaceRootUsable(f)
+		if err == nil {
+			t.Fatal("expected error for non-directory workspace root")
+		}
+		if !strings.Contains(err.Error(), "not a directory") {
+			t.Fatalf("error should mention 'not a directory', got: %v", err)
+		}
+	})
+
+	t.Run("non-writable root", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(dir, 0o755) })
+		err := EnsureWorkspaceRootUsable(dir)
+		if err == nil {
+			t.Fatal("expected error for non-writable workspace root")
+		}
+		if !strings.Contains(err.Error(), "not writable") {
+			t.Fatalf("error should mention 'not writable', got: %v", err)
+		}
+	})
+
+	t.Run("usable root", func(t *testing.T) {
+		dir := t.TempDir()
+		err := EnsureWorkspaceRootUsable(dir)
+		if err != nil {
+			t.Fatalf("expected no error for usable workspace root, got: %v", err)
+		}
+	})
 }

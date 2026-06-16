@@ -44,9 +44,10 @@ type ContextSnapshot struct {
 
 // AntiPatternAlert records a detected anti-pattern during a run.
 type AntiPatternAlert struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
-	StepIdx int    `json:"step_idx"`
+	Type     string `json:"type"`
+	Message  string `json:"message"`
+	Evidence string `json:"evidence,omitempty"`
+	StepIdx  int    `json:"step_idx"`
 }
 
 // TraceBundle is the complete trace of a single run, ready for analysis.

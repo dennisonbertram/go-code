@@ -57,9 +57,12 @@ func runCommand(ctx context.Context, timeout time.Duration, command string, args
 			lastTimedOut = timedOut
 			lastErr = err
 
-			// Timeout kills are expected; don't retry them.
 			if timedOut {
-				return output, exitCode, timedOut, fmt.Errorf("run command: %w", err)
+				// Process was killed by the function's own context timeout.
+				// The timeout is already communicated via the timedOut boolean,
+				// so return nil error here. Callers inspect timedOut to detect
+				// the timeout condition, matching the bash_manager.go pattern.
+				return output, exitCode, timedOut, nil
 			}
 
 			// External signal kill: retry if we have attempts remaining.

@@ -28,12 +28,13 @@ type stepEngine struct {
 	req                     RunRequest
 	preflight               *runPreflightResult
 	effectiveMaxSteps       int
+	effectiveMaxTurns       int
 	runForkDepth            int
 	effectiveApprovalPolicy ApprovalPolicy
 	effectiveSandboxScope   htools.SandboxScope
 }
 
-func newStepEngine(r *Runner, ctx context.Context, runID string, req RunRequest, preflight *runPreflightResult, effectiveMaxSteps int, runForkDepth int, effectiveApprovalPolicy ApprovalPolicy, effectiveSandboxScope htools.SandboxScope) *stepEngine {
+func newStepEngine(r *Runner, ctx context.Context, runID string, req RunRequest, preflight *runPreflightResult, effectiveMaxSteps int, effectiveMaxTurns int, runForkDepth int, effectiveApprovalPolicy ApprovalPolicy, effectiveSandboxScope htools.SandboxScope) *stepEngine {
 	return &stepEngine{
 		runner:                  r,
 		ctx:                     ctx,
@@ -41,6 +42,7 @@ func newStepEngine(r *Runner, ctx context.Context, runID string, req RunRequest,
 		req:                     req,
 		preflight:               preflight,
 		effectiveMaxSteps:       effectiveMaxSteps,
+		effectiveMaxTurns:       effectiveMaxTurns,
 		runForkDepth:            runForkDepth,
 		effectiveApprovalPolicy: effectiveApprovalPolicy,
 		effectiveSandboxScope:   effectiveSandboxScope,
@@ -54,6 +56,7 @@ func (se *stepEngine) run() {
 	req := se.req
 	preflight := se.preflight
 	effectiveMaxSteps := se.effectiveMaxSteps
+	effectiveMaxTurns := se.effectiveMaxTurns
 	runForkDepth := se.runForkDepth
 	effectiveApprovalPolicy := se.effectiveApprovalPolicy
 	effectiveSandboxScope := se.effectiveSandboxScope
@@ -112,7 +115,8 @@ func (se *stepEngine) run() {
 		})
 	}
 
-	for step := 1; effectiveMaxSteps == 0 || step <= effectiveMaxSteps; step++ {
+	var step int
+	for step = 1; (effectiveMaxSteps == 0 || step <= effectiveMaxSteps) && (effectiveMaxTurns == 0 || step <= effectiveMaxTurns); step++ {
 		if ctx.Err() != nil {
 			r.cancelledRun(runID)
 			return
@@ -141,14 +145,29 @@ func (se *stepEngine) run() {
 		})
 		r.drainSteering(runID, &messages)
 
-		if effectiveMaxSteps > 0 && runForkDepth > 0 {
-			stepsRemaining := effectiveMaxSteps - step + 1
+		// Step budget pressure: fire when any turn budget (MaxSteps or MaxTurns) is set,
+		// not just for subagents. Bifurcate the message: subagents get task_complete
+		// guidance, root agents get a generic wrap-up message.
+		turnBudget := effectiveMaxSteps
+		if effectiveMaxTurns > 0 && (effectiveMaxSteps == 0 || effectiveMaxTurns < effectiveMaxSteps) {
+			turnBudget = effectiveMaxTurns
+		}
+		if turnBudget > 0 {
+			stepsRemaining := turnBudget - step + 1
 			var pressureMsg string
 			switch stepsRemaining {
 			case 3:
-				pressureMsg = fmt.Sprintf("SYSTEM: You have %d steps remaining in your step budget. You should be wrapping up your task. Call task_complete soon with what you have completed.", stepsRemaining)
+				if runForkDepth > 0 {
+					pressureMsg = fmt.Sprintf("SYSTEM: You have %d steps remaining in your step budget. You should be wrapping up your task. Call task_complete soon with what you have completed.", stepsRemaining)
+				} else {
+					pressureMsg = fmt.Sprintf("SYSTEM: You have %d steps remaining in your step budget. Please wrap up your work and provide a final response.", stepsRemaining)
+				}
 			case 1:
-				pressureMsg = "SYSTEM: You have 1 step remaining. You MUST call task_complete now with what you have accomplished. Do not use any other tools."
+				if runForkDepth > 0 {
+					pressureMsg = "SYSTEM: You have 1 step remaining. You MUST call task_complete now with what you have accomplished. Do not use any other tools."
+				} else {
+					pressureMsg = "SYSTEM: You have 1 step remaining. You MUST provide your final answer now. Do not use any other tools."
+				}
 			}
 			if pressureMsg != "" {
 				messages = append(messages, Message{Role: "user", Content: pressureMsg, IsMeta: true})
@@ -1109,6 +1128,21 @@ func (se *stepEngine) run() {
 		})
 	}
 
-	emitCausalGraph(effectiveMaxSteps)
-	r.failRunMaxSteps(runID, effectiveMaxSteps)
+	// Determine which budget was exhausted and emit the appropriate event.
+	if effectiveMaxTurns > 0 {
+		r.emit(runID, EventMaxTurnsExhausted, map[string]any{
+			"run_id":    runID,
+			"step":      step,
+			"turn_count": step - 1,
+			"max_turns": effectiveMaxTurns,
+		})
+	}
+	if effectiveMaxSteps > 0 {
+		emitCausalGraph(effectiveMaxSteps)
+	}
+	if effectiveMaxTurns > 0 {
+		r.failRunMaxTurns(runID, effectiveMaxTurns)
+	} else {
+		r.failRunMaxSteps(runID, effectiveMaxSteps)
+	}
 }
