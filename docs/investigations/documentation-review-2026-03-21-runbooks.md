@@ -88,6 +88,7 @@ Process-only runbook. No code references to verify.
 - **Lines 87-88**: States `harnessd embeds an MCP HTTP server at POST /mcp (and GET /mcp for SSE). No additional setup needed -- it starts with harnessd.`
 - **Actual**: `internal/mcpserver/` is NOT imported by `cmd/harnessd/main.go` or `internal/server/`. No Go file in the entire codebase imports `"go-agent-harness/internal/mcpserver"`. The `/mcp` endpoint is NOT registered in `internal/server/http.go` (only `/v1/mcp/servers` is registered at line 198). The `mcpserver` package exists and has tests but is effectively **orphaned/unused** -- the `/mcp` endpoint is not served by `harnessd`.
 - **Fix**: Either mount the mcpserver handler in harnessd or document that the `/mcp` endpoint is not yet wired into the main binary and requires the standalone `cmd/harness-mcp` stdio binary instead.
+- **Status**: RESOLVED by issue #483 (MCP Streamable HTTP transport). The `/mcp` endpoint is now mounted in `harnessd` by default via a runner adapter (`cmd/harnessd/mcp_runner_adapter.go`).
 
 ### Mismatch 3 -- Package table (minor)
 - **Line 162**: Lists `internal/mcpserver/` with role "MCP HTTP server (broker, poller, SSE, 10 tools)" and claims it's in the running server. Per mismatch 2, this package is not integrated into harnessd.

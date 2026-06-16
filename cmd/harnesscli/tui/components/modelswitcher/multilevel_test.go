@@ -324,6 +324,27 @@ func TestProviderDown_WrapsAround(t *testing.T) {
 	}
 }
 
+// TestViewProviderList_CountOnSameLineAsLabel verifies that provider model counts
+// do not wrap onto separate lines at reasonable widths. Regression test for issue #571.
+func TestViewProviderList_CountOnSameLineAsLabel(t *testing.T) {
+	m := modelswitcher.New("gpt-4.1").Open()
+	for _, w := range []int{30, 35, 40, 60, 80} {
+		v := m.View(w)
+		lines := strings.Split(v, "\n")
+		for i, line := range lines {
+			// A line whose visible content is solely a count "(N)" (with optional
+			// indicator " ●"/" ○") indicates the count has wrapped onto its own line.
+			// Strip ANSI escape sequences (reuse package-local stripANSI from availability_test.go).
+			trimmed := stripANSI(strings.TrimSpace(line))
+			// Detect lines that are just a count in parentheses, e.g., "(3)" or "(10) ●".
+			if len(trimmed) > 0 && len(trimmed) <= 7 && trimmed[0] == '(' {
+				t.Errorf("width=%d: line %d has provider count on its own line (wrapping bug): %q\nFull output:\n%s",
+					w, i, trimmed, v)
+			}
+		}
+	}
+}
+
 // itoa is a local helper to convert int to decimal string (same as the one in view.go).
 func itoa(n int) string {
 	if n == 0 {

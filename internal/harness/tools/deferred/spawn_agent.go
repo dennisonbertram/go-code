@@ -46,6 +46,10 @@ func SpawnAgentTool(runner tools.AgentRunner, profilesDir string) tools.Tool {
 					"type":        "integer",
 					"description": "Maximum steps for the child agent (default 30). The child receives step-budget pressure warnings near the limit and must call task_complete before hitting it.",
 				},
+				"max_turns": map[string]any{
+					"type":        "integer",
+					"description": "Maximum assistant turns for the child agent (default 0 = unlimited). Overrides max_steps when set. The child receives turn-budget pressure warnings near the limit.",
+				},
 				"allowed_tools": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
@@ -65,6 +69,7 @@ func SpawnAgentTool(runner tools.AgentRunner, profilesDir string) tools.Tool {
 			Task         string   `json:"task"`
 			Model        string   `json:"model,omitempty"`
 			MaxSteps     int      `json:"max_steps,omitempty"`
+			MaxTurns     int      `json:"max_turns,omitempty"`
 			AllowedTools []string `json:"allowed_tools,omitempty"`
 			Profile      string   `json:"profile,omitempty"`
 		}
@@ -117,6 +122,13 @@ func SpawnAgentTool(runner tools.AgentRunner, profilesDir string) tools.Tool {
 			maxSteps = 30
 		}
 
+		// Resolve max_turns from profile, then args override.
+		maxTurns := vals.MaxTurns
+		if args.MaxTurns > 0 {
+			maxTurns = args.MaxTurns
+		}
+		// 0 means unlimited — no default applied.
+
 		// Check depth limit before spawning.
 		currentDepth := tools.ForkDepthFromContext(ctx)
 		if currentDepth >= tools.DefaultMaxForkDepth {
@@ -163,6 +175,7 @@ func SpawnAgentTool(runner tools.AgentRunner, profilesDir string) tools.Tool {
 			AllowedTools:         args.AllowedTools,
 			Model:                model,
 			MaxSteps:             maxSteps,
+			MaxTurns:             maxTurns,
 		}
 
 		result, err := forkedRunner.RunForkedSkill(childCtx, config)

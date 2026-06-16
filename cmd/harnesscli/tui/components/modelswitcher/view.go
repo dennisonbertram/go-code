@@ -49,6 +49,11 @@ var (
 	unavailableSuffixStyle = lipgloss.NewStyle().
 				Faint(true).
 				Foreground(lipgloss.AdaptiveColor{Light: "#AAAAAA", Dark: "#555555"})
+
+	// scrollIndicatorStyle renders "... N more above/below" overflow indicators.
+	scrollIndicatorStyle = lipgloss.NewStyle().
+				Faint(true).
+				Foreground(dimColor)
 )
 
 // View renders the model switcher dropdown.
@@ -125,12 +130,35 @@ func (m Model) viewProviderList(width int) string {
 		// We'll right-pad the label and right-align the count.
 		// Format: "  {Label}...{spaces}({Count})"
 		// Available inner text width after the 2-char indent.
-		textWidth := innerWidth - 2
-		if textWidth < 10 {
-			textWidth = 10
+		textWidth := innerWidth - 4
+		if textWidth < 8 {
+			textWidth = 8
 		}
 
-		for i, p := range provs {
+		// Compute scroll window for providers (Issue #572).
+		maxVisible := m.maxVisibleContentRows()
+		windowStart := m.providerScrollOffset
+		windowEnd := windowStart + maxVisible
+		if windowEnd > len(provs) {
+			windowEnd = len(provs)
+		}
+		// Reserve room for scroll indicators when items are hidden.
+		showAbove := windowStart > 0
+		showBelow := windowEnd < len(provs)
+		if showAbove && windowEnd > windowStart {
+			windowEnd--
+		}
+		if showBelow && windowEnd > windowStart {
+			windowEnd--
+		}
+
+		if showAbove {
+			sb.WriteString(scrollIndicatorStyle.Render("... " + itoa(windowStart) + " more above"))
+			sb.WriteByte('\n')
+		}
+
+		for i := windowStart; i < windowEnd; i++ {
+			p := provs[i]
 			isSelected := i == m.providerCursor
 
 			// Build count string.
@@ -158,7 +186,7 @@ func (m Model) viewProviderList(width int) string {
 				countPart := "  " + countStr
 				runes := []rune("> " + full + countPart)
 				// Pad to innerWidth for consistent highlight width.
-				padNeeded := innerWidth - len(runes)
+				padNeeded := innerWidth - len(runes) - 2
 				if padNeeded < 0 {
 					padNeeded = 0
 				}
@@ -180,6 +208,11 @@ func (m Model) viewProviderList(width int) string {
 				sb.WriteString(strings.Repeat(" ", pad))
 				sb.WriteString(dimStyle.Render(countPart))
 			}
+			sb.WriteByte('\n')
+		}
+
+		if showBelow {
+			sb.WriteString(scrollIndicatorStyle.Render("... " + itoa(len(provs)-windowEnd) + " more below"))
 			sb.WriteByte('\n')
 		}
 	}
@@ -219,7 +252,30 @@ func (m Model) viewModelsForProvider(width int) string {
 		sb.WriteString(dimStyle.Render("No models available"))
 		sb.WriteByte('\n')
 	} else {
-		for i, entry := range visible {
+		// Compute scroll window for models (Issue #572).
+		maxVisible := m.maxVisibleContentRows()
+		windowStart := m.scrollOffset
+		windowEnd := windowStart + maxVisible
+		if windowEnd > len(visible) {
+			windowEnd = len(visible)
+		}
+		// Reserve room for scroll indicators when items are hidden.
+		showAbove := windowStart > 0
+		showBelow := windowEnd < len(visible)
+		if showAbove && windowEnd > windowStart {
+			windowEnd--
+		}
+		if showBelow && windowEnd > windowStart {
+			windowEnd--
+		}
+
+		if showAbove {
+			sb.WriteString(scrollIndicatorStyle.Render("... " + itoa(windowStart) + " more above"))
+			sb.WriteByte('\n')
+		}
+
+		for i := windowStart; i < windowEnd; i++ {
+			entry := visible[i]
 			isSelected := i == m.Selected
 			isStarred := m.starred[entry.ID]
 			isUnavailable := m.availabilitySet && !entry.Available
@@ -261,7 +317,7 @@ func (m Model) viewModelsForProvider(width int) string {
 					starRaw = "  "
 				}
 				runes := []rune("> " + starRaw + nameAndSuffix)
-				padNeeded := innerWidth - len(runes)
+				padNeeded := innerWidth - len(runes) - 2
 				if padNeeded < 0 {
 					padNeeded = 0
 				}
@@ -298,6 +354,11 @@ func (m Model) viewModelsForProvider(width int) string {
 					sb.WriteString(dimStyle.Render(keySuffix))
 				}
 			}
+			sb.WriteByte('\n')
+		}
+
+		if showBelow {
+			sb.WriteString(scrollIndicatorStyle.Render("... " + itoa(len(visible)-windowEnd) + " more below"))
 			sb.WriteByte('\n')
 		}
 	}
@@ -352,7 +413,30 @@ func (m Model) viewFlatModelList(width int) string {
 		sb.WriteString(dimStyle.Render("No models match"))
 		sb.WriteByte('\n')
 	} else {
-		for i, entry := range visible {
+		// Compute scroll window for search results (Issue #572).
+		maxVisible := m.maxVisibleContentRows()
+		windowStart := m.scrollOffset
+		windowEnd := windowStart + maxVisible
+		if windowEnd > len(visible) {
+			windowEnd = len(visible)
+		}
+		// Reserve room for scroll indicators when items are hidden.
+		showAbove := windowStart > 0
+		showBelow := windowEnd < len(visible)
+		if showAbove && windowEnd > windowStart {
+			windowEnd--
+		}
+		if showBelow && windowEnd > windowStart {
+			windowEnd--
+		}
+
+		if showAbove {
+			sb.WriteString(scrollIndicatorStyle.Render("... " + itoa(windowStart) + " more above"))
+			sb.WriteByte('\n')
+		}
+
+		for i := windowStart; i < windowEnd; i++ {
+			entry := visible[i]
 			isSelected := i == m.Selected
 			isStarred := m.starred[entry.ID]
 			isUnavailable := m.availabilitySet && !entry.Available
@@ -399,7 +483,7 @@ func (m Model) viewFlatModelList(width int) string {
 					starRaw = "  "
 				}
 				runes := []rune("> " + starRaw + nameAndSuffix)
-				padNeeded := innerWidth - len(runes)
+				padNeeded := innerWidth - len(runes) - 2
 				if padNeeded < 0 {
 					padNeeded = 0
 				}
@@ -438,6 +522,11 @@ func (m Model) viewFlatModelList(width int) string {
 					sb.WriteString(dimStyle.Render(keySuffix))
 				}
 			}
+			sb.WriteByte('\n')
+		}
+
+		if showBelow {
+			sb.WriteString(scrollIndicatorStyle.Render("... " + itoa(len(visible)-windowEnd) + " more below"))
 			sb.WriteByte('\n')
 		}
 	}
@@ -522,7 +611,7 @@ func (m Model) viewReasoning(width int) string {
 				nameAndSuffix += "  ← current"
 			}
 			runes := []rune(prefix + nameAndSuffix)
-			padNeeded := innerWidth - len(runes)
+			padNeeded := innerWidth - len(runes) - 2
 			if padNeeded < 0 {
 				padNeeded = 0
 			}

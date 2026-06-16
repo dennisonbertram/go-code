@@ -60,10 +60,11 @@ func TestScorer_WithAntiPatterns(t *testing.T) {
 	}
 
 	result := s.Score(bundle)
-	// ToolQuality = FirstTryRate * (1 - penalty) where penalty = min(1, 3/5) = 0.6
-	// = 0.5 * (1 - 0.6) = 0.5 * 0.4 = 0.2
-	if result.ToolQuality < 0.19 || result.ToolQuality > 0.21 {
-		t.Errorf("ToolQuality = %f, want ~0.2", result.ToolQuality)
+	// weightedSum = 3 * 0.5 (retry_loop weight) = 1.5
+	// penalty = min(1, 1.5/5) = 0.3
+	// ToolQuality = 0.5 * (1 - 0.3) = 0.35
+	if result.ToolQuality < 0.34 || result.ToolQuality > 0.36 {
+		t.Errorf("ToolQuality = %f, want ~0.35", result.ToolQuality)
 	}
 	if result.AntiPatternCount != 3 {
 		t.Errorf("AntiPatternCount = %d, want 3", result.AntiPatternCount)
@@ -129,6 +130,91 @@ func TestScorer_Summary(t *testing.T) {
 	if !strings.Contains(result.Summary, "run_sum") {
 		t.Errorf("Summary should contain run ID, got: %s", result.Summary)
 	}
+}
+
+func TestScorer_DifferentiatedPenaltyWeights(t *testing.T) {
+	s := &Scorer{}
+
+	// Same count of patterns but different types = different penalties.
+	t.Run("retry_loop is lighter than named patterns", func(t *testing.T) {
+		retryOnly := TraceBundle{
+			RunID:        "retry",
+			Steps:        4,
+			CostUSD:      0.05,
+			FirstTryRate: 0.8,
+			AntiPatterns: []AntiPatternAlert{
+				{Type: "retry_loop", StepIdx: 1},
+				{Type: "retry_loop", StepIdx: 2},
+			},
+		}
+		namedOnly := TraceBundle{
+			RunID:        "named",
+			Steps:        4,
+			CostUSD:      0.05,
+			FirstTryRate: 0.8,
+			AntiPatterns: []AntiPatternAlert{
+				{Type: "hedge_assertion", StepIdx: 1},
+				{Type: "unverified_file_claim", StepIdx: 2},
+			},
+		}
+		retryResult := s.Score(retryOnly)
+		namedResult := s.Score(namedOnly)
+
+		// retry_loop weight 0.5 each = 1.0 total; penalty = 1.0/5 = 0.2
+		// named weight 1.0 each = 2.0 total; penalty = 2.0/5 = 0.4
+		// So named should have lower ToolQuality than retry-only
+		if namedResult.ToolQuality >= retryResult.ToolQuality {
+			t.Errorf("named patterns should have lower ToolQuality than retry_loop: named=%f retry=%f",
+				namedResult.ToolQuality, retryResult.ToolQuality)
+		}
+	})
+
+	t.Run("premature_completion has highest weight", func(t *testing.T) {
+		premature := TraceBundle{
+			RunID:        "premature",
+			Steps:        4,
+			CostUSD:      0.05,
+			FirstTryRate: 0.8,
+			AntiPatterns: []AntiPatternAlert{
+				{Type: "premature_completion", StepIdx: 1},
+			},
+		}
+		hedge := TraceBundle{
+			RunID:        "hedge",
+			Steps:        4,
+			CostUSD:      0.05,
+			FirstTryRate: 0.8,
+			AntiPatterns: []AntiPatternAlert{
+				{Type: "hedge_assertion", StepIdx: 1},
+			},
+		}
+		prematureResult := s.Score(premature)
+		hedgeResult := s.Score(hedge)
+
+		// premature_completion weight 1.25 > hedge_assertion weight 1.0
+		// So premature should have lower ToolQuality
+		if prematureResult.ToolQuality >= hedgeResult.ToolQuality {
+			t.Errorf("premature_completion should have lower ToolQuality than hedge_assertion: premature=%f hedge=%f",
+				prematureResult.ToolQuality, hedgeResult.ToolQuality)
+		}
+	})
+
+	t.Run("unknown type gets default weight", func(t *testing.T) {
+		unknown := TraceBundle{
+			RunID:        "unknown",
+			Steps:        4,
+			CostUSD:      0.05,
+			FirstTryRate: 0.8,
+			AntiPatterns: []AntiPatternAlert{
+				{Type: "some_future_pattern", StepIdx: 1},
+			},
+		}
+		result := s.Score(unknown)
+		// default weight 1.0; penalty = 1.0/5 = 0.2; ToolQuality = 0.8 * 0.8 = 0.64
+		if result.ToolQuality < 0.63 || result.ToolQuality > 0.65 {
+			t.Errorf("unknown type ToolQuality = %f, want ~0.64", result.ToolQuality)
+		}
+	})
 }
 
 func TestScorer_ContextRatioFromSnapshots(t *testing.T) {
