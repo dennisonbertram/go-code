@@ -17,6 +17,7 @@ import (
 	"go-agent-harness/apps/socialagent/db"
 	"go-agent-harness/apps/socialagent/gateway"
 	"go-agent-harness/apps/socialagent/harness"
+	"go-agent-harness/apps/socialagent/safety"
 	"go-agent-harness/apps/socialagent/telegram"
 )
 
@@ -201,6 +202,28 @@ func (f *fakeActivityLogger) LogActivity(ctx context.Context, userID, displayNam
 	return nil
 }
 
+// fakeScreener implements gateway.Screener for tests. It can be configured
+// to mark messages as safe or unsafe, or to return an error (fail-open).
+type fakeScreener struct {
+	mu      sync.Mutex
+	result  *safety.Result
+	err     error
+	calls   []string // texts passed to Screen
+}
+
+func (f *fakeScreener) Screen(ctx context.Context, text string) (*safety.Result, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, text)
+	if f.err != nil {
+		return nil, f.err
+	}
+	if f.result != nil {
+		return f.result, nil
+	}
+	return &safety.Result{Safe: true}, nil
+}
+
 // --- helpers ---
 
 const testWebhookSecret = "test-secret"
@@ -250,7 +273,7 @@ func makeUpdateWithID(updateID int, userID, chatID int64, text string) telegram.
 
 // newTestGateway is a helper that creates a Gateway with nil optional dependencies.
 func newTestGateway(bot gateway.MessageSender, store gateway.UserStore, h gateway.HarnessRunner, webhookSecret string) *gateway.Gateway {
-	return gateway.NewGateway(bot, store, h, webhookSecret, nil, nil, nil, "")
+	return gateway.NewGateway(bot, store, h, webhookSecret, nil, nil, nil, nil, "")
 }
 
 // --- tests ---
@@ -267,7 +290,7 @@ func TestHappyPath(t *testing.T) {
 		Summary: "A test user",
 	}}
 
-	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, profiles, nil, nil, "")
+	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, profiles, nil, nil, nil, "")
 
 	update := makeUpdateWithID(100, 123, 456, "What is 2+2?")
 	req := makeWebhookRequest(t, update)
@@ -591,7 +614,7 @@ func TestProcessMessage_RendersSystemPrompt(t *testing.T) {
 		},
 	}
 
-	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, profiles, nil, nil, "")
+	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, profiles, nil, nil, nil, "")
 
 	update := makeUpdateWithID(900, 901, 901, "Hello!")
 	req := makeWebhookRequest(t, update)
@@ -628,7 +651,7 @@ func TestProcessMessage_IncludesMCPServer(t *testing.T) {
 	bot := &fakeBot{}
 
 	const mcpURL = "http://localhost:8082/mcp"
-	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, nil, nil, nil, mcpURL)
+	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, nil, nil, nil, nil, mcpURL)
 
 	update := makeUpdateWithID(1000, 1001, 1001, "find me someone who likes hiking")
 	req := makeWebhookRequest(t, update)
@@ -767,7 +790,7 @@ func TestProcessMessage_TriggersSummary(t *testing.T) {
 	bot := &fakeBot{}
 	sum := &fakeSummarizer{}
 
-	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, nil, sum, nil, "")
+	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, nil, sum, nil, nil, "")
 
 	update := makeUpdateWithID(1200, 1201, 1201, "I love hiking!")
 	req := makeWebhookRequest(t, update)
@@ -802,7 +825,7 @@ func TestProcessMessage_SummaryNotCalledOnError(t *testing.T) {
 	bot := &fakeBot{}
 	sum := &fakeSummarizer{}
 
-	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, nil, sum, nil, "")
+	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, nil, sum, nil, nil, "")
 
 	update := makeUpdateWithID(1300, 1301, 1301, "hello")
 	req := makeWebhookRequest(t, update)
@@ -815,6 +838,201 @@ func TestProcessMessage_SummaryNotCalledOnError(t *testing.T) {
 	defer sum.mu.Unlock()
 	if len(sum.calls) != 0 {
 		t.Errorf("expected no summarizer calls on error, got %d", len(sum.calls))
+	}
+}
+
+// TestSafetyScreen_BlockedMessage verifies that when the screener marks a
+// message as unsafe, the agent harness is NOT called and a polite refusal
+// message is sent to the user instead.
+func TestSafetyScreen_BlockedMessage(t *testing.T) {
+	store := newFakeStore()
+	h := &fakeHarness{}
+	bot := &fakeBot{}
+	screener := &fakeScreener{
+		result: &safety.Result{
+			Safe:     false,
+			Category: "S3",
+			Reason:   "Harmful content detected",
+		},
+	}
+
+	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, nil, nil, nil, screener, "")
+
+	update := makeUpdateWithID(1400, 1401, 1401, "bad content")
+	req := makeWebhookRequest(t, update)
+	rec := httptest.NewRecorder()
+
+	gw.HandleWebhook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+
+	gw.Wait()
+
+	// Screener should have been called with the message text.
+	screener.mu.Lock()
+	if len(screener.calls) != 1 || screener.calls[0] != "bad content" {
+		t.Errorf("expected screener called with 'bad content', got %v", screener.calls)
+	}
+	screener.mu.Unlock()
+
+	// Harness must NOT have been called.
+	h.mu.Lock()
+	if len(h.requests) != 0 {
+		t.Errorf("expected no harness calls for blocked message, got %d", len(h.requests))
+	}
+	h.mu.Unlock()
+
+	// A polite refusal message must have been sent to the user.
+	bot.mu.Lock()
+	defer bot.mu.Unlock()
+	if len(bot.messages) != 1 {
+		t.Fatalf("expected 1 refusal message sent, got %d", len(bot.messages))
+	}
+	msg := bot.messages[0]
+	if msg.chatID != 1401 {
+		t.Errorf("expected chatID=1401, got %d", msg.chatID)
+	}
+	if !strings.Contains(msg.text, "not able to help") {
+		t.Errorf("expected refusal message, got %q", msg.text)
+	}
+	if !strings.Contains(msg.text, "Harmful content") {
+		t.Errorf("expected refusal message to include reason, got %q", msg.text)
+	}
+}
+
+// TestSafetyScreen_SafeMessagePassesThrough verifies that when the screener
+// marks a message as safe, normal processing continues: the harness is called
+// and the agent response is sent to the user.
+func TestSafetyScreen_SafeMessagePassesThrough(t *testing.T) {
+	store := newFakeStore()
+	h := &fakeHarness{result: &harness.RunResult{Output: "hello from agent", RunID: "run-safe-1"}}
+	bot := &fakeBot{}
+	screener := &fakeScreener{
+		result: &safety.Result{Safe: true},
+	}
+
+	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, nil, nil, nil, screener, "")
+
+	update := makeUpdateWithID(1500, 1501, 1501, "Hello!")
+	req := makeWebhookRequest(t, update)
+	rec := httptest.NewRecorder()
+
+	gw.HandleWebhook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+
+	gw.Wait()
+
+	// Screener should have been called.
+	screener.mu.Lock()
+	if len(screener.calls) != 1 || screener.calls[0] != "Hello!" {
+		t.Errorf("expected screener called with 'Hello!', got %v", screener.calls)
+	}
+	screener.mu.Unlock()
+
+	// Harness should have been called.
+	h.mu.Lock()
+	if len(h.requests) != 1 {
+		t.Fatalf("expected 1 harness request for safe message, got %d", len(h.requests))
+	}
+	if h.requests[0].Prompt != "Hello!" {
+		t.Errorf("expected prompt 'Hello!', got %q", h.requests[0].Prompt)
+	}
+	h.mu.Unlock()
+
+	// Agent response should have been sent to the user.
+	bot.mu.Lock()
+	defer bot.mu.Unlock()
+	if len(bot.messages) != 1 {
+		t.Fatalf("expected 1 message sent, got %d", len(bot.messages))
+	}
+	if bot.messages[0].text != "hello from agent" {
+		t.Errorf("expected 'hello from agent', got %q", bot.messages[0].text)
+	}
+}
+
+// TestSafetyScreen_ScreenerErrorFallthrough verifies fail-open behavior: when
+// the screener returns an error, the message is still processed normally
+// (harness is called and no refusal is sent).
+func TestSafetyScreen_ScreenerErrorFallthrough(t *testing.T) {
+	store := newFakeStore()
+	h := &fakeHarness{result: &harness.RunResult{Output: "processed anyway", RunID: "run-fo-1"}}
+	bot := &fakeBot{}
+	screener := &fakeScreener{
+		err: errors.New("screener unreachable"),
+	}
+
+	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, nil, nil, nil, screener, "")
+
+	update := makeUpdateWithID(1600, 1601, 1601, "normal message")
+	req := makeWebhookRequest(t, update)
+	rec := httptest.NewRecorder()
+
+	gw.HandleWebhook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+
+	gw.Wait()
+
+	// Screener should have been called and errored.
+	screener.mu.Lock()
+	if len(screener.calls) != 1 {
+		t.Errorf("expected 1 screener call, got %d", len(screener.calls))
+	}
+	screener.mu.Unlock()
+
+	// Harness MUST be called (fail-open).
+	h.mu.Lock()
+	if len(h.requests) != 1 {
+		t.Fatalf("expected harness call on screener error (fail-open), got %d", len(h.requests))
+	}
+	h.mu.Unlock()
+
+	// Agent response should be sent normally.
+	bot.mu.Lock()
+	defer bot.mu.Unlock()
+	if len(bot.messages) != 1 {
+		t.Fatalf("expected 1 message on fail-open, got %d", len(bot.messages))
+	}
+	if bot.messages[0].text != "processed anyway" {
+		t.Errorf("expected 'processed anyway', got %q", bot.messages[0].text)
+	}
+}
+
+// TestSafetyScreen_NoScreenerBackwardCompat verifies that when no screener is
+// configured (nil), all messages pass through unscreened — backward compatible
+// with existing deployments that do not set SAFETY_SCREENER_URL.
+func TestSafetyScreen_NoScreenerBackwardCompat(t *testing.T) {
+	store := newFakeStore()
+	h := &fakeHarness{result: &harness.RunResult{Output: "normal response", RunID: "run-bc-1"}}
+	bot := &fakeBot{}
+
+	// Pass nil screener — this is the default for existing deployments.
+	gw := gateway.NewGateway(bot, store, h, testWebhookSecret, nil, nil, nil, nil, "")
+
+	update := makeUpdateWithID(1700, 1701, 1701, "any message at all")
+	req := makeWebhookRequest(t, update)
+	rec := httptest.NewRecorder()
+
+	gw.HandleWebhook(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Errorf("expected 200, got %d", rec.Code)
+	}
+
+	gw.Wait()
+
+	// Harness should be called normally with nil screener.
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.requests) != 1 {
+		t.Fatalf("expected 1 harness request, got %d (nil screener should not block)", len(h.requests))
 	}
 }
 

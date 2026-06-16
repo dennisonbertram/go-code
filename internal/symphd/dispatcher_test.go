@@ -1122,3 +1122,72 @@ func TestDispatcher_ConcurrentUsesDistinctWorkspaces(t *testing.T) {
 		t.Errorf("got %d distinct workspace instances, want %d", len(seen), numIssues)
 	}
 }
+
+// TestBuildPrompt_IncludesSynthesisDoctrine verifies that buildPrompt prepends
+// the coordinator synthesis doctrine and includes the issue content.
+func TestBuildPrompt_IncludesSynthesisDoctrine(t *testing.T) {
+	issue := &TrackedIssue{
+		Number: 503,
+		Title:  "Add coordinator synthesis doctrine",
+		Body:   "This is the issue body with implementation details.",
+	}
+
+	prompt := buildPrompt(issue)
+
+	// Verify synthesis doctrine is present with key anti-pattern markers.
+	wantPhrases := []string{
+		"COORDINATOR SYNTHESIS DOCTRINE",
+		`NEVER write "based on your findings"`,
+		"WRONG vs RIGHT delegation patterns",
+		"SYNTHESIS VERIFICATION",
+		"internal/harness/runner.go:4304",
+		"internal/auth/handler.go:89-120",
+		"internal/config/loader.go:156",
+		"internal/server/handler.go:203-218",
+	}
+	for _, phrase := range wantPhrases {
+		if !strings.Contains(prompt, phrase) {
+			t.Errorf("buildPrompt missing expected phrase: %q", phrase)
+		}
+	}
+
+	// Verify issue content is present.
+	if !strings.Contains(prompt, "503") {
+		t.Error("buildPrompt missing issue number 503")
+	}
+	if !strings.Contains(prompt, "Add coordinator synthesis doctrine") {
+		t.Error("buildPrompt missing issue title")
+	}
+	if !strings.Contains(prompt, "This is the issue body with implementation details.") {
+		t.Error("buildPrompt missing issue body")
+	}
+
+	// Verify the doctrine comes before the issue content.
+	doctrinePos := strings.Index(prompt, "COORDINATOR SYNTHESIS DOCTRINE")
+	issuePos := strings.Index(prompt, "Implement GitHub issue #503")
+	if doctrinePos < 0 || issuePos < 0 || doctrinePos >= issuePos {
+		t.Error("synthesis doctrine must appear before the issue content")
+	}
+}
+
+// TestBuildPrompt_DoctrineForDifferentIssue verifies the doctrine is included
+// for issues of varying size and content.
+func TestBuildPrompt_DoctrineForDifferentIssue(t *testing.T) {
+	issue := &TrackedIssue{
+		Number: 1,
+		Title:  "A",
+		Body:   "B",
+	}
+
+	prompt := buildPrompt(issue)
+
+	if !strings.Contains(prompt, "COORDINATOR SYNTHESIS DOCTRINE") {
+		t.Error("synthesis doctrine missing for minimal issue")
+	}
+	if !strings.HasPrefix(prompt, "COORDINATOR SYNTHESIS DOCTRINE") {
+		t.Error("synthesis doctrine must be at the very start of the prompt")
+	}
+	if !strings.Contains(prompt, "Implement GitHub issue #1: A\n\nB") {
+		t.Error("issue content not appended correctly after doctrine")
+	}
+}

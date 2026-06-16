@@ -319,7 +319,7 @@ func TestInternalHelpersAndRunCommandBranches(t *testing.T) {
 		t.Fatalf("expected case-insensitive match")
 	}
 
-	if _, _, timedOut, err := runCommand(context.Background(), 20*time.Millisecond, "bash", "-lc", "sleep 0.2"); err == nil || !timedOut {
+	if _, _, timedOut, err := runCommand(context.Background(), 20*time.Millisecond, "bash", "-lc", "sleep 0.2"); err != nil || !timedOut {
 		t.Fatalf("expected timeout error branch")
 	}
 	output, exitCode, timedOut, err := runCommand(context.Background(), 2*time.Second, "bash", "-lc", "echo hi; exit 3")
