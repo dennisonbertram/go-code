@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go-agent-harness/internal/harness/tools/descriptions"
 )
 
 // ---------- mock SkillVerifier for flat tools package ----------
@@ -387,6 +389,117 @@ func TestVerifySkillToolPublic_NotRegisteredWhenVerifierNil(t *testing.T) {
 		if tool.Definition.Name == "verify_skill" {
 			t.Fatal("verify_skill should not be in catalog when SkillVerifier is nil")
 		}
+	}
+}
+
+// ---------- Verdict field tests ----------
+
+func TestVerifySkillToolPublic_VerdictPass(t *testing.T) {
+	t.Parallel()
+	verifier := buildFlatMockVerifier(t)
+	tool := VerifySkillTool(verifier)
+
+	out, err := tool.Handler(context.Background(), json.RawMessage(`{"name":"my-skill"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	v, ok := result["verdict"].(string)
+	if !ok {
+		t.Fatalf("verdict field is missing or not a string in result: %v", result)
+	}
+	if v != "PASS" {
+		t.Fatalf("expected verdict=PASS, got %q", v)
+	}
+	if result["passed"].(bool) != true {
+		t.Fatalf("expected passed=true")
+	}
+}
+
+func TestVerifySkillToolPublic_VerdictFail(t *testing.T) {
+	t.Parallel()
+	verifier := buildFlatMockVerifier(t)
+	tool := VerifySkillTool(verifier)
+	out, err := tool.Handler(context.Background(), json.RawMessage(`{"name":"missing"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	v, ok := result["verdict"].(string)
+	if !ok {
+		t.Fatalf("verdict field is missing or not a string in result: %v", result)
+	}
+	if v != "FAIL" {
+		t.Fatalf("expected verdict=FAIL for nonexistent skill, got %q", v)
+	}
+}
+
+func TestVerifySkillToolPublic_VerdictPartial(t *testing.T) {
+	t.Parallel()
+	verifier := &mockFlatSkillVerifier{
+		skills:    map[string]SkillInfo{"ghost": {Name: "ghost", Description: "no file", Source: "local"}},
+		bodies:    map[string]string{"ghost": "body"},
+		filePaths: map[string]string{},
+	}
+	tool := VerifySkillTool(verifier)
+	out, err := tool.Handler(context.Background(), json.RawMessage(`{"name":"ghost"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	v, ok := result["verdict"].(string)
+	if !ok {
+		t.Fatalf("verdict field is missing or not a string in result: %v", result)
+	}
+	if v != "PARTIAL" {
+		t.Fatalf("expected verdict=PARTIAL when skill exists but no file path, got %q", v)
+	}
+}
+
+// ---------- Description anti-pattern keyword tests ----------
+
+func TestVerifySkillDescription_ContainsAntiPatternKeywords(t *testing.T) {
+	t.Parallel()
+	desc := descriptions.Load("verify_skill")
+	if desc == "" {
+		t.Fatal("verify_skill description is empty")
+	}
+	lower := strings.ToLower(desc)
+
+	// Named anti-patterns
+	if !strings.Contains(lower, "verification_avoidance") {
+		t.Error("description missing anti-pattern: verification_avoidance")
+	}
+	if !strings.Contains(lower, "first_80_seduction") {
+		t.Error("description missing anti-pattern: first_80_seduction")
+	}
+
+	// Verdict output format
+	if !strings.Contains(lower, "verdict: pass") {
+		t.Error("description missing VERDICT: PASS")
+	}
+	if !strings.Contains(lower, "verdict: fail") {
+		t.Error("description missing VERDICT: FAIL")
+	}
+	if !strings.Contains(lower, "verdict: partial") {
+		t.Error("description missing VERDICT: PARTIAL")
+	}
+
+	// Evidence requirement
+	if !strings.Contains(lower, "evidence requirement") {
+		t.Error("description missing evidence requirement section")
+	}
+	if !strings.Contains(lower, "command run:") {
+		t.Error("description missing Command run: evidence block reference")
 	}
 }
 

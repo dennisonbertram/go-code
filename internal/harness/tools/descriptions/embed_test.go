@@ -290,6 +290,68 @@ func TestFSContainsEmbeddedFiles(t *testing.T) {
 	}
 }
 
+// TestToolDescriptionsContainBehavioralDirectives verifies that high-priority
+// tool descriptions include behavioral guidance sections — WHEN TO USE,
+// WHEN NOT TO USE, common mistakes, cross-tool disambiguation, or
+// behavioral rules. These directives help the LLM choose the right tool
+// for each task and avoid common misuse patterns.
+// See: https://github.com/dennisonbertram/go-agent-harness/issues/495
+func TestToolDescriptionsContainBehavioralDirectives(t *testing.T) {
+	t.Parallel()
+
+	behavioralPatterns := []string{
+		"when not to use",
+		"when to use",
+		"common mistakes",
+		"behavioral rules",
+		"do not use",
+		"do not write",
+		"do not run",
+		"do not call",
+		"prefer",
+		"instead of",
+		"use this tool when",
+		"use this tool if",
+	}
+
+	// Tools that agents rely on heavily and that have the highest impact
+	// on correctness when misused.
+	highPriority := []string{
+		"agent",
+		"apply_patch",
+		"bash",
+		"edit",
+		"fetch",
+		"find_tool",
+		"git_diff",
+		"git_status",
+		"glob",
+		"grep",
+		"read",
+		"write",
+	}
+
+	for _, name := range highPriority {
+		t.Run(name, func(t *testing.T) {
+			desc := strings.ToLower(Load(name))
+			found := false
+			for _, pattern := range behavioralPatterns {
+				if strings.Contains(desc, pattern) {
+					found = true
+					break
+				}
+			}
+			if !found {
+				// Show which patterns were searched to aid diagnosis.
+				t.Errorf("tool %q description must contain at least one behavioral directive "+
+					"(e.g. 'when not to use', 'when to use', 'common mistakes', 'behavioral rules', "+
+					"cross-tool disambiguation like 'prefer X instead of Y', or "+
+					"'do not use this tool for'). Searched %d patterns.", name, len(behavioralPatterns))
+			}
+		})
+	}
+}
+
 // TestBashDescriptionContainsGoTestGuidance verifies that the bash tool
 // description includes guidance on interpreting Go test output correctly.
 // Without -v, go test produces only a single "ok" summary line per package.

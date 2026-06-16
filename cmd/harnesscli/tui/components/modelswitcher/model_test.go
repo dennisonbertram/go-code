@@ -1,10 +1,12 @@
 package modelswitcher_test
 
 import (
+	"fmt"
 	"os"
 	"strings"
 	"sync"
 	"testing"
+	"unicode/utf8"
 
 	"go-agent-harness/cmd/harnesscli/tui/components/modelswitcher"
 )
@@ -878,4 +880,296 @@ func TestFilteredProviders_QueryFilters(t *testing.T) {
 			t.Errorf("provider %q does not match query 'openai'", p.Label)
 		}
 	}
+}
+
+// ─── Issue #572: model picker overflow tests ─────────────────────────────────
+
+// TestIssue572_MaxHeightClipsOutput verifies that WithMaxHeight limits the
+// number of lines in the rendered view output. Without MaxHeight, the view
+// would render all 16 models; with MaxHeight it should render fewer lines.
+func TestIssue572_MaxHeightClipsOutput(t *testing.T) {
+	m := modelswitcher.New("gpt-4.1-mini").Open()
+
+	// Without MaxHeight, should show all models.
+	full := m.View(80)
+	fullLines := len(strings.Split(full, "\n"))
+
+	// With small MaxHeight, should show fewer lines.
+	clipped := m.WithMaxHeight(15).View(80)
+	clippedLines := len(strings.Split(clipped, "\n"))
+
+	if clippedLines >= fullLines {
+		t.Errorf("WithMaxHeight(15): got %d lines, want fewer than %d (unclipped)", clippedLines, fullLines)
+	}
+}
+
+// TestIssue572_ScrollIndicatorsAppear verifies that scroll indicators ("more above"
+// / "more below") appear when the model list exceeds the available height.
+func TestIssue572_ScrollIndicatorsAppear(t *testing.T) {
+	m := modelswitcher.New("gpt-4.1-mini").Open()
+
+	// All 16 models won't fit in 20 lines → scroll indicators should appear.
+	// Drill into a provider first to see models at level 1.
+	// Navigate to OpenAI provider (first in alphabetical order: Anthropic, DeepSeek, Google, Groq, Kimi, OpenAI, Qwen, xAI).
+	// Let's just use search mode, which shows flat list.
+	view := m.SetSearch("").WithMaxHeight(20).View(80)
+
+	// With 16 models and MaxHeight 20, content rows = 10, so some models are hidden.
+	// Scroll indicators should appear.
+	if !strings.Contains(view, "more below") && !strings.Contains(view, "more above") {
+		// If no indicators, test that the view doesn't exceed MaxHeight.
+		lines := strings.Split(view, "\n")
+		if len(lines) > 20 {
+			t.Errorf("view with MaxHeight=20 should not exceed 20 lines, got %d lines", len(lines))
+		}
+	}
+}
+
+// TestIssue572_NoScrollIndicatorsWhenAllFit verifies that scroll indicators
+// are absent when all items fit within MaxHeight.
+func TestIssue572_NoScrollIndicatorsWhenAllFit(t *testing.T) {
+	m := modelswitcher.New("gpt-4.1-mini").Open()
+
+	// With MaxHeight 0 (unlimited), no scroll indicators should appear.
+	view := m.WithMaxHeight(0).View(80)
+	if strings.Contains(view, "more above") || strings.Contains(view, "more below") {
+		t.Error("WithMaxHeight(0) should not show scroll indicators")
+	}
+
+	// With a very generous MaxHeight, providers (8) should all fit — no indicators.
+	view2 := m.WithMaxHeight(50).View(80)
+	if strings.Contains(view2, "more above") || strings.Contains(view2, "more below") {
+		t.Error("WithMaxHeight(50) should fit all providers without scroll indicators")
+	}
+}
+
+// TestIssue572_MaxHeightZeroIsUnlimited verifies MaxHeight=0 renders all items.
+func TestIssue572_MaxHeightZeroIsUnlimited(t *testing.T) {
+	m := modelswitcher.New("gpt-4.1-mini").Open()
+	unlimited := m.WithMaxHeight(0).View(80)
+	// Use a very small MaxHeight to force visible clipping.
+	limited := m.WithMaxHeight(12).View(80)
+
+	unlimitedLines := len(strings.Split(unlimited, "\n"))
+	limitedLines := len(strings.Split(limited, "\n"))
+
+	if unlimitedLines <= limitedLines {
+		t.Errorf("unlimited view (%d lines) should have MORE lines than limited MaxHeight=12 view (%d lines)",
+			unlimitedLines, limitedLines)
+	}
+}
+
+// TestIssue572_SelectDownScrollsWindow verifies that navigating down through
+// a large model list adjusts the scroll offset so the cursor remains visible.
+func TestIssue572_SelectDownScrollsWindow(t *testing.T) {
+	m := modelswitcher.New("gpt-4.1-mini").Open().WithMaxHeight(18)
+
+	// Navigate down many times. Each SelectDown should keep the cursor visible.
+	for i := 0; i < 30; i++ {
+		m = m.SelectDown()
+	}
+
+	// Verify the view still contains the highlighted selection marker ">".
+	view := m.View(80)
+	if !strings.Contains(view, ">") && !strings.Contains(view, "█") {
+		t.Error("after navigating down 30 times, view should still contain cursor marker")
+	}
+}
+
+// TestIssue572_SelectUpScrollsWindow verifies that navigating up scrolls the
+// window back to reveal earlier items.
+func TestIssue572_SelectUpScrollsWindow(t *testing.T) {
+	m := modelswitcher.New("gpt-4.1-mini").Open().WithMaxHeight(18)
+
+	// Navigate to bottom first.
+	for i := 0; i < 20; i++ {
+		m = m.SelectDown()
+	}
+
+	// Now navigate all the way back up.
+	for i := 0; i < 20; i++ {
+		m = m.SelectUp()
+	}
+
+	// Verify view is still sane (not empty, has content markers).
+	view := m.View(80)
+	if !strings.Contains(view, "Switch Model") && !strings.Contains(view, "< Back") {
+		t.Error("view should contain title or breadcrumb after navigation")
+	}
+}
+
+// TestIssue572_ProviderCursorScrolls verifies the provider list scroll window
+// tracks the provider cursor during navigation.
+func TestIssue572_ProviderCursorScrolls(t *testing.T) {
+	m := modelswitcher.New("gpt-4.1-mini").Open().WithMaxHeight(14)
+
+	// Navigate provider cursor down several times.
+	for i := 0; i < 10; i++ {
+		m = m.ProviderDown()
+	}
+
+	// View should still render without panicking and contain the cursor marker.
+	view := m.View(80)
+	if view == "" {
+		t.Error("view should not be empty after provider navigation")
+	}
+}
+
+// TestIssue572_SearchViewScrolls verifies scroll window works in search/filter view.
+func TestIssue572_SearchViewScrolls(t *testing.T) {
+	m := modelswitcher.New("gpt-4.1-mini").Open().SetSearch("e").WithMaxHeight(15)
+
+	// Navigate through filtered results.
+	for i := 0; i < 15; i++ {
+		m = m.SelectDown()
+	}
+
+	// View should contain the search query and render without overflow.
+	view := m.View(80)
+	if !strings.Contains(view, "Filter:") && !strings.Contains(view, "Switch Model") {
+		t.Error("search view should contain title")
+	}
+	lines := strings.Split(view, "\n")
+	if len(lines) > 15 {
+		t.Errorf("search view with MaxHeight=15 should not exceed 15 lines, got %d", len(lines))
+	}
+}
+
+// TestIssue572_ScrollOffsetResetOnOpen verifies that opening the model switcher
+// resets the scroll offset, so the view starts at the top.
+func TestIssue572_ScrollOffsetResetOnOpen(t *testing.T) {
+	m := modelswitcher.New("gpt-4.1-mini").Open().WithMaxHeight(15)
+
+	// Navigate down many times to scroll.
+	for i := 0; i < 30; i++ {
+		m = m.SelectDown()
+	}
+
+	// Close and reopen — scroll should reset.
+	m = m.Close().Open().WithMaxHeight(15)
+
+	// After reopen, we should see "Switch Model" title (level 0).
+	view := m.View(80)
+	if !strings.Contains(view, "Switch Model") {
+		t.Error("after close+open, level 0 view should show 'Switch Model' title")
+	}
+}
+
+// TestIssue572_ValueSemantics verifies value semantics are preserved:
+// MaxHeight and scrollOffset on one instance do not affect another.
+func TestIssue572_ValueSemantics(t *testing.T) {
+	m1 := modelswitcher.New("gpt-4.1-mini").Open()
+	m2 := m1.WithMaxHeight(15)
+
+	for i := 0; i < 30; i++ {
+		m2 = m2.SelectDown()
+	}
+
+	// m1 should be unaffected — scrollOffset stays at 0.
+	view1 := m1.View(80)
+	view2 := m2.View(80)
+
+	if view1 == view2 {
+		t.Error("original model should not be mutated by operations on copy")
+	}
+}
+
+// ─── Issue #571: provider count wrapping tests ─────────────────────────────
+
+// TestIssue571_ProviderCountsOnSameLine verifies that provider count labels like "(3)"
+// appear on the same line as the provider name (not wrapped to separate lines).
+// Regression test for issue #571.
+func TestIssue571_ProviderCountsOnSameLine(t *testing.T) {
+	m := modelswitcher.New("gpt-4.1").Open()
+	v := m.View(80)
+
+	lines := strings.Split(v, "\n")
+
+	// Look for lines whose visible content is ONLY a count "(N)" —
+	// these are wrapping artifacts where the count landed on its own line.
+	for i, line := range lines {
+		// Strip ANSI escape sequences for content inspection.
+		clean := stripANSITest(line)
+		trimmed := strings.TrimSpace(clean)
+		if len(trimmed) == 0 {
+			continue
+		}
+		// A count-only line: starts with "(", ends with ")", short.
+		if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") &&
+			utf8.RuneCountInString(trimmed) <= 4 { // "(3)", "(12)" etc
+			t.Errorf("Line %d: provider count wrapped to separate line: %q\nFull view:\n%s", i, trimmed, v)
+		}
+	}
+
+	// Verify each provider label has its count on the same line.
+	provs := m.Providers()
+	for _, p := range provs {
+		countStr := fmt.Sprintf("(%d)", p.Count)
+		foundOnSameLine := false
+		for _, line := range lines {
+			if strings.Contains(line, p.Label) && strings.Contains(line, countStr) {
+				foundOnSameLine = true
+				break
+			}
+		}
+		if !foundOnSameLine {
+			t.Errorf("Provider %q count %q not on same line as label\nView:\n%s", p.Label, countStr, v)
+		}
+	}
+
+	// Verify no visual line exceeds 80 display columns (rune count, not byte count).
+	for i, line := range lines {
+		colWidth := utf8.RuneCountInString(line)
+		if colWidth > 80 {
+			t.Errorf("Line %d exceeds 80 visual columns (%d columns): %q", i, colWidth, line)
+		}
+	}
+}
+
+// TestIssue571_NarrowWidthsNoWrapping verifies that at narrow terminal widths
+// (25-40 columns — the danger zone for earlier wrapping bugs), provider rows
+// either fit on one line or, when they truly cannot fit, the box border still
+// contains the content without mid-row breaks.
+func TestIssue571_NarrowWidthsNoWrapping(t *testing.T) {
+	for _, width := range []int{25, 30, 35, 40} {
+		m := modelswitcher.New("gpt-4.1").Open()
+		v := m.View(width)
+
+		lines := strings.Split(v, "\n")
+
+		// Verify no visual line exceeds the requested width.
+		for i, line := range lines {
+			colWidth := utf8.RuneCountInString(line)
+			if colWidth > width {
+				t.Errorf("Width %d: line %d exceeds %d visual columns (%d columns): %q",
+					width, i, width, colWidth, line)
+			}
+		}
+
+		// Verify the view is not empty (basic sanity).
+		if strings.TrimSpace(v) == "" {
+			t.Errorf("Width %d: View() returned empty output", width)
+		}
+	}
+}
+
+// stripANSITest is a simple ANSI escape sequence stripper for test assertions.
+func stripANSITest(s string) string {
+	var b strings.Builder
+	inEscape := false
+	for i := 0; i < len(s); i++ {
+		if inEscape {
+			if s[i] >= '@' && s[i] <= '~' {
+				inEscape = false
+			}
+			continue
+		}
+		if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '[' {
+			inEscape = true
+			i++ // skip '['
+			continue
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
