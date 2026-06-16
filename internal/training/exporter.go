@@ -181,15 +181,18 @@ func ExportFromJSONL(path string) (*TraceBundle, error) {
 				bundle.MaxContextRatio = snap.Ratio
 			}
 
-		case "anti_pattern.detected":
+		case "tool.antipattern":
 			ap := AntiPatternAlert{
 				StepIdx: intFromData(e.Data, "step"),
 			}
 			if v, ok := e.Data["type"].(string); ok {
 				ap.Type = v
 			}
-			if v, ok := e.Data["tool_name"].(string); ok {
+			if v, ok := e.Data["tool"].(string); ok {
 				ap.Message = fmt.Sprintf("%s: %s", ap.Type, v)
+			}
+			if v, ok := e.Data["evidence"].(string); ok {
+				ap.Evidence = v
 			}
 			bundle.AntiPatterns = append(bundle.AntiPatterns, ap)
 

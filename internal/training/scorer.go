@@ -16,18 +16,40 @@ type ScoreResult struct {
 	Summary          string  `json:"summary"`
 }
 
+// antiPatternWeight returns the penalty weight for a given anti-pattern type.
+// Named behavioral patterns (conclusion-watching) carry higher weight than
+// simple retry loops since they indicate deeper process failures.
+func antiPatternWeight(apType string) float64 {
+	switch apType {
+	case "retry_loop":
+		return 0.5 // mechanical issue, often transient
+	case "hedge_assertion", "unverified_file_claim":
+		return 1.0 // process failure, undermines verification quality
+	case "premature_completion":
+		return 1.25 // premature task termination is a high-impact failure
+	case "skipped_diagnostic", "architecture_assumption":
+		return 1.0 // skipping verification steps or assuming architecture
+	default:
+		return 1.0 // unknown types get standard weight
+	}
+}
+
 // Score computes structural metrics from a TraceBundle.
 //
 // Scoring logic:
-//   - ToolQuality = FirstTryRate * (1 - antiPatternPenalty) where penalty = min(1, antiPatterns/5)
+//   - ToolQuality = FirstTryRate * (1 - antiPatternPenalty) where penalty = min(1, weightedAntiPatternSum/5)
 //   - Efficiency = 1.0 / (1.0 + steps*0.1 + costUSD*10) capped at [0,1]
 //   - MaxContextRatio from context snapshots
 func (s *Scorer) Score(bundle TraceBundle) ScoreResult {
-	apCount := len(bundle.AntiPatterns)
-	penalty := float64(apCount) / 5.0
+	var weightedSum float64
+	for _, ap := range bundle.AntiPatterns {
+		weightedSum += antiPatternWeight(ap.Type)
+	}
+	penalty := weightedSum / 5.0
 	if penalty > 1.0 {
 		penalty = 1.0
 	}
+	apCount := len(bundle.AntiPatterns)
 
 	toolQuality := bundle.FirstTryRate * (1.0 - penalty)
 

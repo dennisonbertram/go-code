@@ -320,6 +320,51 @@ func TestRunPreflight_PerRunMCPToolsAlreadyConnectedIsGraceful(t *testing.T) {
 	}
 }
 
+// TestToolsForRun_PerRunToolsIsNil_ReturnsGlobal verifies that when no per-run
+// workspace is provisioned (perRunTools is nil), toolsForRun falls back to the
+// global Runner.tools registry.
+func TestToolsForRun_PerRunToolsIsNil_ReturnsGlobal(t *testing.T) {
+	globalReg := NewRegistry()
+	r := &Runner{tools: globalReg, runs: make(map[string]*runState)}
+	r.runs["test-run"] = &runState{
+		run: Run{ID: "test-run", Status: RunStatusQueued},
+		// perRunTools intentionally left nil — simulates no workspace provisioning.
+	}
+	got := r.toolsForRun("test-run")
+	if got != globalReg {
+		t.Fatal("toolsForRun should return global registry when perRunTools is nil")
+	}
+}
+
+// TestToolsForRun_PerRunToolsIsSet_ReturnsPerRun verifies that when a per-run
+// workspace is provisioned, toolsForRun returns the per-run registry instead of
+// the global one. This ensures file/shell tools resolve paths against the
+// provisioned workspace.
+func TestToolsForRun_PerRunToolsIsSet_ReturnsPerRun(t *testing.T) {
+	globalReg := NewRegistry()
+	perRunReg := NewRegistry()
+	r := &Runner{tools: globalReg, runs: make(map[string]*runState)}
+	r.runs["test-run"] = &runState{
+		run:         Run{ID: "test-run", Status: RunStatusQueued},
+		perRunTools: perRunReg,
+	}
+	got := r.toolsForRun("test-run")
+	if got != perRunReg {
+		t.Fatal("toolsForRun should return per-run registry when perRunTools is set")
+	}
+}
+
+// TestToolsForRun_RunNotFound_ReturnsGlobal verifies that when a run ID is not
+// found, toolsForRun returns the global registry.
+func TestToolsForRun_RunNotFound_ReturnsGlobal(t *testing.T) {
+	globalReg := NewRegistry()
+	r := &Runner{tools: globalReg, runs: make(map[string]*runState)}
+	got := r.toolsForRun("nonexistent")
+	if got != globalReg {
+		t.Fatal("toolsForRun should return global registry when run is not found")
+	}
+}
+
 func newRunStateForPreflightTest(runID string) *runState {
 	now := time.Now().UTC()
 	return &runState{

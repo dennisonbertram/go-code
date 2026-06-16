@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"go-agent-harness/internal/harness"
 	"go-agent-harness/internal/store"
@@ -649,6 +650,9 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request, runID s
 		}
 	}
 
+	ticker := time.NewTicker(sseKeepaliveInterval())
+	defer ticker.Stop()
+
 	for {
 		select {
 		case <-r.Context().Done():
@@ -667,6 +671,11 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request, runID s
 			if harness.IsTerminalEvent(event.Type) {
 				return
 			}
+		case <-ticker.C:
+			if err := writeSSEPing(w); err != nil {
+				return
+			}
+			flusher.Flush()
 		}
 	}
 }
