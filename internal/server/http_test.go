@@ -44,6 +44,21 @@ func (s *scriptedProvider) Complete(_ context.Context, _ harness.CompletionReque
 	return out, nil
 }
 
+// waitingProvider blocks until its done channel is closed. Useful for testing
+// SSE keep-alive pings and other scenarios that require an idle event stream.
+type waitingProvider struct {
+	done chan struct{}
+}
+
+func (w *waitingProvider) Complete(ctx context.Context, _ harness.CompletionRequest) (harness.CompletionResult, error) {
+	select {
+	case <-ctx.Done():
+		return harness.CompletionResult{}, ctx.Err()
+	case <-w.done:
+		return harness.CompletionResult{Content: "done"}, nil
+	}
+}
+
 func TestRunLifecycleEndpoints(t *testing.T) {
 	t.Parallel()
 
@@ -768,6 +783,81 @@ func TestWriteSSE_IncludesIDAndRetry(t *testing.T) {
 	}
 	if !strings.Contains(body, "data: ") {
 		t.Errorf("missing data field, got:\n%s", body)
+	}
+}
+
+func TestWriteSSEPing(t *testing.T) {
+	rec := httptest.NewRecorder()
+	err := writeSSEPing(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := rec.Body.String()
+	// SSE comment lines start with ':' and are ignored by clients per the SSE spec.
+	if body != ": ping\n\n" {
+		t.Errorf("expected SSE comment line \": ping\\n\\n\", got: %q", body)
+	}
+}
+
+// TestSSEKeepalivePingsInEventStream verifies that SSE comment pings appear
+// in the event stream when the event channel is idle.
+func TestSSEKeepalivePingsInEventStream(t *testing.T) {
+	t.Setenv("HARNESS_SSE_KEEPALIVE_SECONDS", "1")
+
+	wp := &waitingProvider{done: make(chan struct{})}
+	runner := harness.NewRunner(
+		wp,
+		harness.NewRegistry(),
+		harness.RunnerConfig{
+			DefaultModel: "gpt-4.1-mini",
+			MaxSteps:     1,
+		},
+	)
+
+	handler := New(runner)
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	// Create a run with a provider that blocks, so the event channel stays idle
+	// long enough for a keep-alive ping to fire.
+	res, err := http.Post(ts.URL+"/v1/runs", "application/json", bytes.NewBufferString(`{"prompt":"Hello"}`))
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	defer res.Body.Close()
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	// Read the SSE stream with a short deadline. We expect at least one ping
+	// comment to appear within a few seconds.
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+
+	req, _ := http.NewRequestWithContext(ctx, "GET", ts.URL+"/v1/runs/"+created.RunID+"/events", nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("connect to events stream: %v", err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// Close the waiting provider to let the run finish cleanly.
+	close(wp.done)
+
+	if !strings.Contains(bodyStr, ": ping\n") {
+		t.Errorf("expected SSE keep-alive ping comment in event stream, got:\n%s", bodyStr)
+	}
+
+	// Verify pings are SSE comments (no event: or data: prefix that would
+	// be parsed by EventSource clients).
+	if strings.Contains(bodyStr, "event: ping") || strings.Contains(bodyStr, "data: ping") {
+		t.Errorf("keep-alive pings should be SSE comments (no event: or data: prefix)")
 	}
 }
 

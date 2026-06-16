@@ -2,8 +2,10 @@ package tools
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 func validateWorkspaceRelativePattern(pattern string) error {
@@ -64,4 +66,61 @@ func NormalizeRelPath(workspaceRoot, absPath string) string {
 		return "."
 	}
 	return filepath.ToSlash(rel)
+}
+
+// EnsureWorkspaceRootUsable verifies that the workspace root exists, is a
+// directory, and is writable. It should be called by filesystem-mutating
+// tool handlers (write, edit, apply_patch) before they resolve paths against
+// the workspace root. This prevents silent wrong-behaviour when the
+// workspace root points to a path that does not exist on the local machine
+// (e.g. a VM workspace path like /workspace when tools execute on the host).
+func EnsureWorkspaceRootUsable(workspaceRoot string) error {
+	if workspaceRoot == "" {
+		return fmt.Errorf("workspace root is required")
+	}
+	fi, err := os.Stat(workspaceRoot)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("workspace root %q does not exist", workspaceRoot)
+		}
+		return fmt.Errorf("workspace root %q is not accessible: %w", workspaceRoot, err)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("workspace root %q is not a directory", workspaceRoot)
+	}
+	// Check writability by attempting to create a temporary file.
+	// We use a write check rather than os.IsPermission on the stat result
+	// because directory write permission may differ from the owner uid.
+	if err := writable(workspaceRoot); err != nil {
+		return fmt.Errorf("workspace root %q is not writable: %w", workspaceRoot, err)
+	}
+	return nil
+}
+
+// writable returns nil if the directory at path is writable by the current
+// process. It attempts to create a temporary empty file and removes it
+// immediately.
+func writable(dir string) error {
+	tmp, err := os.CreateTemp(dir, ".write-check-*")
+	if err != nil {
+		// Translate permission errors into a friendlier message.
+		if os.IsPermission(err) || isEACCES(err) {
+			return fmt.Errorf("permission denied")
+		}
+		return err
+	}
+	name := tmp.Name()
+	tmp.Close()
+	os.Remove(name)
+	return nil
+}
+
+// isEACCES returns true if err is an EACCES (permission denied) syscall error.
+func isEACCES(err error) bool {
+	if pe, ok := err.(*os.PathError); ok {
+		if se, ok := pe.Err.(syscall.Errno); ok {
+			return se == syscall.EACCES
+		}
+	}
+	return false
 }

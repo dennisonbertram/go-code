@@ -1,6 +1,7 @@
 package training
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -272,8 +273,9 @@ func TestExportFromJSONL_ContextSnapshots(t *testing.T) {
 func TestExportFromJSONL_AntiPatterns(t *testing.T) {
 	dir := t.TempDir()
 	fp := filepath.Join(dir, "run_ap.jsonl")
+	// Real event format: "tool.antipattern" with "tool" field (not "anti_pattern.detected" with "tool_name").
 	data := `{"ts":"2026-03-14T12:00:00Z","seq":1,"type":"run.started","data":{"prompt":"go","conversation_id":"run_ap","step":0}}
-{"ts":"2026-03-14T12:00:01Z","seq":2,"type":"anti_pattern.detected","data":{"type":"retry_loop","tool_name":"bash","call_count":3,"step":2}}
+{"ts":"2026-03-14T12:00:01Z","seq":2,"type":"tool.antipattern","data":{"type":"retry_loop","tool":"bash","call_count":3,"step":2}}
 {"ts":"2026-03-14T12:00:02Z","seq":3,"type":"run.completed","data":{"output":"done","step":3,"cost_totals":{"cost_usd_total":0},"usage_totals":{"total_tokens":0}}}
 `
 	if err := os.WriteFile(fp, []byte(data), 0o644); err != nil {
@@ -289,6 +291,72 @@ func TestExportFromJSONL_AntiPatterns(t *testing.T) {
 	}
 	if bundle.AntiPatterns[0].Type != "retry_loop" {
 		t.Errorf("AntiPattern.Type = %q, want retry_loop", bundle.AntiPatterns[0].Type)
+	}
+	if bundle.AntiPatterns[0].Message != "retry_loop: bash" {
+		t.Errorf("AntiPattern.Message = %q, want 'retry_loop: bash'", bundle.AntiPatterns[0].Message)
+	}
+}
+
+// TestExportFromJSONL_AntiPatternsWithEvidence verifies that anti-pattern
+// events carrying an evidence field correctly populate the Evidence field.
+func TestExportFromJSONL_AntiPatternsWithEvidence(t *testing.T) {
+	dir := t.TempDir()
+	fp := filepath.Join(dir, "run_ap_evidence.jsonl")
+	data := `{"ts":"2026-03-14T12:00:00Z","seq":1,"type":"run.started","data":{"prompt":"go","conversation_id":"run_ap_ev","step":0}}
+{"ts":"2026-03-14T12:00:01Z","seq":2,"type":"tool.antipattern","data":{"type":"hedge_assertion","tool":"verify_skill","evidence":"Model said 'appears to be correct' instead of running verification","step":2}}
+{"ts":"2026-03-14T12:00:02Z","seq":3,"type":"run.completed","data":{"output":"done","step":3,"cost_totals":{"cost_usd_total":0},"usage_totals":{"total_tokens":0}}}
+`
+	if err := os.WriteFile(fp, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bundle, err := ExportFromJSONL(fp)
+	if err != nil {
+		t.Fatalf("ExportFromJSONL: %v", err)
+	}
+	if len(bundle.AntiPatterns) != 1 {
+		t.Fatalf("AntiPatterns len = %d, want 1", len(bundle.AntiPatterns))
+	}
+	if bundle.AntiPatterns[0].Type != "hedge_assertion" {
+		t.Errorf("AntiPattern.Type = %q, want hedge_assertion", bundle.AntiPatterns[0].Type)
+	}
+	if bundle.AntiPatterns[0].Evidence != "Model said 'appears to be correct' instead of running verification" {
+		t.Errorf("AntiPattern.Evidence = %q, want evidence string", bundle.AntiPatterns[0].Evidence)
+	}
+}
+
+// TestExportFromJSONL_NamedAntiPatterns verifies all 5 named anti-pattern
+// types from the conclusion-watcher are recognized by the exporter.
+func TestExportFromJSONL_NamedAntiPatterns(t *testing.T) {
+	patterns := []string{
+		"hedge_assertion",
+		"unverified_file_claim",
+		"premature_completion",
+		"skipped_diagnostic",
+		"architecture_assumption",
+	}
+
+	for _, pt := range patterns {
+		dir := t.TempDir()
+		fp := filepath.Join(dir, "run_named_ap.jsonl")
+		data := fmt.Sprintf(`{"ts":"2026-03-14T12:00:00Z","seq":1,"type":"run.started","data":{"prompt":"go","conversation_id":"run_named_%s","step":0}}
+{"ts":"2026-03-14T12:00:01Z","seq":2,"type":"tool.antipattern","data":{"type":"%s","tool":"test_tool","step":1}}
+{"ts":"2026-03-14T12:00:02Z","seq":3,"type":"run.completed","data":{"output":"done","step":1,"cost_totals":{"cost_usd_total":0},"usage_totals":{"total_tokens":0}}}
+`, pt, pt)
+		if err := os.WriteFile(fp, []byte(data), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		bundle, err := ExportFromJSONL(fp)
+		if err != nil {
+			t.Fatalf("ExportFromJSONL for pattern %q: %v", pt, err)
+		}
+		if len(bundle.AntiPatterns) != 1 {
+			t.Fatalf("AntiPatterns len = %d, want 1 for pattern %q", len(bundle.AntiPatterns), pt)
+		}
+		if bundle.AntiPatterns[0].Type != pt {
+			t.Errorf("AntiPattern.Type = %q, want %q", bundle.AntiPatterns[0].Type, pt)
+		}
 	}
 }
 

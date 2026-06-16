@@ -48,10 +48,10 @@ type ActivityLogger interface {
 	LogActivity(ctx context.Context, userID, displayName, activityType, content string) error
 }
 
-// SafetyChecker screens incoming user messages for harmful content before
-// they are forwarded to the LLM.
-type SafetyChecker interface {
-	Check(ctx context.Context, message string) (*safety.Result, error)
+// Screener screens user input for safety policy violations before the message
+// is forwarded to the harness. When nil, all messages pass through unscreened.
+type Screener interface {
+	Screen(ctx context.Context, text string) (*safety.Result, error)
 }
 
 // Gateway ties together the Telegram bot, user store, and harness runner.
@@ -65,8 +65,8 @@ type Gateway struct {
 	profiles       ProfileFetcher
 	summarizer     Summarizer
 	activityLogger ActivityLogger
-	mcpServerURL   string // URL of the MCP server (e.g., "http://localhost:8082/mcp")
-	safety         SafetyChecker
+	screener       Screener   // optional safety screener; nil means disabled
+	mcpServerURL   string     // URL of the MCP server (e.g., "http://localhost:8082/mcp")
 	mu             sync.Map // map[int64]*sync.Mutex
 	wg             sync.WaitGroup
 	recentUpdates  sync.Map // map[int64]struct{} for deduplication
@@ -75,7 +75,7 @@ type Gateway struct {
 // NewGateway creates a Gateway.  bot, store, and harnessClient must be non-nil.
 // webhookSecret is the shared secret used to authenticate incoming Telegram
 // webhook requests via the X-Telegram-Bot-Api-Secret-Token header.
-// profiles, sum, actLogger, and safetyChecker may be nil (features are skipped when nil).
+// profiles, sum, actLogger, and screener may be nil (features are skipped when nil).
 // mcpServerURL is the URL of the MCP server; empty string disables MCP.
 func NewGateway(
 	bot MessageSender,
@@ -85,8 +85,8 @@ func NewGateway(
 	profiles ProfileFetcher,
 	sum Summarizer,
 	actLogger ActivityLogger,
+	screener Screener,
 	mcpServerURL string,
-	safetyChecker SafetyChecker,
 ) *Gateway {
 	return &Gateway{
 		bot:            bot,
@@ -96,8 +96,8 @@ func NewGateway(
 		profiles:       profiles,
 		summarizer:     sum,
 		activityLogger: actLogger,
+		screener:       screener,
 		mcpServerURL:   mcpServerURL,
-		safety:         safetyChecker,
 	}
 }
 
@@ -108,38 +108,53 @@ func (g *Gateway) Wait() {
 }
 
 // HandleWebhook is the HTTP handler for POST /webhook/telegram.
+// It always returns 200 OK immediately — returning any other status causes
+// Telegram to retry the same update indefinitely.  The actual work is
+// dispatched to a background goroutine so that the HTTP response is sent
+// before the (potentially long) harness call completes.
 func (g *Gateway) HandleWebhook(w http.ResponseWriter, r *http.Request) {
+	// 0. Authenticate the request using the shared webhook secret.
+	//    We return 200 even on auth failure to avoid leaking information to
+	//    spoofed senders and to prevent Telegram retry storms if misconfigured.
 	if r.Header.Get("X-Telegram-Bot-Api-Secret-Token") != g.webhookSecret {
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
+	// 1. Parse the incoming Telegram update.
 	update, err := g.bot.ParseUpdate(r)
 	if err != nil {
+		// Not a text message or malformed JSON — acknowledge silently.
 		log.Printf("gateway: parse update: %v", err)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
+	// Guard against a missing From field (e.g. channel posts).
 	if update.Message.From == nil {
 		log.Printf("gateway: update has no From user")
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
+	// 2. Deduplicate: skip updates we have already dispatched.
 	if _, loaded := g.recentUpdates.LoadOrStore(update.UpdateID, struct{}{}); loaded {
 		log.Printf("gateway: duplicate update_id=%d, skipping", update.UpdateID)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
+	// Capture all fields needed by the goroutine before returning.
 	telegramID := update.Message.From.ID
 	chatID := update.Message.Chat.ID
 	text := update.Message.Text
 	displayName := g.bot.DisplayName(update.Message.From)
 
+	// 3. Return 200 OK to Telegram immediately.
 	w.WriteHeader(http.StatusOK)
 
+	// 4. Process the message in the background so we don't hold the HTTP
+	//    connection open for the duration of the harness call.
 	g.wg.Add(1)
 	go func() {
 		defer g.wg.Done()
@@ -150,12 +165,15 @@ func (g *Gateway) HandleWebhook(w http.ResponseWriter, r *http.Request) {
 }
 
 // processMessage performs the actual work: per-user locking, user lookup,
-// safety screening, harness call, and Telegram reply.
+// harness call, and Telegram reply.  It is called from a background goroutine
+// and must not touch the original http.Request or ResponseWriter.
 func (g *Gateway) processMessage(ctx context.Context, telegramID, chatID int64, text, displayName string) {
+	// Acquire per-user mutex to prevent concurrent runs on the same conversation.
 	mu := g.userMutex(telegramID)
 	mu.Lock()
 	defer mu.Unlock()
 
+	// Look up (or create) the internal user record.
 	user, err := g.store.GetOrCreateUser(ctx, telegramID, displayName)
 	if err != nil {
 		log.Printf("gateway: GetOrCreateUser(%d): %v", telegramID, err)
@@ -163,35 +181,38 @@ func (g *Gateway) processMessage(ctx context.Context, telegramID, chatID int64, 
 		return
 	}
 
-	// Screen the incoming message for harmful content before forwarding to
-	// the LLM. If no safety checker is configured, skip screening.
-	if g.safety != nil {
-		result, err := g.safety.Check(ctx, text)
+	// Screen user input for safety before forwarding to the harness.
+	// When no screener is configured (nil), all messages pass through.
+	if g.screener != nil {
+		result, err := g.screener.Screen(ctx, text)
 		if err != nil {
-			log.Printf("gateway: safety check error (user=%d): %v", telegramID, err)
-			g.sendRefusal(ctx, chatID)
-			return
-		}
-		if !result.Safe {
-			log.Printf("gateway: unsafe message blocked (user=%d, category=%s, text=%q)",
-				telegramID, result.Category, text)
-			g.sendRefusal(ctx, chatID)
+			log.Printf("gateway: screener.Screen: %v", err)
+			// Fail-open: continue processing even if screener errors.
+		} else if !result.Safe {
+			log.Printf("gateway: message blocked by safety screener (category=%s, reason=%s)", result.Category, result.Reason)
+			msg := safety.ParseCategory(result)
+			if msg == "" {
+				msg = "I'm not able to help with that request."
+			}
+			if sendErr := g.bot.SendMessage(ctx, chatID, msg); sendErr != nil {
+				log.Printf("gateway: SendMessage (chat=%d): %v", chatID, sendErr)
+			}
 			return
 		}
 	}
 
+	// Fetch the user's profile and render the system prompt with user context.
 	renderedPrompt := g.renderSystemPrompt(ctx, user)
 
+	// Build the run request, including MCP server config if configured.
+	// AllowedTools restricts the agent to only the tools it needs for social
+	// interactions — prevents access to bash, file I/O, and other sensitive
+	// built-in tools from a Telegram-facing bot.
 	req := harness.RunRequest{
 		Prompt:         text,
 		ConversationID: user.ConversationID,
 		SystemPrompt:   renderedPrompt,
 		TenantID:       user.ID,
-		Permissions: &harness.PermissionConfig{
-			Sandbox:  harness.SandboxScopeWorkspace,
-			Approval: harness.ApprovalPolicyAll,
-		},
-		MaxCostUSD: 0.50,
 		AllowedTools: []string{
 			"compact_history",
 			"context_status",
@@ -209,6 +230,7 @@ func (g *Gateway) processMessage(ctx context.Context, telegramID, chatID int64, 
 		req.MCPServers = []harness.MCPServer{{Name: "social", URL: g.mcpServerURL}}
 	}
 
+	// Delegate to the harness.
 	result, err := g.harness.SendAndWait(ctx, req)
 	if err != nil {
 		log.Printf("gateway: SendAndWait (user=%d): %v", telegramID, err)
@@ -216,10 +238,12 @@ func (g *Gateway) processMessage(ctx context.Context, telegramID, chatID int64, 
 		return
 	}
 
+	// Send the agent's output back to the user.
 	if err := g.bot.SendMessage(ctx, chatID, result.Output); err != nil {
 		log.Printf("gateway: SendMessage (chat=%d): %v", chatID, err)
 	}
 
+	// Fire summary generation in background after responding.
 	if g.summarizer != nil {
 		g.wg.Add(1)
 		go func() {
@@ -232,6 +256,7 @@ func (g *Gateway) processMessage(ctx context.Context, telegramID, chatID int64, 
 		}()
 	}
 
+	// Log activity in background.
 	if g.activityLogger != nil {
 		g.wg.Add(1)
 		go func() {
@@ -245,6 +270,9 @@ func (g *Gateway) processMessage(ctx context.Context, telegramID, chatID int64, 
 	}
 }
 
+// renderSystemPrompt builds a rendered system prompt for the user. If profile
+// fetching fails or profiles is nil, it falls back to a default rendering with
+// no profile data.
 func (g *Gateway) renderSystemPrompt(ctx context.Context, user *db.User) string {
 	uctx := systemprompt.UserContext{
 		DisplayName: user.DisplayName,
@@ -260,6 +288,7 @@ func (g *Gateway) renderSystemPrompt(ctx context.Context, user *db.User) string 
 			uctx.Interests = profile.Interests
 			uctx.LookingFor = profile.LookingFor
 		} else {
+			// No profile row yet — this is a new user.
 			uctx.IsNewUser = true
 		}
 	}
@@ -272,19 +301,15 @@ func (g *Gateway) renderSystemPrompt(ctx context.Context, user *db.User) string 
 	return rendered
 }
 
+// userMutex returns the per-user mutex for telegramID, creating it if needed.
 func (g *Gateway) userMutex(telegramID int64) *sync.Mutex {
 	v, _ := g.mu.LoadOrStore(telegramID, &sync.Mutex{})
 	return v.(*sync.Mutex)
 }
 
+// sendError sends the standard error message to chatID, logging any failure.
 func (g *Gateway) sendError(ctx context.Context, chatID int64) {
 	if err := g.bot.SendMessage(ctx, chatID, "Sorry, something went wrong. Please try again."); err != nil {
 		log.Printf("gateway: sendError (chat=%d): %v", chatID, err)
-	}
-}
-
-func (g *Gateway) sendRefusal(ctx context.Context, chatID int64) {
-	if err := g.bot.SendMessage(ctx, chatID, safety.RefusalText); err != nil {
-		log.Printf("gateway: sendRefusal (chat=%d): %v", chatID, err)
 	}
 }

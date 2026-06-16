@@ -2,75 +2,178 @@ package safety_test
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"go-agent-harness/apps/socialagent/safety"
 )
 
-type mockChecker struct {
-	result *safety.Result
-	err    error
-}
+// TestLlamaGuardScreener_Safe verifies that messages classified as safe pass
+// through the screener and are not blocked.
+func TestLlamaGuardScreener_Safe(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Verify request method and content type.
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
 
-func (m *mockChecker) Check(ctx context.Context, message string) (*safety.Result, error) {
-	if m.err != nil {
-		return nil, m.err
-	}
-	return m.result, nil
-}
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		if body["text"] != "Hello, how are you?" {
+			t.Errorf("expected text 'Hello, how are you?', got %q", body["text"])
+		}
 
-func TestCheckSafe(t *testing.T) {
-	mock := &mockChecker{result: &safety.Result{Safe: true}}
-	safe, category, err := safety.Check(context.Background(), mock, "Hello")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"safe":     true,
+			"category": "",
+			"reason":   "",
+		})
+	}))
+	defer server.Close()
+
+	screener := safety.NewLlamaGuardScreener(server.URL)
+	result, err := screener.Screen(context.Background(), "Hello, how are you?")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if !safe {
-		t.Error("expected safe=true, got false")
+	if !result.Safe {
+		t.Errorf("expected Safe=true, got Safe=%v", result.Safe)
 	}
-	if category != "" {
-		t.Errorf("expected empty category, got %q", category)
+	if result.Category != "" {
+		t.Errorf("expected empty category, got %q", result.Category)
 	}
 }
 
-func TestCheckUnsafe(t *testing.T) {
-	mock := &mockChecker{result: &safety.Result{Safe: false, Category: "S2"}}
-	safe, category, err := safety.Check(context.Background(), mock, "harmful")
+// TestLlamaGuardScreener_Unsafe verifies that messages classified as unsafe
+// are flagged with the appropriate category and reason.
+func TestLlamaGuardScreener_Unsafe(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"safe":     false,
+			"category": "S3",
+			"reason":   "Hate speech detected",
+		})
+	}))
+	defer server.Close()
+
+	screener := safety.NewLlamaGuardScreener(server.URL)
+	result, err := screener.Screen(context.Background(), "bad content")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if safe {
-		t.Error("expected safe=false, got true")
+	if result.Safe {
+		t.Errorf("expected Safe=false, got Safe=%v", result.Safe)
 	}
-	if category != "S2" {
-		t.Errorf("expected category='S2', got %q", category)
+	if result.Category != "S3" {
+		t.Errorf("expected Category='S3', got %q", result.Category)
+	}
+	if result.Reason != "Hate speech detected" {
+		t.Errorf("expected Reason='Hate speech detected', got %q", result.Reason)
 	}
 }
 
-func TestCheckUnsafeNoCategory(t *testing.T) {
-	mock := &mockChecker{result: &safety.Result{Safe: false}}
-	safe, category, err := safety.Check(context.Background(), mock, "bad")
+// TestLlamaGuardScreener_ServerError verifies fail-open behavior: when the
+// screener endpoint returns an error (non-200 status), the message is treated
+// as safe so the gateway remains operational.
+func TestLlamaGuardScreener_ServerError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	screener := safety.NewLlamaGuardScreener(server.URL)
+	result, err := screener.Screen(context.Background(), "anything")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if safe {
-		t.Error("expected safe=false, got true")
-	}
-	if category != "" {
-		t.Errorf("expected empty category, got %q", category)
+	if !result.Safe {
+		t.Errorf("expected fail-open Safe=true on server error, got Safe=%v", result.Safe)
 	}
 }
 
-func TestCheckError(t *testing.T) {
-	mock := &mockChecker{err: context.DeadlineExceeded}
-	_, _, err := safety.Check(context.Background(), mock, "timeout")
-	if err == nil {
-		t.Fatal("expected error, got nil")
+// TestLlamaGuardScreener_NetworkError verifies fail-open behavior: when the
+// screener endpoint is unreachable (connection refused), the message is treated
+// as safe.
+func TestLlamaGuardScreener_NetworkError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]interface{}{"safe": true})
+	}))
+	// Close the server immediately so the next request fails to connect.
+	server.Close()
+
+	screener := safety.NewLlamaGuardScreener(server.URL)
+	result, err := screener.Screen(context.Background(), "anything")
+	if err != nil {
+		t.Fatalf("unexpected error (should fail open): %v", err)
+	}
+	if !result.Safe {
+		t.Errorf("expected fail-open Safe=true on connection refused, got Safe=%v", result.Safe)
 	}
 }
 
-func TestRefusalTextIsNotEmpty(t *testing.T) {
-	if safety.RefusalText == "" {
-		t.Error("RefusalText must not be empty")
+// TestLlamaGuardScreener_InvalidJSON verifies fail-open behavior: when the
+// screener returns invalid JSON, the message is treated as safe.
+func TestLlamaGuardScreener_InvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("not valid json"))
+	}))
+	defer server.Close()
+
+	screener := safety.NewLlamaGuardScreener(server.URL)
+	result, err := screener.Screen(context.Background(), "anything")
+	if err != nil {
+		t.Fatalf("unexpected error (should fail open): %v", err)
+	}
+	if !result.Safe {
+		t.Errorf("expected fail-open Safe=true on invalid JSON, got Safe=%v", result.Safe)
+	}
+}
+
+// TestParseCategory verifies that ParseCategory returns appropriate refusal
+// messages for various result states.
+func TestParseCategory(t *testing.T) {
+	tests := []struct {
+		name string
+		r    *safety.Result
+		want string
+	}{
+		{
+			name: "nil result",
+			r:    nil,
+			want: "",
+		},
+		{
+			name: "safe result",
+			r:    &safety.Result{Safe: true},
+			want: "",
+		},
+		{
+			name: "unsafe with reason",
+			r:    &safety.Result{Safe: false, Reason: "Hate speech detected"},
+			want: "I'm not able to help with that request. (Hate speech detected)",
+		},
+		{
+			name: "unsafe with category only",
+			r:    &safety.Result{Safe: false, Category: "S3"},
+			want: "I'm not able to help with that request. (category: S3)",
+		},
+		{
+			name: "unsafe with both",
+			r:    &safety.Result{Safe: false, Category: "S3", Reason: "Hate speech"},
+			want: "I'm not able to help with that request. (Hate speech)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := safety.ParseCategory(tt.r)
+			if got != tt.want {
+				t.Errorf("ParseCategory() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

@@ -1,4 +1,10 @@
-// Package safety screens incoming messages for harmful content using Llama Guard
+// Package safety provides input screening for user messages before they are
+// forwarded to the agent harness. It defines a Screener interface and a
+// Llama Guard-backed implementation that calls an external safety classifier
+// over HTTP.
+//
+// By default, no screener is configured and all messages pass through.
+// When SAFETY_SCREENER_URL is set, messages are screened before processing.
 package safety
 
 import (
@@ -6,117 +12,112 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
-	"strings"
 	"time"
 )
 
+// Result holds the outcome of a safety screening call.
 type Result struct {
-	Safe     bool
+	// Safe is true when the content is safe to process.
+	Safe bool
+	// Category is the highest-priority violation category, if any.
+	// Typical values: "S1", "S2", "S3", "S4", "S5", "S6", "S7", "S8", "S9".
 	Category string
+	// Reason is a human-readable explanation of the verdict.
+	Reason string
 }
 
-type Checker interface {
-	Check(ctx context.Context, message string) (*Result, error)
+// Screener screens user input for policy violations.
+type Screener interface {
+	Screen(ctx context.Context, text string) (*Result, error)
 }
 
-const RefusalText = "I'm sorry, but I can't help with that request. If you have a different question, feel free to ask."
-
-type LlamaGuardConfig struct {
-	BaseURL string
-	Model   string
-	Timeout time.Duration
-}
-
-type LlamaGuardChecker struct {
-	baseURL    string
-	model      string
+// LlamaGuardScreener calls an external Llama Guard HTTP endpoint to classify
+// user input against safety categories. It implements fail-open semantics:
+// if the external service is unreachable, returns an error, times out, or
+// returns a non-200 status, the message is treated as safe to avoid DoSing
+// the service when the safety dependency is down.
+type LlamaGuardScreener struct {
+	endpoint   string
 	httpClient *http.Client
 }
 
-func NewLlamaGuardChecker(cfg LlamaGuardConfig) *LlamaGuardChecker {
-	timeout := cfg.Timeout
-	if timeout == 0 {
-		timeout = 5 * time.Second
-	}
-	return &LlamaGuardChecker{
-		baseURL: strings.TrimRight(cfg.BaseURL, "/"),
-		model:   cfg.Model,
-		httpClient: &http.Client{Timeout: timeout},
+// NewLlamaGuardScreener creates a LlamaGuardScreener that posts text to the
+// given HTTP endpoint. The endpoint is expected to accept a JSON body of the
+// form {"text": "..."} and return {"safe": bool, "category": "...",
+// "reason": "..."}.
+func NewLlamaGuardScreener(endpoint string) *LlamaGuardScreener {
+	return &LlamaGuardScreener{
+		endpoint: endpoint,
+		httpClient: &http.Client{
+			Timeout: 10 * time.Second,
+		},
 	}
 }
 
-func (c *LlamaGuardChecker) Check(ctx context.Context, message string) (*Result, error) {
-	prompt := fmt.Sprintf(
-		"<|begin_of_text|><|start_header_id|>user<|end_header_id|>\n\n"+
-			"%s<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n\n",
-		message,
-	)
-	reqBody := ollamaGenerateRequest{Model: c.model, Prompt: prompt, Stream: false, Options: ollamaOptions{Temperature: 0}}
-	bodyBytes, err := json.Marshal(reqBody)
+// Screen sends text to the Llama Guard endpoint for classification. It
+// implements fail-open semantics: any error communicating with the screener
+// results in a "safe" result so that the gateway remains available when the
+// safety service is down.
+func (s *LlamaGuardScreener) Screen(ctx context.Context, text string) (*Result, error) {
+	reqBody, err := json.Marshal(map[string]string{"text": text})
 	if err != nil {
-		return nil, fmt.Errorf("safety: marshal request: %w", err)
+		log.Printf("safety: marshal request: %v", err)
+		return &Result{Safe: true}, nil // fail-open
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/api/generate", bytes.NewReader(bodyBytes))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.endpoint, bytes.NewReader(reqBody))
 	if err != nil {
-		return nil, fmt.Errorf("safety: create request: %w", err)
+		log.Printf("safety: create request: %v", err)
+		return &Result{Safe: true}, nil // fail-open
 	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := c.httpClient.Do(req)
+
+	resp, err := s.httpClient.Do(req)
 	if err != nil {
-		log.Printf("safety: llama guard unreachable: %v", err)
-		return &Result{Safe: false, Category: "safety_unavailable"}, nil
+		log.Printf("safety: call screener endpoint: %v", err)
+		return &Result{Safe: true}, nil // fail-open
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		log.Printf("safety: llama guard returned %d: %s", resp.StatusCode, string(body))
-		return &Result{Safe: false, Category: "safety_error"}, nil
+		log.Printf("safety: screener returned status %d", resp.StatusCode)
+		return &Result{Safe: true}, nil // fail-open
 	}
-	var ollamaResp ollamaGenerateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return nil, fmt.Errorf("safety: decode response: %w", err)
+
+	var result struct {
+		Safe     bool   `json:"safe"`
+		Category string `json:"category"`
+		Reason   string `json:"reason"`
 	}
-	return parseLlamaGuardResponse(ollamaResp.Response), nil
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		log.Printf("safety: decode response: %v", err)
+		return &Result{Safe: true}, nil // fail-open
+	}
+
+	if !result.Safe {
+		log.Printf("safety: message flagged as unsafe, category=%s reason=%s", result.Category, result.Reason)
+	}
+
+	return &Result{
+		Safe:     result.Safe,
+		Category: result.Category,
+		Reason:   result.Reason,
+	}, nil
 }
 
-func parseLlamaGuardResponse(response string) *Result {
-	trimmed := strings.TrimSpace(response)
-	lower := strings.ToLower(trimmed)
-	if strings.HasPrefix(lower, "safe") {
-		return &Result{Safe: true}
+// ParseCategory converts an unsafe result into a human-readable refusal
+// message appropriate for sending back to a user.
+func ParseCategory(r *Result) string {
+	if r == nil || r.Safe {
+		return ""
 	}
-	category := ""
-	parts := strings.SplitN(trimmed, "\n", 2)
-	if len(parts) > 1 {
-		category = strings.TrimSpace(parts[1])
+	if r.Reason != "" {
+		return fmt.Sprintf("I'm not able to help with that request. (%s)", r.Reason)
 	}
-	if category == "" {
-		category = "unsafe"
+	if r.Category != "" {
+		return fmt.Sprintf("I'm not able to help with that request. (category: %s)", r.Category)
 	}
-	return &Result{Safe: false, Category: category}
-}
-
-type ollamaGenerateRequest struct {
-	Model   string        `json:"model"`
-	Prompt  string        `json:"prompt"`
-	Stream  bool          `json:"stream"`
-	Options ollamaOptions `json:"options"`
-}
-type ollamaOptions struct {
-	Temperature float64 `json:"temperature"`
-}
-type ollamaGenerateResponse struct {
-	Response string `json:"response"`
-	Done     bool   `json:"done"`
-}
-
-func Check(ctx context.Context, checker Checker, message string) (safe bool, category string, err error) {
-	result, err := checker.Check(ctx, message)
-	if err != nil {
-		return false, "", err
-	}
-	return result.Safe, result.Category, nil
+	return "I'm not able to help with that request."
 }

@@ -1,6 +1,9 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,6 +87,26 @@ func TestBuildHTTPRuntimeAssemblesRunnerSubagentsAndHTTPServer(t *testing.T) {
 	if runtime.httpServer.Handler == nil {
 		t.Fatal("expected http server handler")
 	}
+	if runtime.mcpServer == nil {
+		t.Fatal("expected mcp server to be initialized")
+	}
+
+	// Verify the /mcp endpoint is reachable via the top-level mux.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(`{"jsonrpc":"2.0","method":"initialize","id":1}`))
+	runtime.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST /mcp (initialize): expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	// Verify the main API still works via the top-level mux.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	runtime.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK && rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /healthz: expected 200, got %d", rec.Code)
+	}
+
 	callbackStarter.mu.Lock()
 	boundRunner := callbackStarter.runner
 	callbackStarter.mu.Unlock()

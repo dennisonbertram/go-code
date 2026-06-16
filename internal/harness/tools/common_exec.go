@@ -33,6 +33,14 @@ func runCommand(ctx context.Context, timeout time.Duration, command string, args
 
 	output := mergeCommandStreams(strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
 	if err != nil && exitCode == -1 {
+		if timedOut {
+			// Process was killed by the function's own context timeout.
+			// The timeout is already communicated via the timedOut boolean,
+			// so return nil error here. Callers inspect timedOut to detect
+			// the timeout condition, matching the bash_manager.go pattern.
+			return output, exitCode, timedOut, nil
+		}
+		// Process was killed by an external signal (e.g. OOM killer).
 		return output, exitCode, timedOut, fmt.Errorf("run command: %w", err)
 	}
 	return output, exitCode, timedOut, nil
