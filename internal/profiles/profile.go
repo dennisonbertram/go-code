@@ -69,6 +69,7 @@ type ProfileMeta struct {
 type ProfileRunner struct {
 	Model        string  `toml:"model"`
 	MaxSteps     int     `toml:"max_steps"`
+	MaxTurns     int     `toml:"max_turns"`
 	MaxCostUSD   float64 `toml:"max_cost_usd"`
 	SystemPrompt string  `toml:"system_prompt"`
 	// ReasoningEffort is the reasoning effort hint forwarded to the provider.
@@ -109,6 +110,7 @@ func (p *Profile) ApplyValues() ProfileValues {
 	return ProfileValues{
 		Model:           p.Runner.Model,
 		MaxSteps:        p.Runner.MaxSteps,
+		MaxTurns:        p.Runner.MaxTurns,
 		MaxCostUSD:      p.Runner.MaxCostUSD,
 		SystemPrompt:    p.Runner.SystemPrompt,
 		AllowedTools:    append([]string(nil), p.Tools.Allow...),
@@ -126,6 +128,7 @@ func (p *Profile) ApplyValues() ProfileValues {
 type ProfileValues struct {
 	Model        string
 	MaxSteps     int
+	MaxTurns     int
 	MaxCostUSD   float64
 	SystemPrompt string
 	AllowedTools []string

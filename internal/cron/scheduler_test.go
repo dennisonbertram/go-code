@@ -488,3 +488,188 @@ func TestFireJob_CreateExecutionError(t *testing.T) {
 	s.fireJob(job)
 	s.wg.Wait()
 }
+
+// --- Jitter integration tests ---
+
+func TestAddJob_CachesJitterOffset(t *testing.T) {
+	cfg := SchedulerConfig{
+		Jitter: DefaultJitterConfig(),
+	}
+	s := NewScheduler(&mockStore{}, &mockExecutor{}, RealClock{}, cfg)
+	job := testJob("jitter-cache-test")
+
+	if err := s.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	s.mu.Lock()
+	cached, exists := s.jitterCache[jitterCacheKey(job.ID, job.Schedule)]
+	s.mu.Unlock()
+
+	if !exists {
+		t.Fatal("expected jitter cache entry after AddJob")
+	}
+	// Jitter should be non-zero when enabled with default config.
+	if cached == 0 {
+		t.Fatal("expected non-zero jitter offset when jitter is enabled")
+	}
+}
+
+func TestAddJob_JitterDisabledReturnsZero(t *testing.T) {
+	cfg := SchedulerConfig{
+		Jitter: JitterConfig{
+			Enabled: false,
+			MinSec:  60,
+			MaxSec:  300,
+		},
+	}
+	s := NewScheduler(&mockStore{}, &mockExecutor{}, RealClock{}, cfg)
+	job := testJob("jitter-disabled")
+
+	if err := s.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	s.mu.Lock()
+	cached := s.jitterCache[jitterCacheKey(job.ID, job.Schedule)]
+	s.mu.Unlock()
+
+	if cached != 0 {
+		t.Fatalf("expected zero jitter when disabled, got %v", cached)
+	}
+}
+
+func TestNewScheduler_DefaultJitterConfigUsed(t *testing.T) {
+	// SchedulerConfig{} has zero Jitter fields; NewScheduler should apply defaults.
+	s := NewScheduler(&mockStore{}, &mockExecutor{}, RealClock{}, SchedulerConfig{})
+
+	if !s.jitterCfg.Enabled {
+		t.Error("expected default jitter to be enabled")
+	}
+	if s.jitterCfg.MinSec != 60 {
+		t.Errorf("expected MinSec 60, got %d", s.jitterCfg.MinSec)
+	}
+	if s.jitterCfg.MaxSec != 300 {
+		t.Errorf("expected MaxSec 300, got %d", s.jitterCfg.MaxSec)
+	}
+}
+
+func TestNewScheduler_CustomJitterConfig(t *testing.T) {
+	cfg := SchedulerConfig{
+		Jitter: JitterConfig{
+			Enabled: false,
+			MinSec:  30,
+			MaxSec:  120,
+		},
+	}
+	s := NewScheduler(&mockStore{}, &mockExecutor{}, RealClock{}, cfg)
+
+	if s.jitterCfg.Enabled {
+		t.Error("expected custom jitter to be disabled")
+	}
+	if s.jitterCfg.MinSec != 30 {
+		t.Errorf("expected MinSec 30, got %d", s.jitterCfg.MinSec)
+	}
+}
+
+func TestUpdateJobSchedule_RecomputesJitter(t *testing.T) {
+	cfg := SchedulerConfig{
+		Jitter: DefaultJitterConfig(),
+	}
+	s := NewScheduler(&mockStore{}, &mockExecutor{}, RealClock{}, cfg)
+	job := testJob("update-jitter")
+	originalSchedule := job.Schedule
+
+	if err := s.AddJob(job); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	s.mu.Lock()
+	cached1 := s.jitterCache[jitterCacheKey(job.ID, originalSchedule)]
+	s.mu.Unlock()
+
+	// Change schedule and update.
+	job.Schedule = "0 * * * *"
+	if err := s.UpdateJobSchedule(job); err != nil {
+		t.Fatalf("UpdateJobSchedule: %v", err)
+	}
+
+	s.mu.Lock()
+	cached2 := s.jitterCache[jitterCacheKey(job.ID, job.Schedule)]
+	s.mu.Unlock()
+
+	if cached2 == 0 {
+		t.Fatal("expected non-zero jitter after schedule update")
+	}
+	// The new schedule should have a different jitter value (deterministic but almost certainly different).
+	if cached1 == cached2 && originalSchedule != job.Schedule {
+		t.Logf("note: jitter unchanged after schedule change (collision, unlikely)")
+	}
+}
+
+func TestFireJob_JitterAppliedToExecutionTiming(t *testing.T) {
+	// Verify that fireJob calls sleepFn with the cached jitter offset.
+	var createdExec Execution
+	var sleptDuration time.Duration
+
+	store := &mockStore{
+		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
+			createdExec = exec
+			return exec, nil
+		},
+		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
+			return nil
+		},
+		UpdateJobFunc: func(ctx context.Context, job Job) error {
+			return nil
+		},
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {
+			return "ok", nil
+		},
+	}
+
+	// Use a config with jitter enabled.
+	cfg := SchedulerConfig{Jitter: DefaultJitterConfig()}
+	// Use a clock time where adding 1234ms doesn't land on minute 0 or 30.
+	clock := newMockClock(time.Date(2025, 1, 1, 12, 15, 0, 0, time.UTC))
+	s := NewScheduler(store, executor, clock, cfg)
+
+	// Replace sleepFn with a spy that records the duration without sleeping.
+	s.sleepFn = func(d time.Duration) {
+		sleptDuration = d
+	}
+
+	// Pre-populate the jitter cache with a known value (as AddJob would).
+	job := testJob("jitter-fire")
+	knownJitter := 1234 * time.Millisecond
+	s.mu.Lock()
+	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = knownJitter
+	s.mu.Unlock()
+
+	// fireJob should call sleepFn with the jitter duration, then proceed.
+	s.fireJob(job)
+	s.wg.Wait()
+
+	if createdExec.JobID != job.ID {
+		t.Fatalf("expected execution for job %s, got %s", job.ID, createdExec.JobID)
+	}
+	if sleptDuration != knownJitter {
+		t.Fatalf("expected sleepFn to be called with %v, got %v", knownJitter, sleptDuration)
+	}
+}
+
+func TestJitter_SameJobSameSchedule_SameJitter(t *testing.T) {
+	// Determinism: same job ID + schedule always produces the same jitter.
+	cfg := DefaultJitterConfig()
+	jobID := "deterministic-job"
+	schedule := "*/10 * * * *"
+
+	j1 := computeJitter(cfg, jobID, schedule)
+	j2 := computeJitter(cfg, jobID, schedule)
+
+	if j1 != j2 {
+		t.Fatalf("same inputs should produce same jitter: %v vs %v", j1, j2)
+	}
+}

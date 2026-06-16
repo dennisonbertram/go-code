@@ -425,6 +425,9 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 	if req.MaxSteps < 0 {
 		return Run{}, fmt.Errorf("max_steps must be >= 0 (0 means use runner default)")
 	}
+	if req.MaxTurns < 0 {
+		return Run{}, fmt.Errorf("max_turns must be >= 0 (0 means unlimited)")
+	}
 	if req.MaxCostUSD < 0 {
 		return Run{}, fmt.Errorf("max_cost_usd must be >= 0 (0 means unlimited)")
 	}
@@ -781,13 +784,19 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 		// (or container/vm path) instead of the harnessd's startup workspace.
 		// Without this, the workspace.provisioned event is cosmetic — only AGENTS.md
 		// loading respected the new path.
-		if wsPath != "" {
+		if wsPath != "" && effectiveWorkspaceType != "vm" {
 			perRun := NewDefaultRegistryWithOptions(wsPath, r.config.BaseRegistryOptions)
 			r.mu.Lock()
 			if st, ok := r.runs[runID]; ok {
 				st.perRunTools = perRun
 			}
 			r.mu.Unlock()
+		}
+		if wsPath != "" && effectiveWorkspaceType == "vm" {
+			r.emit(runID, EventPromptWarning, map[string]any{
+				"code":    "vm_workspace_tool_routing",
+				"message": fmt.Sprintf("VM workspace detected: tool execution runs on host, not inside the guest VM. Filesystem tools (write, edit, bash) operate on the host workspace. Full VM tool routing is tracked in issue #564."),
+			})
 		}
 	}
 
@@ -976,8 +985,8 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 	}, nil
 }
 
-func (r *Runner) runStepEngine(ctx context.Context, runID string, req RunRequest, preflight *runPreflightResult, effectiveMaxSteps int, runForkDepth int, effectiveApprovalPolicy ApprovalPolicy, effectiveSandboxScope htools.SandboxScope) {
-	newStepEngine(r, ctx, runID, req, preflight, effectiveMaxSteps, runForkDepth, effectiveApprovalPolicy, effectiveSandboxScope).run()
+func (r *Runner) runStepEngine(ctx context.Context, runID string, req RunRequest, preflight *runPreflightResult, effectiveMaxSteps int, effectiveMaxTurns int, runForkDepth int, effectiveApprovalPolicy ApprovalPolicy, effectiveSandboxScope htools.SandboxScope) {
+	newStepEngine(r, ctx, runID, req, preflight, effectiveMaxSteps, effectiveMaxTurns, runForkDepth, effectiveApprovalPolicy, effectiveSandboxScope).run()
 }
 
 func mapPromptExtensions(input *PromptExtensions) systemprompt.Extensions {
@@ -1370,7 +1379,10 @@ func (r *Runner) Subscribe(runID string) ([]Event, <-chan Event, func(), error) 
 // complete, returning the run's final output. This satisfies the AgentRunner
 // interface required by the skill tool for plain (non-forked) sub-runs.
 func (r *Runner) RunPrompt(ctx context.Context, prompt string) (string, error) {
-	return r.runPromptWithRequest(ctx, RunRequest{Prompt: prompt}, "RunPrompt")
+	return r.runPromptWithRequest(ctx, RunRequest{
+		Prompt:    prompt,
+		ForkDepth: htools.ForkDepthFromContext(ctx),
+	}, "RunPrompt")
 }
 
 // RunPromptWithAllowedTools starts a new run like RunPrompt while preserving
@@ -1379,6 +1391,7 @@ func (r *Runner) RunPromptWithAllowedTools(ctx context.Context, prompt string, a
 	return r.runPromptWithRequest(ctx, RunRequest{
 		Prompt:       prompt,
 		AllowedTools: append([]string(nil), allowedTools...),
+		ForkDepth:    htools.ForkDepthFromContext(ctx),
 	}, "RunPromptWithAllowedTools")
 }
 
@@ -1430,6 +1443,9 @@ func (r *Runner) RunForkedSkill(ctx context.Context, config htools.ForkConfig) (
 	}
 	if config.MaxSteps > 0 {
 		req.MaxSteps = config.MaxSteps
+	}
+	if config.MaxTurns > 0 {
+		req.MaxTurns = config.MaxTurns
 	}
 
 	// Inherit SystemPrompt, Permissions, and ProfileName from the parent run when possible.
@@ -1671,11 +1687,20 @@ func (r *Runner) execute(runID string, req RunRequest) {
 	}
 	// effectiveMaxSteps == 0 means unlimited.
 
+	// Resolve the effective turns limit for this run.
+	// Priority: per-run request > runner config.
+	// 0 means "no limit" once chosen. MaxTurns counts assistant LLM turns.
+	effectiveMaxTurns := r.config.MaxTurns
+	if req.MaxTurns > 0 {
+		effectiveMaxTurns = req.MaxTurns
+	}
+	// effectiveMaxTurns == 0 means unlimited.
+
 	// runForkDepth is the nesting depth for this run. 0 = root, >0 = subagent.
 	// Captured once from req to avoid repeated lock acquisitions in the step loop.
 	runForkDepth := req.ForkDepth
 
-	r.runStepEngine(ctx, runID, req, preflight, effectiveMaxSteps, runForkDepth, effectiveApprovalPolicy, htools.SandboxScope(effectivePermissions.Sandbox))
+	r.runStepEngine(ctx, runID, req, preflight, effectiveMaxSteps, effectiveMaxTurns, runForkDepth, effectiveApprovalPolicy, htools.SandboxScope(effectivePermissions.Sandbox))
 	return
 }
 
@@ -2661,6 +2686,58 @@ func (r *Runner) failRunMaxSteps(runID string, maxSteps int) {
 		"error":        err.Error(),
 		"reason":       "max_steps_reached",
 		"max_steps":    maxSteps,
+		"usage_totals": usageTotals,
+		"cost_totals":  costTotals,
+	})
+
+	// S3 backup: upload JSONL after the terminal event is emitted.
+	// Runs in a goroutine; errors are non-fatal.
+	r.backupRunToS3(runID)
+}
+
+// failRunMaxTurns is a specialisation of failRun used when the step loop
+// exhausts its MaxTurns budget. The run.failed event carries a structured
+// reason="max_turns_exhausted" and max_turns field so clients can distinguish
+// this terminal state from other failures without parsing the error string.
+func (r *Runner) failRunMaxTurns(runID string, maxTurns int) {
+	err := fmt.Errorf("max turns (%d) reached", maxTurns)
+
+	// Clean up per-run workspace before terminal event (issue #324).
+	r.runWorkspaceCleanup(runID)
+
+	// Clean up deferred tool activations for this run
+	r.activations.Cleanup(runID)
+
+	// Clean up skill constraints for this run
+	r.skillConstraints.Cleanup(runID)
+
+	// Clean up per-run MCP servers
+	r.closeScopedMCP(runID)
+	// Audit trail: write run.failed and close the writer.
+	if r.config.AuditTrailEnabled {
+		r.writeAudit(runID, audittrail.AuditRecord{
+			RunID:     runID,
+			EventType: string(EventRunFailed),
+			Payload: map[string]any{
+				"error":  err.Error(),
+				"reason": "max_turns_exhausted",
+				"status": "failed",
+			},
+		})
+		r.closeAuditWriter(runID)
+	}
+
+	r.setStatus(runID, RunStatusFailed, "", err.Error())
+
+	usageTotals, costTotals := r.accountingTotals(runID)
+
+	// Profile run history: persist partial record (max turns exhausted) for analysis.
+	r.persistProfileRun(runID, "partial", costTotals.CostUSDTotal)
+
+	r.emit(runID, EventRunFailed, map[string]any{
+		"error":        err.Error(),
+		"reason":       "max_turns_exhausted",
+		"max_turns":    maxTurns,
 		"usage_totals": usageTotals,
 		"cost_totals":  costTotals,
 	})

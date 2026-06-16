@@ -194,8 +194,13 @@ func buildAnalyzePrompt(bundle TraceBundle) string {
 
 	if len(bundle.AntiPatterns) > 0 {
 		b.WriteString("\n## Anti-Patterns Detected\n")
+		b.WriteString("Named anti-pattern types include: retry_loop (mechanical), hedge_assertion, unverified_file_claim, premature_completion, skipped_diagnostic, architecture_assumption (behavioral).\n")
 		for _, ap := range bundle.AntiPatterns {
-			fmt.Fprintf(&b, "- [step %d] %s: %s\n", ap.StepIdx, ap.Type, ap.Message)
+			ev := ""
+			if ap.Evidence != "" {
+				ev = fmt.Sprintf(" [evidence: %s]", ap.Evidence)
+			}
+			fmt.Fprintf(&b, "- [step %d] %s: %s%s\n", ap.StepIdx, ap.Type, ap.Message, ev)
 		}
 	}
 
