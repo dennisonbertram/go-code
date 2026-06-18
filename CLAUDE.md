@@ -8,6 +8,20 @@ This repository is a Go coding harness with a streamed run API, a CLI smoke-test
 - The public-facing docs should stay aligned with the current routes, run request fields, event names, tool catalog, and environment variables.
 - If a docs change reveals a mismatch, update the docs rather than preserving stale prose.
 
+## Workflow Engine (`internal/workflow/`)
+
+A Claude Code-style workflow orchestration engine for composing multi-agent pipelines:
+
+- **Script-based**: Register `Script` functions (Go `func(ctx *Context) (any, error)`) with `Engine.Register(name, script)`.
+- **Core primitives**: `ctx.Agent()` (sub-agent), `ctx.Parallel()` (barrier), `ctx.Pipeline()` (no-barrier stages), `ctx.Phase()` (progress), `ctx.Log()` (messages), `ctx.Workflow()` (nested).
+- **Budget tracking**: `ctx.Budget` with `Spent()`, `Remaining()`, `Spend()`, `Clone()` — shared across nested workflows.
+- **Schema validation**: `workflow.ValidateSchema(schema, data)` and `workflow.ParseStructuredOutput(output, schema)` with JSON Schema subset + markdown extraction.
+- **Concurrency**: Semaphore-capped at `min(16, NumCPU-2)`. Only `Agent()` acquires the semaphore — `Parallel`/`Pipeline` goroutines do not, preventing deadlocks when thunks/stages call `Agent()`.
+- **Events**: `workflow.started`, `workflow.agent.{started,completed,failed}`, `workflow.phase.started`, `workflow.log`, `workflow.{completed,failed}` — subscribable via `Engine.Subscribe(runID)`.
+- **Resume**: Failed runs can be resumed via `Engine.Resume(ctx, runID, args)`.
+- **Storage**: In-memory by default; pluggable `Store` interface for persistence.
+- **Tests**: `internal/workflow/engine_test.go` (unit) and `internal/workflow/comprehensive_test.go` (22 scenario tests covering all primitives, combinations, edge cases, and real-world patterns).
+
 ## Provider Note
 
 - OpenAI is the primary provider path.
