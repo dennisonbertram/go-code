@@ -22,6 +22,22 @@ A Claude Code-style workflow orchestration engine for composing multi-agent pipe
 - **Storage**: In-memory by default; pluggable `Store` interface for persistence.
 - **Tests**: `internal/workflow/engine_test.go` (unit) and `internal/workflow/comprehensive_test.go` (22 scenario tests covering all primitives, combinations, edge cases, and real-world patterns).
 
+### Script Workflow HTTP API
+
+The workflow engine is exposed via HTTP routes in the server (`internal/server/http_script_workflows.go`):
+
+- `GET /v1/script-workflows` — list registered script workflows
+- `GET /v1/script-workflows/{name}` — get workflow metadata
+- `POST /v1/script-workflows/{name}/runs` — start a workflow run with args
+- `GET /v1/script-workflow-runs/{id}` — get run status and result
+- `GET /v1/script-workflow-runs/{id}/events` — SSE event stream
+- `POST /v1/script-workflow-runs/{id}/resume` — resume a failed run
+
+Wiring: `ServerOptions.ScriptWorkflows` accepts a `scriptWorkflowManager` interface.
+15 POC tests in `internal/server/http_script_workflows_test.go` and `*_advanced_test.go`
+cover CRUD, SSE streaming, resume, adversarial verify, loop-until-dry, concurrent fan-out,
+and error recovery chains.
+
 ## Provider Note
 
 - OpenAI is the primary provider path.
