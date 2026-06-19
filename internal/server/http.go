@@ -67,6 +67,7 @@ type ServerOptions struct {
 	Todos             deferred.TodoManager
 	Recipes           []recipe.Recipe
 	Workflows         workflowManager
+	ScriptWorkflows   scriptWorkflowManager
 	Networks          networkManager
 	Sourcegraph       sourcegraphConfig
 	HTTPClient        *http.Client
@@ -121,6 +122,7 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		todos:             opts.Todos,
 		recipes:           opts.Recipes,
 		workflows:         opts.Workflows,
+		scriptWorkflows:   opts.ScriptWorkflows,
 		networks:          opts.Networks,
 		sourcegraph:       opts.Sourcegraph,
 		httpClient:        opts.HTTPClient,
@@ -207,6 +209,7 @@ func (s *Server) buildMux() *http.ServeMux {
 	mux.Handle("/v1/recipes", auth(read(http.HandlerFunc(s.handleRecipes))))
 	mux.Handle("/v1/recipes/", auth(read(http.HandlerFunc(s.handleRecipes))))
 	s.registerWorkflowRoutes(mux, auth)
+	s.registerScriptWorkflowRoutes(mux, auth)
 	s.registerNetworkRoutes(mux, auth)
 	s.registerCheckpointRoutes(mux, auth)
 	// POST /v1/search/code — requires runs:write (executes a search, proxying external service).
@@ -263,8 +266,9 @@ type Server struct {
 
 	// Recipe listing (issue #147)
 	recipes   []recipe.Recipe
-	workflows workflowManager
-	networks  networkManager
+	workflows       workflowManager
+	scriptWorkflows scriptWorkflowManager
+	networks        networkManager
 
 	// Sourcegraph proxy (issue #150)
 	sourcegraph sourcegraphConfig
