@@ -116,7 +116,7 @@ func TestCloudPOC2_MultipleBackends(t *testing.T) {
 	}
 
 	// Wait for all to complete
-	time.Sleep(time.Second)
+	time.Sleep(3 * time.Second)
 
 	for _, id := range jobIDs {
 		job, err := sched.GetJob(id)
@@ -251,10 +251,16 @@ func TestCloudPOC5_ConcurrentJobs(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Wait for all to complete
-	time.Sleep(time.Second)
-
+	// Wait for all to complete with polling
+	deadline := time.Now().Add(10 * time.Second)
 	for _, id := range jobIDs {
+		for time.Now().Before(deadline) {
+			job, err := sched.GetJob(id)
+			if err == nil && (job.Status == cloudscheduler.JobStatusCompleted || job.Status == cloudscheduler.JobStatusFailed) {
+				break
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
 		job, err := sched.GetJob(id)
 		require.NoError(t, err)
 		assert.Equal(t, cloudscheduler.JobStatusCompleted, job.Status, "job %s should complete", id)
@@ -437,8 +443,23 @@ func TestCloudPOC10_FullCloudLifecycle(t *testing.T) {
 		jobIDs = append(jobIDs, created.ID)
 	}
 
-	// Wait for all to complete
-	time.Sleep(2 * time.Second)
+	// Wait for all to complete with polling
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		all := sched.ListJobs("")
+		if len(all) >= 5 {
+			completed := 0
+			for _, j := range all {
+				if j.Status == cloudscheduler.JobStatusCompleted {
+					completed++
+				}
+			}
+			if completed == 5 {
+				break
+			}
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
 
 	// Verify all completed
 	for _, id := range jobIDs {

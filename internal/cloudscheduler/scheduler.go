@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -92,6 +93,7 @@ type Scheduler struct {
 	events    map[string][]Event
 	subs      map[string]map[chan Event]struct{}
 	seqs      map[string]int64
+	idCounter atomic.Int64
 	queue     chan string // job IDs waiting for execution
 	executors map[string]Executor
 	workers   int
@@ -141,9 +143,9 @@ func (s *Scheduler) Submit(job Job) (*Job, error) {
 	if _, ok := s.executors[job.Backend]; !ok {
 		return nil, fmt.Errorf("no executor registered for backend %q", job.Backend)
 	}
-	// Auto-generate ID
+	// Auto-generate unique ID (atomic counter avoids collisions under concurrency)
 	if job.ID == "" {
-		job.ID = fmt.Sprintf("cloudjob-%d", time.Now().UnixNano())
+		job.ID = fmt.Sprintf("cloudjob-%d-%d", time.Now().UnixNano(), s.idCounter.Add(1))
 	}
 	job.Status = JobStatusQueued
 	job.CreatedAt = time.Now().UTC()
