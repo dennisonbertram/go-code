@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"sync"
 	"testing"
@@ -16,10 +17,10 @@ func TestAutoCompact_BelowThreshold(t *testing.T) {
 	// "hello" ≈ 2 tokens, well below threshold.
 	provider := &staticRunnerProvider{result: CompletionResult{Content: "done"}}
 	runner := NewRunner(provider, NewRegistry(), RunnerConfig{
-		DefaultModel:       "test",
-		MaxSteps:           1,
-		AutoCompactEnabled: true,
-		ModelContextWindow: 1000,
+		DefaultModel:         "test",
+		MaxSteps:             1,
+		AutoCompactEnabled:   true,
+		ModelContextWindow:   1000,
 		AutoCompactThreshold: 0.80,
 		AutoCompactKeepLast:  8,
 		AutoCompactMode:      "hybrid",
@@ -431,4 +432,157 @@ func (p *failingSummarizerProvider) Complete(_ context.Context, req CompletionRe
 	// First call succeeds (the actual run), subsequent calls (summarization) also succeed.
 	_ = idx
 	return CompletionResult{Content: "done"}, nil
+}
+
+// ---------------------------------------------------------------------------
+// T9: Auto-compaction triggers under context pressure in a multi-turn run
+//
+// Proves that with a tiny context window (20 tokens, 0.50 threshold), a
+// multi-turn run that accumulates message history fires auto-compaction and
+// emits EventAutoCompactStarted + EventAutoCompactCompleted with meaningful
+// payload (estimated_tokens, context_window, threshold, mode for Started;
+// before_tokens, after_tokens, mode for Completed).  The run must complete.
+//
+// Uses in-package stubs only (stubProvider + registered echo tool).
+// ---------------------------------------------------------------------------
+func TestAutoCompact_T9_MultiTurnContextPressure(t *testing.T) {
+	t.Parallel()
+
+	// Register a minimal echo tool so tool-call turns complete without error.
+	registry := NewRegistry()
+	if err := registry.Register(ToolDefinition{
+		Name:        "echo_t9",
+		Description: "echoes input for T9 compaction test",
+		Parameters:  map[string]any{"type": "object"},
+	}, func(_ context.Context, _ json.RawMessage) (string, error) {
+		// Return a long-ish result to bloat token count across turns.
+		return `{"result":"` + strings.Repeat("ok", 10) + `"}`, nil
+	}); err != nil {
+		t.Fatalf("register tool: %v", err)
+	}
+
+	// Multi-turn provider:
+	//   Turn 1: tool call — adds assistant+tool messages to the transcript.
+	//   Turn 2: tool call — adds another pair, pushing accumulated token count up.
+	//   Turn 3: text "done" — triggers run completion.
+	//
+	// Context window = 20 tokens, threshold = 0.50 → triggers when estimated
+	// tokens > 10.  After 2 tool-call turns the transcript carries user +
+	// assistant(tool_call) + tool_result + assistant(tool_call) + tool_result =
+	// ~5 messages.  Even with a rune/4 estimate the repeated "ok" in tool results
+	// crosses the 10-token threshold, causing auto-compact on turn 3.
+	provider := &stubProvider{turns: []CompletionResult{
+		{
+			ToolCalls: []ToolCall{{
+				ID:        "t9-call-1",
+				Name:      "echo_t9",
+				Arguments: `{}`,
+			}},
+		},
+		{
+			ToolCalls: []ToolCall{{
+				ID:        "t9-call-2",
+				Name:      "echo_t9",
+				Arguments: `{}`,
+			}},
+		},
+		{Content: "done — compaction proven"},
+	}}
+
+	runner := NewRunner(provider, registry, RunnerConfig{
+		DefaultModel:         "test",
+		MaxSteps:             6,
+		AutoCompactEnabled:   true,
+		ModelContextWindow:   20,
+		AutoCompactThreshold: 0.50,
+		AutoCompactKeepLast:  2,
+		AutoCompactMode:      "strip",
+	})
+
+	run, err := runner.StartRun(RunRequest{Prompt: strings.Repeat("context pressure ", 4)})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	// Collect all events via Subscribe, with a generous timeout.
+	events, err := collectRunEvents(t, runner, run.ID)
+	if err != nil {
+		t.Fatalf("collectRunEvents: %v", err)
+	}
+
+	// Run must complete successfully.
+	state, ok := runner.GetRun(run.ID)
+	if !ok {
+		t.Fatal("run not found after completion")
+	}
+	if state.Status != RunStatusCompleted {
+		t.Fatalf("expected run status completed, got %q (error: %s)", state.Status, state.Error)
+	}
+
+	// Locate EventAutoCompactStarted and EventAutoCompactCompleted.
+	var startedEv, completedEv *Event
+	for i := range events {
+		switch events[i].Type {
+		case EventAutoCompactStarted:
+			if startedEv == nil {
+				startedEv = &events[i]
+			}
+		case EventAutoCompactCompleted:
+			if completedEv == nil {
+				completedEv = &events[i]
+			}
+		}
+	}
+
+	// T9 contract: both events must be present.
+	if startedEv == nil {
+		t.Fatal("auto_compact.started was not emitted — compaction did not trigger under context pressure")
+	}
+	if completedEv == nil {
+		t.Fatal("auto_compact.completed was not emitted after compaction started")
+	}
+
+	// auto_compact.started payload must carry the diagnostic fields.
+	for _, key := range []string{"estimated_tokens", "context_window", "threshold", "mode"} {
+		if _, ok := startedEv.Payload[key]; !ok {
+			t.Errorf("auto_compact.started payload missing %q", key)
+		}
+	}
+
+	// auto_compact.completed payload must carry before/after token counts and mode.
+	for _, key := range []string{"before_tokens", "after_tokens", "mode"} {
+		if _, ok := completedEv.Payload[key]; !ok {
+			t.Errorf("auto_compact.completed payload missing %q", key)
+		}
+	}
+
+	// before_tokens must be > 0 (we actually had tokens to compact).
+	beforeTokens, _ := completedEv.Payload["before_tokens"].(int)
+	if beforeTokens <= 0 {
+		t.Errorf("auto_compact.completed before_tokens must be > 0, got %v", completedEv.Payload["before_tokens"])
+	}
+
+	// after_tokens must be >= 0 and <= before_tokens (compaction does not inflate context).
+	afterTokens, _ := completedEv.Payload["after_tokens"].(int)
+	if afterTokens < 0 {
+		t.Errorf("auto_compact.completed after_tokens must be >= 0, got %v", completedEv.Payload["after_tokens"])
+	}
+	if afterTokens > beforeTokens {
+		t.Errorf("auto_compact.completed after_tokens (%d) must not exceed before_tokens (%d)", afterTokens, beforeTokens)
+	}
+
+	// mode must be the configured mode.
+	if mode, _ := startedEv.Payload["mode"].(string); mode != "strip" {
+		t.Errorf("auto_compact.started mode want %q, got %q", "strip", mode)
+	}
+	if mode, _ := completedEv.Payload["mode"].(string); mode != "strip" {
+		t.Errorf("auto_compact.completed mode want %q, got %q", "strip", mode)
+	}
+
+	// Event ordering: started must precede completed, and completed before run.completed.
+	requireEventOrder(t, events,
+		"auto_compact.started",
+		"auto_compact.completed",
+		"run.completed",
+	)
 }

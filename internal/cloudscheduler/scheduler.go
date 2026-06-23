@@ -151,8 +151,15 @@ func (s *Scheduler) Submit(job Job) (*Job, error) {
 	job.CreatedAt = time.Now().UTC()
 
 	s.mu.Lock()
-	cp := job
-	s.jobs[job.ID] = &cp
+	stored := job
+	s.jobs[job.ID] = &stored
+	// Take a snapshot to return to the caller. We must NOT hand back the same
+	// *Job we stored in s.jobs: worker goroutines mutate that pointer (Status,
+	// StartedAt, Result, ...) concurrently, so returning it would expose a
+	// shared mutable reference and a genuine data race (observable under -race)
+	// to callers that read fields after Start(). Returning a by-value snapshot
+	// mirrors GetJob and gives a stable submit-time view (Status == queued).
+	snapshot := job
 	s.mu.Unlock()
 
 	s.emit(job.ID, "queued", map[string]any{"workflow": job.WorkflowName})
@@ -169,7 +176,7 @@ func (s *Scheduler) Submit(job Job) (*Job, error) {
 		s.queue <- job.ID
 	}
 
-	return &cp, nil
+	return &snapshot, nil
 }
 
 // GetJob returns the current state of a job.
@@ -283,14 +290,17 @@ func (s *Scheduler) executeJob(ctx context.Context, jobID string) {
 	s.emit(jobID, "started", map[string]any{"backend": job.Backend})
 
 	result, err := exec.Execute(ctx, *job)
-	now = time.Now().UTC()
+	// Use a distinct variable for the completion timestamp. Reassigning `now`
+	// would mutate the same memory that job.StartedAt points to (it was set to
+	// &now above), aliasing StartedAt to the completion time and corrupting it.
+	completedAt := time.Now().UTC()
 
 	s.mu.Lock()
 	if j, ok := s.jobs[jobID]; ok {
 		if err != nil {
 			j.Status = JobStatusFailed
 			j.Error = err.Error()
-			j.CompletedAt = &now
+			j.CompletedAt = &completedAt
 			s.mu.Unlock()
 			s.emit(jobID, "failed", map[string]any{"error": err.Error()})
 			// Retry logic
@@ -301,7 +311,7 @@ func (s *Scheduler) executeJob(ctx context.Context, jobID string) {
 		}
 		j.Status = JobStatusCompleted
 		j.Result = result
-		j.CompletedAt = &now
+		j.CompletedAt = &completedAt
 		s.mu.Unlock()
 		s.emit(jobID, "completed", map[string]any{"result": result})
 		return

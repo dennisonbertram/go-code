@@ -678,7 +678,7 @@ func TestSearchMessages_EmptyQuery(t *testing.T) {
 	t.Parallel()
 
 	db := newTestConversationStore(t)
-	results, err := db.SearchMessages(context.Background(), "", 10)
+	results, err := db.SearchMessages(context.Background(), "", "", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages with empty query: %v", err)
 	}
@@ -698,7 +698,7 @@ func TestSearchMessages_NoMatch(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	results, err := db.SearchMessages(context.Background(), "elephant", 10)
+	results, err := db.SearchMessages(context.Background(), "", "elephant", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages: %v", err)
 	}
@@ -719,7 +719,7 @@ func TestSearchMessages_Match(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	results, err := db.SearchMessages(context.Background(), "fox", 10)
+	results, err := db.SearchMessages(context.Background(), "", "fox", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages: %v", err)
 	}
@@ -752,7 +752,7 @@ func TestSearchMessages_LimitEnforced(t *testing.T) {
 		}
 	}
 
-	results, err := db.SearchMessages(context.Background(), "needle", 3)
+	results, err := db.SearchMessages(context.Background(), "", "needle", 3)
 	if err != nil {
 		t.Fatalf("SearchMessages: %v", err)
 	}
@@ -773,7 +773,7 @@ func TestSearchMessages_DefaultLimit(t *testing.T) {
 	}
 
 	// limit=0 should use the default (20).
-	results, err := db.SearchMessages(context.Background(), "searchable", 0)
+	results, err := db.SearchMessages(context.Background(), "", "searchable", 0)
 	if err != nil {
 		t.Fatalf("SearchMessages: %v", err)
 	}
@@ -797,7 +797,7 @@ func TestSearchMessages_CrossConversation(t *testing.T) {
 		}
 	}
 
-	results, err := db.SearchMessages(context.Background(), "cherry", 10)
+	results, err := db.SearchMessages(context.Background(), "", "cherry", 10)
 	if err != nil {
 		t.Fatalf("SearchMessages: %v", err)
 	}
@@ -1060,6 +1060,7 @@ func TestConversationStoreSaveConversationWithCost_MigrationIdempotent(t *testin
 		t.Fatalf("SaveConversationWithCost after double migrate: %v", err)
 	}
 }
+
 // Issue #35: workspace/tenant scoping tests
 // ---------------------------------------------------------------------------
 

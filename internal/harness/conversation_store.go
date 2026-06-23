@@ -63,7 +63,10 @@ type ConversationStore interface {
 	GetConversationOwner(ctx context.Context, convID string) (*Conversation, error)
 	// SearchMessages performs a full-text search over message content.
 	// Returns up to limit results ordered by relevance. Returns empty slice (not error) for no matches.
-	SearchMessages(ctx context.Context, query string, limit int) ([]MessageSearchResult, error)
+	// When tenantID is non-empty, results are restricted to conversations owned by
+	// that tenant (cross-tenant search-leak prevention). An empty tenantID disables
+	// the tenant filter and searches all conversations (auth-disabled callers).
+	SearchMessages(ctx context.Context, tenantID, query string, limit int) ([]MessageSearchResult, error)
 	// DeleteOldConversations removes all non-pinned conversations whose updated_at is
 	// before the given threshold. Returns the number of conversations deleted.
 	// A zero threshold is a no-op (returns 0, nil) to prevent accidental mass deletion.

@@ -3,6 +3,7 @@ package cloudscheduler_test
 import (
 	"context"
 	"fmt"
+	osexec "os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -14,11 +15,41 @@ import (
 	"go-agent-harness/internal/cloudscheduler"
 )
 
+var (
+	dockerProbeOnce  sync.Once
+	dockerSkipReason string
+)
+
+// requireDocker skips the calling test unless a usable Docker daemon is reachable.
+// The TestDockerDeep_* tests exercise real alpine containers; without this gate they
+// silently fall through to the executor's simulation path (giving false confidence)
+// or fail on container-specific assertions. With the gate they run for real in CI
+// (where Docker is present) and skip cleanly in environments without a daemon. The
+// probe is memoized so it runs at most once per package test binary.
+func requireDocker(t *testing.T) {
+	t.Helper()
+	dockerProbeOnce.Do(func() {
+		if _, err := osexec.LookPath("docker"); err != nil {
+			dockerSkipReason = "docker CLI not found"
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if out, err := osexec.CommandContext(ctx, "docker", "info").CombinedOutput(); err != nil {
+			dockerSkipReason = fmt.Sprintf("docker daemon not available: %v: %s", err, strings.TrimSpace(string(out)))
+		}
+	})
+	if dockerSkipReason != "" {
+		t.Skipf("skipping real-container integration test: %s", dockerSkipReason)
+	}
+}
+
 // =============================================================================
 // Deep Integration POCs with real Docker containers
 // =============================================================================
 
 func TestDockerDeep_01_RealContainerExecution(t *testing.T) {
+	requireDocker(t)
 	sched := cloudscheduler.New(2)
 	exec := cloudscheduler.NewDockerExecutor()
 	exec.Image = "alpine:latest"
@@ -73,6 +104,7 @@ func TestDockerDeep_01_RealContainerExecution(t *testing.T) {
 // =============================================================================
 
 func TestDockerDeep_02_ContainerIsolation(t *testing.T) {
+	requireDocker(t)
 	sched := cloudscheduler.New(1)
 	exec := cloudscheduler.NewDockerExecutor()
 	exec.Image = "alpine:latest"
@@ -124,6 +156,7 @@ func TestDockerDeep_02_ContainerIsolation(t *testing.T) {
 // =============================================================================
 
 func TestDockerDeep_03_ConcurrentContainers(t *testing.T) {
+	requireDocker(t)
 	sched := cloudscheduler.New(3)
 	exec := cloudscheduler.NewDockerExecutor()
 	exec.Image = "alpine:latest"
@@ -177,6 +210,7 @@ func TestDockerDeep_03_ConcurrentContainers(t *testing.T) {
 // =============================================================================
 
 func TestDockerDeep_04_ScheduledDockerExecution(t *testing.T) {
+	requireDocker(t)
 	sched := cloudscheduler.New(2)
 	exec := cloudscheduler.NewDockerExecutor()
 	exec.Image = "alpine:latest"
@@ -187,11 +221,15 @@ func TestDockerDeep_04_ScheduledDockerExecution(t *testing.T) {
 	sched.Start(ctx)
 	defer sched.Stop()
 
-	// Schedule 3 jobs at different times
+	// Schedule 3 jobs at different times. Use generous, well-separated delays so
+	// that (a) the "job1 still queued immediately after submit" check below is
+	// robust even if this goroutine is briefly starved under heavy parallel load
+	// (the delayed enqueue has not fired yet), and (b) the relative start-ordering
+	// holds with a comfortable margin between containers.
 	now := time.Now()
-	schedule1 := now.Add(1 * time.Second)
-	schedule2 := now.Add(2 * time.Second)
-	schedule3 := now.Add(3 * time.Second)
+	schedule1 := now.Add(3 * time.Second)
+	schedule2 := now.Add(6 * time.Second)
+	schedule3 := now.Add(9 * time.Second)
 
 	job1, _ := sched.Submit(cloudscheduler.Job{
 		ID:           "scheduled-1",
@@ -245,6 +283,7 @@ func TestDockerDeep_04_ScheduledDockerExecution(t *testing.T) {
 // =============================================================================
 
 func TestDockerDeep_05_EventStreamingDocker(t *testing.T) {
+	requireDocker(t)
 	sched := cloudscheduler.New(1)
 	exec := cloudscheduler.NewDockerExecutor()
 	exec.Image = "alpine:latest"
@@ -316,6 +355,7 @@ loop:
 // =============================================================================
 
 func TestDockerDeep_06_CancelDuringQueue(t *testing.T) {
+	requireDocker(t)
 	sched := cloudscheduler.New(1)
 	exec := cloudscheduler.NewDockerExecutor()
 	exec.Image = "alpine:latest"
@@ -336,14 +376,30 @@ func TestDockerDeep_06_CancelDuringQueue(t *testing.T) {
 		jobIDs = append(jobIDs, job.ID)
 	}
 
-	// Cancel the last 5 (should still be in queue)
+	// Cancel the last 5 (should still be in queue). With a single worker, jobs
+	// 5-9 cannot have started yet, so cancelling them is deterministic.
 	for i := 5; i < 10; i++ {
 		err := sched.Cancel(jobIDs[i])
 		require.NoError(t, err)
 	}
 
-	// Wait for all to settle
-	time.Sleep(5 * time.Second)
+	// Wait for the first 5 to reach a terminal state via polling instead of a
+	// fixed sleep — real Docker containers are slow and can exceed a fixed budget
+	// under heavy parallel load.
+	deadline := time.Now().Add(120 * time.Second)
+	for time.Now().Before(deadline) {
+		settled := 0
+		for i := 0; i < 5; i++ {
+			job, _ := sched.GetJob(jobIDs[i])
+			if job.Status == cloudscheduler.JobStatusCompleted || job.Status == cloudscheduler.JobStatusFailed {
+				settled++
+			}
+		}
+		if settled == 5 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 
 	// First 5 should be completed, last 5 cancelled
 	for i := 0; i < 5; i++ {
@@ -361,6 +417,7 @@ func TestDockerDeep_06_CancelDuringQueue(t *testing.T) {
 // =============================================================================
 
 func TestDockerDeep_07_MultiBackendSimultaneous(t *testing.T) {
+	requireDocker(t)
 	sched := cloudscheduler.New(4)
 
 	// Register multiple executors
@@ -452,11 +509,19 @@ func TestDockerDeep_08_RetryWithBackoff(t *testing.T) {
 		},
 	})
 
-	// Wait for completion (retries add time)
+	// Wait for completion (retries add time). Wait specifically for Completed —
+	// NOT Failed — because executeJob transiently sets a job's status to Failed
+	// for the duration of the retry backoff before retryJob re-queues it (the
+	// failure path sets JobStatusFailed, then spawns the delayed retry). Breaking
+	// on Failed therefore races that transient window: under load the loop can
+	// exit while a retry is still pending (status flickers Failed -> queued),
+	// observing callCount=2 instead of the eventual 3. This mock always succeeds
+	// on the 3rd attempt, so Completed is the stable terminal outcome; the 30s
+	// deadline bounds a genuine hang.
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		j, _ := sched.GetJob(job.ID)
-		if j.Status == cloudscheduler.JobStatusCompleted || j.Status == cloudscheduler.JobStatusFailed {
+		if j.Status == cloudscheduler.JobStatusCompleted {
 			break
 		}
 		time.Sleep(500 * time.Millisecond)
@@ -473,6 +538,7 @@ func TestDockerDeep_08_RetryWithBackoff(t *testing.T) {
 // =============================================================================
 
 func TestDockerDeep_09_QueueBacklog(t *testing.T) {
+	requireDocker(t)
 	sched := cloudscheduler.New(2)
 	exec := cloudscheduler.NewDockerExecutor()
 	exec.Image = "alpine:latest"
@@ -525,6 +591,7 @@ func TestDockerDeep_09_QueueBacklog(t *testing.T) {
 // =============================================================================
 
 func TestDockerDeep_10_StressTest(t *testing.T) {
+	requireDocker(t)
 	sched := cloudscheduler.New(4)
 	exec := cloudscheduler.NewDockerExecutor()
 	exec.Image = "alpine:latest"
@@ -567,8 +634,16 @@ func TestDockerDeep_10_StressTest(t *testing.T) {
 
 	wg.Wait()
 
-	// Wait for all to complete
-	time.Sleep(30 * time.Second)
+	// Wait for all 30 to complete via polling rather than a fixed sleep: 30 real
+	// Docker containers across 4 workers can easily exceed a fixed budget when the
+	// whole test suite is saturating the machine. Early-exit once all complete.
+	deadline := time.Now().Add(120 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(sched.ListJobs(cloudscheduler.JobStatusCompleted)) == 30 {
+			break
+		}
+		time.Sleep(time.Second)
+	}
 
 	allJobs := sched.ListJobs("")
 	t.Logf("Total jobs after stress test: %d", len(allJobs))

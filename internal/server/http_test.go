@@ -517,9 +517,9 @@ func TestRunSummaryEndpoint(t *testing.T) {
 	cached := 10
 	provider := &scriptedProvider{turns: []harness.CompletionResult{
 		{
-			ToolCalls: []harness.ToolCall{{ID: "c1", Name: "bash", Arguments: `{"command":"echo hi"}`}},
-			Usage:     &harness.CompletionUsage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150, CachedPromptTokens: &cached},
-			CostUSD:   ptrFloat64(0.005),
+			ToolCalls:  []harness.ToolCall{{ID: "c1", Name: "bash", Arguments: `{"command":"echo hi"}`}},
+			Usage:      &harness.CompletionUsage{PromptTokens: 100, CompletionTokens: 50, TotalTokens: 150, CachedPromptTokens: &cached},
+			CostUSD:    ptrFloat64(0.005),
 			CostStatus: harness.CostStatusAvailable,
 		},
 		{Content: "done", Usage: &harness.CompletionUsage{PromptTokens: 200, CompletionTokens: 30, TotalTokens: 230}, CostUSD: ptrFloat64(0.003), CostStatus: harness.CostStatusAvailable},
@@ -631,20 +631,21 @@ func ptrFloat64(v float64) *float64 { return &v }
 
 // mockConversationStore implements harness.ConversationStore for testing.
 type mockConversationStore struct {
-	conversations       []harness.Conversation
-	messages            map[string][]harness.Message
-	listErr             error
-	deleteErr           error
-	loadErr             error
-	searchResults       []harness.MessageSearchResult
-	searchErr           error
-	deletedIDs          []string
-	searchedQuery       string
-	searchedLimit       int
-	deleteOldCount      int          // number to return from DeleteOldConversations
-	deleteOldErr        error        // error to return from DeleteOldConversations
-	deleteOldThreshold  time.Time    // last threshold passed to DeleteOldConversations
-	deleteOldCalled     bool         // whether DeleteOldConversations was called
+	conversations      []harness.Conversation
+	messages           map[string][]harness.Message
+	listErr            error
+	deleteErr          error
+	loadErr            error
+	searchResults      []harness.MessageSearchResult
+	searchErr          error
+	deletedIDs         []string
+	searchedQuery      string
+	searchedTenant     string
+	searchedLimit      int
+	deleteOldCount     int       // number to return from DeleteOldConversations
+	deleteOldErr       error     // error to return from DeleteOldConversations
+	deleteOldThreshold time.Time // last threshold passed to DeleteOldConversations
+	deleteOldCalled    bool      // whether DeleteOldConversations was called
 }
 
 func (m *mockConversationStore) Migrate(_ context.Context) error { return nil }
@@ -686,8 +687,9 @@ func (m *mockConversationStore) DeleteConversation(_ context.Context, convID str
 	m.deletedIDs = append(m.deletedIDs, convID)
 	return nil
 }
-func (m *mockConversationStore) SearchMessages(_ context.Context, query string, limit int) ([]harness.MessageSearchResult, error) {
+func (m *mockConversationStore) SearchMessages(_ context.Context, tenantID, query string, limit int) ([]harness.MessageSearchResult, error) {
 	m.searchedQuery = query
+	m.searchedTenant = tenantID
 	m.searchedLimit = limit
 	if m.searchErr != nil {
 		return nil, m.searchErr
@@ -762,9 +764,9 @@ func (c *capturingServerProvider) lastRequest() *harness.CompletionRequest {
 func TestWriteSSE_IncludesIDAndRetry(t *testing.T) {
 	rec := httptest.NewRecorder()
 	event := harness.Event{
-		ID:    "run_1:42",
-		RunID: "run_1",
-		Type:  harness.EventRunStarted,
+		ID:        "run_1:42",
+		RunID:     "run_1",
+		Type:      harness.EventRunStarted,
 		Timestamp: time.Now(),
 	}
 	err := writeSSE(rec, event)
@@ -2039,7 +2041,6 @@ func TestCleanupEndpoint(t *testing.T) {
 		mux.HandleFunc("/v1/agents", srv.handleAgents)
 		ts := httptest.NewServer(mux)
 		defer ts.Close()
-
 
 		// POST without body — should default to 30 days.
 		res, err := http.Post(ts.URL+"/v1/conversations/cleanup", "application/json", bytes.NewBufferString(`{}`))

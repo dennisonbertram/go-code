@@ -70,6 +70,7 @@ func (se *stepEngine) run() {
 	model := preflight.model
 	primaryModel := preflight.primaryModel
 	activeProvider := preflight.activeProvider
+	providerCandidates := preflight.providerCandidates
 	systemPrompt := preflight.systemPrompt
 	resolvedPrompt := preflight.resolvedPrompt
 	runStartedAt := preflight.runStartedAt
@@ -315,12 +316,20 @@ func (se *stepEngine) run() {
 			}
 		}
 
+		// deltaEmitted tracks whether any streaming delta has been emitted to the
+		// client during this turn.  It is set atomically by the Stream closure and
+		// read by the fallback loop.  When a delta has already been delivered we
+		// must NOT fall back to another provider — the client has already received
+		// partial output and switching would produce inconsistent results.
+		var deltaEmitted atomic.Bool
+
 		completionReq := CompletionRequest{
 			Model:           primaryModel,
 			Messages:        turnMessages,
 			Tools:           r.filteredToolsForRun(runID),
 			ReasoningEffort: req.ReasoningEffort,
 			Stream: func(delta CompletionDelta) {
+				deltaEmitted.Store(true)
 				r.emitCompletionDelta(runID, step, delta)
 			},
 		}
@@ -362,15 +371,94 @@ func (se *stepEngine) run() {
 			r.emit(runID, EventLLMRequestSnapshot, snapshotPayload)
 		}
 
+		// --- Provider fallback loop ---
+		// Iterate over the ordered candidate list.  On a fallback-eligible error
+		// (429/5xx) from an earlier candidate, emit a prompt.warning and retry
+		// the same CompletionRequest with the next candidate.  If a streaming
+		// delta has already been emitted, fall back is disallowed (streaming-safety
+		// rule) and we fail the run immediately.
+		//
+		// When AllowFallback is false (or there is only one candidate), the slice
+		// contains exactly one entry so this degenerates to the original behaviour.
+		//
+		// The active candidate is tracked so post-loop code that updates
+		// state.run.ProviderName uses the correct name.
+		if len(providerCandidates) == 0 {
+			// Defensive: preflight always populates at least one entry; fall back to
+			// the pre-existing activeProvider if somehow the slice is empty.
+			providerCandidates = []providerCandidate{{Provider: activeProvider, Name: preflight.providerName}}
+		}
+
 		llmCallStart := time.Now()
-		result, err := activeProvider.Complete(ctx, completionReq)
-		if err != nil {
-			if ctx.Err() != nil {
-				r.cancelledRun(runID)
+		var result CompletionResult
+		var activeCandidateName string
+		{
+			candidateIdx := 0
+			for {
+				candidate := providerCandidates[candidateIdx]
+				activeCandidateName = candidate.Name
+
+				// Reset the delta flag before each attempt so mid-stream detection
+				// is scoped to this particular provider call.
+				deltaEmitted.Store(false)
+
+				result, err = candidate.Provider.Complete(ctx, completionReq)
+				if err == nil {
+					// Success — update the running activeProvider so that rest of
+					// the step loop (and future turns) still have the right reference
+					// when they need it.
+					activeProvider = candidate.Provider
+					break
+				}
+
+				// Context cancelled: hard stop, do not attempt any fallback.
+				if ctx.Err() != nil {
+					r.cancelledRun(runID)
+					return
+				}
+
+				// Streaming-safety: if any delta was delivered to the client,
+				// switching providers would produce an inconsistent partial response.
+				// Fail the run immediately.
+				if deltaEmitted.Load() {
+					r.failRun(runID, fmt.Errorf("provider completion failed: %w", err))
+					return
+				}
+
+				// Check whether the error is fallback-eligible and there is a next
+				// candidate available.
+				nextIdx := candidateIdx + 1
+				if isFallbackEligible(err) && req.AllowFallback && nextIdx < len(providerCandidates) {
+					next := providerCandidates[nextIdx]
+					r.emit(runID, EventPromptWarning, map[string]any{
+						"code":          "provider_fallback",
+						"step":          step,
+						"from_provider": candidate.Name,
+						"to_provider":   next.Name,
+						"reason":        err.Error(),
+						"message": fmt.Sprintf(
+							"provider %q failed (step %d), falling back to %q: %s",
+							candidate.Name, step, next.Name, err.Error(),
+						),
+					})
+					// Optionally update run state so observability sees the new provider.
+					r.mu.Lock()
+					if st, ok := r.runs[runID]; ok {
+						st.run.ProviderName = next.Name
+					}
+					r.mu.Unlock()
+					r.emit(runID, EventProviderResolved, map[string]any{
+						"model":    primaryModel,
+						"provider": next.Name,
+					})
+					candidateIdx = nextIdx
+					continue
+				}
+
+				// Non-eligible error or no more candidates: fail the run.
+				r.failRun(runID, fmt.Errorf("provider completion failed: %w", err))
 				return
 			}
-			r.failRun(runID, fmt.Errorf("provider completion failed: %w", err))
-			return
 		}
 		llmTotalDurationMs := result.TotalDurationMs
 		if llmTotalDurationMs == 0 {
@@ -406,6 +494,7 @@ func (se *stepEngine) run() {
 			"tool_calls":        len(result.ToolCalls),
 			"total_duration_ms": llmTotalDurationMs,
 			"ttft_ms":           result.TTFTMs,
+			"provider":          activeCandidateName,
 		})
 
 		if causalBuilder != nil {
@@ -1131,10 +1220,10 @@ func (se *stepEngine) run() {
 	// Determine which budget was exhausted and emit the appropriate event.
 	if effectiveMaxTurns > 0 {
 		r.emit(runID, EventMaxTurnsExhausted, map[string]any{
-			"run_id":    runID,
-			"step":      step,
+			"run_id":     runID,
+			"step":       step,
 			"turn_count": step - 1,
-			"max_turns": effectiveMaxTurns,
+			"max_turns":  effectiveMaxTurns,
 		})
 	}
 	if effectiveMaxSteps > 0 {

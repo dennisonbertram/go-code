@@ -46,6 +46,9 @@ func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
 			writeScopeError(w, store.ScopeRunsWrite)
 			return
 		}
+		if s.blockConversationCrossTenant(w, r, parts[0]) {
+			return
+		}
 		s.handleDeleteConversation(w, r, parts[0])
 		return
 	}
@@ -61,6 +64,9 @@ func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		convID := parts[0]
+		if s.blockConversationCrossTenant(w, r, convID) {
+			return
+		}
 		msgs, ok := s.runner.ConversationMessages(convID)
 		if !ok {
 			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("conversation %q not found", convID))
@@ -94,6 +100,9 @@ func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
 			writeScopeError(w, store.ScopeRunsRead)
 			return
 		}
+		if s.blockConversationCrossTenant(w, r, parts[0]) {
+			return
+		}
 		s.handleExportConversation(w, r, parts[0])
 		return
 	}
@@ -106,6 +115,9 @@ func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
 		}
 		if !hasScope(r.Context(), store.ScopeRunsWrite) {
 			writeScopeError(w, store.ScopeRunsWrite)
+			return
+		}
+		if s.blockConversationCrossTenant(w, r, parts[0]) {
 			return
 		}
 		s.handleCompactConversation(w, r, parts[0])
@@ -146,6 +158,31 @@ func (s *Server) handleSearchConversations(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// Enforce tenant isolation: full-text search must only return the caller's own
+	// messages. effectiveTenantID resolves the authenticated tenant (and rejects a
+	// conflicting ?tenant_id=). When auth is disabled it returns the request value
+	// (empty by default), which disables the filter and preserves prior behavior.
+	//
+	// Tenant consistency note: conversations are stored with the LITERAL tenant ID
+	// from the run (runner.go normalises "default" → "" before writing to the
+	// store, so the default/no-tenant case is stored as ""). effectiveTenantID
+	// likewise returns "" for auth-disabled requests, causing SearchMessages to
+	// skip the tenant filter entirely — which is the correct legacy behaviour.
+	// Named tenants (e.g. "tenant-foo") are stored and queried as the same literal
+	// string, so stamping and querying are self-consistent for all named tenants.
+	//
+	// This differs from run-ownership resolution (http_runs.go runTenantMismatch),
+	// which normalises "" → "default" for comparison. The asymmetry is intentional:
+	// conversation rows use "" as the no-tenant sentinel (matching the DB default),
+	// while run records keep "default" as an explicit value. There is no case where
+	// a named tenant's own conversations are hidden from that tenant.
+	requestTenantID := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	effectiveTenant, err := s.effectiveTenantID(r, requestTenantID)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+
 	limit := 20
 	if v := r.URL.Query().Get("limit"); v != "" {
 		if n, err := parsePositiveInt(v); err == nil {
@@ -153,7 +190,7 @@ func (s *Server) handleSearchConversations(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	results, err := store.SearchMessages(r.Context(), q, limit)
+	results, err := store.SearchMessages(r.Context(), effectiveTenant, q, limit)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return

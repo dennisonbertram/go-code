@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -208,6 +209,51 @@ type ToolCallSummary struct {
 	Step     int    `json:"step"`
 }
 
+// ProviderHTTPError is returned by provider clients when the upstream API
+// responds with a non-2xx HTTP status code. Its Error() string is
+// byte-identical to the fmt.Errorf messages the OpenAI and Anthropic clients
+// previously produced, so any existing string-based assertions continue to
+// pass. The structured fields allow the fallback machinery to inspect the
+// status code without string parsing.
+//
+// Example errors:
+//
+//	"openai request failed (429): <body>"
+//	"anthropic request failed (503): <body>"
+type ProviderHTTPError struct {
+	// Provider is the lowercase provider name (e.g. "openai", "anthropic").
+	Provider string
+	// StatusCode is the HTTP status code returned by the upstream API.
+	StatusCode int
+	// Body is the trimmed response body text returned by the upstream API.
+	Body string
+}
+
+// Error returns the provider error string in the canonical format:
+// "<provider> request failed (<status>): <body>"
+// This matches the exact text previously produced by fmt.Errorf in each
+// provider client, ensuring backward compatibility with string assertions.
+func (e *ProviderHTTPError) Error() string {
+	return fmt.Sprintf("%s request failed (%d): %s", e.Provider, e.StatusCode, e.Body)
+}
+
+// isFallbackEligible reports whether err is a *ProviderHTTPError with a status
+// code that warrants trying a fallback provider.  Eligible codes are transient
+// server-side failures: 429, 500, 502, 503, 504.  Client-side errors (400,
+// 401, 403, 404, 422) are NOT eligible because retrying with a different
+// provider will not fix a malformed or unauthorised request.
+func isFallbackEligible(err error) bool {
+	var phe *ProviderHTTPError
+	if !errors.As(err, &phe) {
+		return false
+	}
+	switch phe.StatusCode {
+	case 429, 500, 502, 503, 504:
+		return true
+	}
+	return false
+}
+
 type Provider interface {
 	Complete(ctx context.Context, req CompletionRequest) (CompletionResult, error)
 }
@@ -263,6 +309,10 @@ type WorkspaceProvisionOptions struct {
 	WorktreeRootDir string
 	// BaseDir is the base directory for local workspace subdirectories.
 	BaseDir string
+	// ConfigTOML is an optional serialized TOML configuration string written to
+	// harness.toml in the workspace root after provisioning. When non-empty it is
+	// forwarded to workspace.Options.ConfigTOML. Never include secrets here.
+	ConfigTOML string
 }
 
 type RunRequest struct {
@@ -287,16 +337,28 @@ type RunRequest struct {
 	// ProviderName explicitly selects which catalog provider to use for this run.
 	// When set, overrides the automatic provider resolution from the model name.
 	// Must match a provider key in the model catalog (e.g. "openai", "anthropic").
-	ProviderName     string            `json:"provider_name,omitempty"`
-	AllowFallback    bool              `json:"allow_fallback,omitempty"`
-	SystemPrompt     string            `json:"system_prompt,omitempty"`
-	TenantID         string            `json:"tenant_id,omitempty"`
-	ConversationID   string            `json:"conversation_id,omitempty"`
-	AgentID          string            `json:"agent_id,omitempty"`
-	AgentIntent      string            `json:"agent_intent,omitempty"`
-	TaskContext      string            `json:"task_context,omitempty"`
-	PromptProfile    string            `json:"prompt_profile,omitempty"`
-	PromptExtensions *PromptExtensions `json:"prompt_extensions,omitempty"`
+	ProviderName  string `json:"provider_name,omitempty"`
+	AllowFallback bool   `json:"allow_fallback,omitempty"`
+	// FallbackProviders is an ordered list of provider names to try when
+	// allow_fallback is true and the primary provider returns a
+	// fallback-eligible runtime error (e.g. HTTP 429, 500, 502, 503, 504).
+	// Providers are attempted in order; the first successful response wins.
+	// When empty and allow_fallback is true, the runner falls back to the
+	// runner-level default provider (if different from the primary).
+	//
+	// Model constraint: the same CompletionRequest.Model (i.e. the primary
+	// model name) is sent verbatim to every fallback provider.  Fallback
+	// providers must therefore serve that exact model ID.  No model
+	// translation or remapping is performed between candidates.
+	FallbackProviders []string          `json:"fallback_providers,omitempty"`
+	SystemPrompt      string            `json:"system_prompt,omitempty"`
+	TenantID          string            `json:"tenant_id,omitempty"`
+	ConversationID    string            `json:"conversation_id,omitempty"`
+	AgentID           string            `json:"agent_id,omitempty"`
+	AgentIntent       string            `json:"agent_intent,omitempty"`
+	TaskContext       string            `json:"task_context,omitempty"`
+	PromptProfile     string            `json:"prompt_profile,omitempty"`
+	PromptExtensions  *PromptExtensions `json:"prompt_extensions,omitempty"`
 	// MaxSteps caps the number of LLM turns for this run.
 	// 0 means use the runner's config default (which may itself be 0 = unlimited).
 	// Negative values are rejected at StartRun time.
