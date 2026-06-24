@@ -106,6 +106,17 @@ type ServerOptions struct {
 	// LinearAdapter is an optional Linear webhook adapter for POST /v1/webhooks/linear.
 	// When nil, the endpoint returns 401 for all requests.
 	LinearAdapter *linearadapter.LinearAdapter
+	// RolloutDir is the configured root directory for JSONL rollout files. When
+	// set (and auth is enabled), POST /v1/runs/replay enforces two-part safety:
+	//  1. Read-safety containment: the caller-supplied rollout_path must resolve
+	//     (after symlink evaluation) to a location under RolloutDir, preventing
+	//     path traversal and arbitrary file reads.
+	//  2. Tenant ownership: the loaded rollout's owning tenant (read from the
+	//     run.started event's tenant_id field) must match the caller's
+	//     authenticated tenant — verified from rollout CONTENT, not by confining
+	//     to a per-tenant subdirectory.
+	// When empty (or auth disabled), replay path handling is unrestricted (legacy).
+	RolloutDir string
 }
 
 // NewWithOptions creates an HTTP handler with the full set of optional dependencies.
@@ -141,6 +152,7 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		githubAdapter:     opts.GitHubAdapter,
 		slackAdapter:      opts.SlackAdapter,
 		linearAdapter:     opts.LinearAdapter,
+		rolloutDir:        opts.RolloutDir,
 	}
 	// If runner config has an approval broker, use it as default when none
 	// is explicitly supplied in ServerOptions.
@@ -265,7 +277,7 @@ type Server struct {
 	todos deferred.TodoManager
 
 	// Recipe listing (issue #147)
-	recipes   []recipe.Recipe
+	recipes         []recipe.Recipe
 	workflows       workflowManager
 	scriptWorkflows scriptWorkflowManager
 	networks        networkManager
@@ -313,6 +325,13 @@ type Server struct {
 	// linearAdapter converts Linear webhook requests into trigger envelopes (issue #413).
 	// When nil, POST /v1/webhooks/linear returns 401.
 	linearAdapter *linearadapter.LinearAdapter
+
+	// rolloutDir is the configured root directory for JSONL rollout files. When
+	// set (and auth is enabled), POST /v1/runs/replay enforces read-safety
+	// containment (rollout_path must resolve under this dir after symlink
+	// evaluation) and content-based tenant ownership verification (owning
+	// tenant_id in the rollout must match the caller's authenticated tenant).
+	rolloutDir string
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

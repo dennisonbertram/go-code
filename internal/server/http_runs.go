@@ -116,8 +116,17 @@ func (s *Server) handleListConversationRuns(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, "invalid_request", "conversation ID is required")
 		return
 	}
+	// Enforce tenant isolation: only return runs that belong to the caller's
+	// authenticated tenant. This prevents cross-tenant enumeration of a
+	// conversation's run history via a known (or guessed) conversation ID.
+	effectiveTenant, err := s.effectiveTenantID(r, "")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	filter := store.RunFilter{
 		ConversationID: conversationID,
+		TenantID:       effectiveTenant,
 	}
 	runs, err := s.runStore.ListRuns(r.Context(), filter)
 	if err != nil {
@@ -125,6 +134,68 @@ func (s *Server) handleListConversationRuns(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"runs": runs})
+}
+
+// runTenantMismatch reports whether a per-run by-ID request must be blocked
+// because the run belongs to a tenant other than the caller's.
+//
+// It enforces tenant ownership on the by-ID routes (GET /v1/runs/{id} and the
+// /{id}/{cancel,steer,continue,compact,input,approve,deny,events,summary,context,
+// todos} sub-routes), which already enforce scope but not ownership.
+//
+// Resolution order mirrors handleGetRun: the runner's in-memory state first
+// (active / recently completed runs), then the persistent store (historical
+// runs). The run's stored TenantID is compared to the caller's authenticated
+// tenant.
+//
+//   - Auth disabled or no store configured → never gates (returns false),
+//     preserving unauthenticated / no-persistence behavior.
+//   - Run found and its (normalized) stored tenant differs from the caller's
+//     (normalized) tenant → gate (returns true). This is the real cross-tenant
+//     attack surface: under auth, every HTTP-created run is stamped with its
+//     creator's tenant by handlePostRun, so a mismatch always means the run
+//     belongs to a different tenant.
+//   - Run not found in either source → returns false so the downstream handler
+//     produces its own (also-404) not-found response unchanged.
+//
+// Tenant values are normalized the same way the runner normalizes them ("" →
+// "default", see Runner.checkConversationOwnership): the runner rewrites an
+// empty request tenant to "default" on StartRun, so an empty-tenant caller (or
+// an out-of-band run with no tenant) compares equal to "default" rather than
+// being spuriously blocked. This secure default still blocks every genuine
+// cross-tenant access because the two distinct tenants normalize to distinct,
+// non-equal values.
+func (s *Server) runTenantMismatch(r *http.Request, runID string) bool {
+	// When auth is disabled or there is no store, there is no tenant to enforce.
+	if s.authDisabled || s.runStore == nil {
+		return false
+	}
+
+	caller := normalizeTenant(TenantIDFromContext(r.Context()))
+
+	// In-memory state first: covers active and recently completed runs.
+	if run, ok := s.runner.GetRun(runID); ok {
+		return normalizeTenant(run.TenantID) != caller
+	}
+
+	// Fall back to the persistent store for historical runs.
+	storeRun, err := s.runStore.GetRun(r.Context(), runID)
+	if err == nil && storeRun != nil {
+		return normalizeTenant(storeRun.TenantID) != caller
+	}
+
+	// Unknown run: do not gate here — let the handler return its own not-found.
+	return false
+}
+
+// normalizeTenant maps the empty tenant to "default", matching the runner's
+// tenant normalization (Runner.checkConversationOwnership). This keeps "" and
+// "default" interchangeable when comparing run ownership.
+func normalizeTenant(t string) string {
+	if t == "" {
+		return "default"
+	}
+	return t
 }
 
 func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
@@ -158,6 +229,9 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
 			writeScopeError(w, store.ScopeRunsRead)
 			return
 		}
+		if s.blockCrossTenant(w, r, runID) {
+			return
+		}
 		s.handleGetRun(w, r, runID)
 		return
 	}
@@ -166,6 +240,9 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 2 && parts[1] == "events" {
 		if !hasScope(r.Context(), store.ScopeRunsRead) {
 			writeScopeError(w, store.ScopeRunsRead)
+			return
+		}
+		if s.blockCrossTenant(w, r, runID) {
 			return
 		}
 		s.handleRunEvents(w, r, runID)
@@ -185,6 +262,9 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if s.blockCrossTenant(w, r, runID) {
+			return
+		}
 		s.handleRunInput(w, r, runID)
 		return
 	}
@@ -193,6 +273,9 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 2 && parts[1] == "summary" {
 		if !hasScope(r.Context(), store.ScopeRunsRead) {
 			writeScopeError(w, store.ScopeRunsRead)
+			return
+		}
+		if s.blockCrossTenant(w, r, runID) {
 			return
 		}
 		s.handleRunSummary(w, r, runID)
@@ -205,6 +288,9 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
 			writeScopeError(w, store.ScopeRunsWrite)
 			return
 		}
+		if s.blockCrossTenant(w, r, runID) {
+			return
+		}
 		s.handleRunContinue(w, r, runID)
 		return
 	}
@@ -213,6 +299,9 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 2 && parts[1] == "steer" {
 		if !hasScope(r.Context(), store.ScopeRunsWrite) {
 			writeScopeError(w, store.ScopeRunsWrite)
+			return
+		}
+		if s.blockCrossTenant(w, r, runID) {
 			return
 		}
 		s.handleRunSteer(w, r, runID)
@@ -225,6 +314,9 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
 			writeScopeError(w, store.ScopeRunsRead)
 			return
 		}
+		if s.blockCrossTenant(w, r, runID) {
+			return
+		}
 		s.handleRunContext(w, r, runID)
 		return
 	}
@@ -233,6 +325,9 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
 	if len(parts) == 2 && parts[1] == "compact" {
 		if !hasScope(r.Context(), store.ScopeRunsWrite) {
 			writeScopeError(w, store.ScopeRunsWrite)
+			return
+		}
+		if s.blockCrossTenant(w, r, runID) {
 			return
 		}
 		s.handleRunCompact(w, r, runID)
@@ -252,12 +347,18 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+		if s.blockCrossTenant(w, r, runID) {
+			return
+		}
 		s.handleRunTodos(w, r, runID)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "cancel" {
 		if !hasScope(r.Context(), store.ScopeRunsWrite) {
 			writeScopeError(w, store.ScopeRunsWrite)
+			return
+		}
+		if s.blockCrossTenant(w, r, runID) {
 			return
 		}
 		s.handleCancelRun(w, r, runID)
@@ -270,6 +371,9 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
 			writeScopeError(w, store.ScopeRunsWrite)
 			return
 		}
+		if s.blockCrossTenant(w, r, runID) {
+			return
+		}
 		s.handleApproveRun(w, r, runID)
 		return
 	}
@@ -280,11 +384,92 @@ func (s *Server) handleRunByID(w http.ResponseWriter, r *http.Request) {
 			writeScopeError(w, store.ScopeRunsWrite)
 			return
 		}
+		if s.blockCrossTenant(w, r, runID) {
+			return
+		}
 		s.handleDenyRun(w, r, runID)
 		return
 	}
 
 	http.NotFound(w, r)
+}
+
+// blockCrossTenant enforces tenant ownership on per-run by-ID routes. It is
+// called AFTER the per-route scope check (so an under-scoped caller still sees
+// 403, not 404). When the run belongs to a different tenant it writes a 404
+// not_found response — matching the unknown-id contract so the existence of
+// another tenant's run is never revealed — and returns true to signal the
+// caller to stop. Returns false (no response written) when the request may
+// proceed. See runTenantMismatch for the ownership semantics.
+func (s *Server) blockCrossTenant(w http.ResponseWriter, r *http.Request, runID string) bool {
+	if s.runTenantMismatch(r, runID) {
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("run %q not found", runID))
+		return true
+	}
+	return false
+}
+
+// conversationTenantMismatch reports whether a conversation sub-resource request
+// must be blocked because the conversation belongs to a tenant other than the
+// caller's.
+//
+// Resolution order (fail-closed when auth is enabled):
+//  1. Run store: list runs for the conversation; the run's TenantID is
+//     authoritative. Same-tenant → proceed. Cross-tenant → block.
+//  2. Conversation store: when no runs are found, fall back to the conversation
+//     store's own tenant_id column. This handles conversations that exist in the
+//     store but have no persisted run (e.g. conversations loaded from history
+//     before run persistence was enabled, or conversations stored directly).
+//     If the conversation record exists with a non-empty tenant that differs
+//     from the caller → block (fail-closed). If the conversation record has an
+//     empty tenant (legacy row without tenant stamp) → treat as same-tenant
+//     (preserve prior behavior for pre-tenant-stamp rows).
+//  3. Conversation not found in either source → let the downstream handler
+//     produce its own not-found response (return false, no gate).
+//
+// Auth disabled or no store → never gates (returns false).
+func (s *Server) conversationTenantMismatch(r *http.Request, conversationID string) bool {
+	if s.authDisabled || s.runStore == nil {
+		return false
+	}
+	caller := normalizeTenant(TenantIDFromContext(r.Context()))
+
+	// 1. Try the run store: list runs for this conversation without a tenant
+	// filter so we can read the stored owner unconditionally.
+	runs, err := s.runStore.ListRuns(r.Context(), store.RunFilter{ConversationID: conversationID})
+	if err == nil && len(runs) > 0 {
+		return normalizeTenant(runs[0].TenantID) != caller
+	}
+
+	// 2. No runs found (or store error). Fall back to the conversation store's
+	// own tenant_id column so a runless-but-stored conversation is not ungated.
+	if convStore := s.runner.GetConversationStore(); convStore != nil {
+		owner, err := convStore.GetConversationOwner(r.Context(), conversationID)
+		if err == nil && owner != nil {
+			// A row exists in the conversation store.
+			if owner.TenantID == "" {
+				// Legacy row with no tenant stamp: do not block (preserve prior behavior).
+				return false
+			}
+			return normalizeTenant(owner.TenantID) != caller
+		}
+	}
+
+	// 3. Conversation not found in any source: let the downstream handler
+	// produce its own not-found response.
+	return false
+}
+
+// blockConversationCrossTenant enforces tenant ownership on per-conversation
+// sub-resource routes (messages, export, compact, delete). It writes a 404
+// response and returns true when the conversation belongs to a different tenant.
+// Returns false (no response written) when the request may proceed.
+func (s *Server) blockConversationCrossTenant(w http.ResponseWriter, r *http.Request, convID string) bool {
+	if s.conversationTenantMismatch(r, convID) {
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("conversation %q not found", convID))
+		return true
+	}
+	return false
 }
 
 // handleCancelRun handles POST /v1/runs/{id}/cancel.

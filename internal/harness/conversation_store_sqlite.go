@@ -578,20 +578,39 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 }
 
 // SearchMessages performs a full-text search over message content using the FTS5 index.
-func (s *SQLiteConversationStore) SearchMessages(ctx context.Context, query string, limit int) ([]MessageSearchResult, error) {
+// When tenantID is non-empty, results are restricted to conversations owned by that
+// tenant by joining the FTS hits against the conversations table on conversation_id.
+// An empty tenantID disables the filter (auth-disabled callers).
+func (s *SQLiteConversationStore) SearchMessages(ctx context.Context, tenantID, query string, limit int) ([]MessageSearchResult, error) {
 	if query == "" {
 		return []MessageSearchResult{}, nil
 	}
 	if limit <= 0 {
 		limit = 20
 	}
-	rows, err := s.db.QueryContext(ctx, `
-SELECT conversation_id, role, snippet(conversation_messages_fts, 2, '<b>', '</b>', '…', 20)
-FROM conversation_messages_fts
-WHERE conversation_messages_fts MATCH ?
-ORDER BY rank
-LIMIT ?
-`, query, limit)
+
+	// The FTS table does not carry tenant_id (it indexes message content only), so
+	// scope by joining FTS hits to the owning conversation row.
+	sqlText := `
+SELECT f.conversation_id, f.role, snippet(conversation_messages_fts, 2, '<b>', '</b>', '…', 20)
+FROM conversation_messages_fts f
+`
+	args := []any{}
+	if tenantID != "" {
+		sqlText += `JOIN conversations c ON c.id = f.conversation_id
+WHERE conversation_messages_fts MATCH ? AND c.tenant_id = ?
+`
+		args = append(args, query, tenantID)
+	} else {
+		sqlText += `WHERE conversation_messages_fts MATCH ?
+`
+		args = append(args, query)
+	}
+	sqlText += `ORDER BY rank
+LIMIT ?`
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, sqlText, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search messages: %w", err)
 	}

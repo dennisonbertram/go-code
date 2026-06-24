@@ -125,7 +125,11 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 			if readErr != nil {
 				return harness.CompletionResult{}, fmt.Errorf("read error response body: %w", readErr)
 			}
-			return harness.CompletionResult{}, fmt.Errorf("anthropic request failed (%d): %s", httpRes.StatusCode, strings.TrimSpace(string(responseBody)))
+			return harness.CompletionResult{}, &harness.ProviderHTTPError{
+				Provider:   "anthropic",
+				StatusCode: httpRes.StatusCode,
+				Body:       strings.TrimSpace(string(responseBody)),
+			}
 		}
 		return c.decodeStreamingResponse(model, httpRes.Body, req.Stream)
 	}
@@ -136,7 +140,11 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 	}
 
 	if httpRes.StatusCode >= 300 {
-		return harness.CompletionResult{}, fmt.Errorf("anthropic request failed (%d): %s", httpRes.StatusCode, strings.TrimSpace(string(responseBody)))
+		return harness.CompletionResult{}, &harness.ProviderHTTPError{
+			Provider:   "anthropic",
+			StatusCode: httpRes.StatusCode,
+			Body:       strings.TrimSpace(string(responseBody)),
+		}
 	}
 
 	return c.decodeResponse(model, responseBody)

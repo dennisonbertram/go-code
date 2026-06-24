@@ -393,7 +393,13 @@ func Replay(events []rollout.RolloutEvent) ReplayResult {
 
 		case "tool.call.completed":
 			callID, callIDOK := payloadString(ev.Payload, "call_id")
+			// The runner emits tool outputs under "output" (runner_step_engine.go:847,874,1072,1091).
+			// Fall back to "output" when "result" is absent or empty so that real captured
+			// rollouts are not silently truncated. Existing rollouts that use "result" are unaffected.
 			toolResult, _ := payloadString(ev.Payload, "result")
+			if toolResult == "" {
+				toolResult, _ = payloadString(ev.Payload, "output")
+			}
 			toolName, _ := payloadString(ev.Payload, "tool")
 			re.Details = map[string]any{
 				"call_id": capString(callID, maxDetailStringBytes),
@@ -536,11 +542,28 @@ func indexToolCompletions(events []rollout.RolloutEvent) completionIndex {
 		}
 		seen[key] = true
 		const maxResultMarshalBytes = 65536
+		// Read "result" first; fall back to "output" when absent or empty.
+		// The runner emits tool outputs under "output" (runner_step_engine.go:847,874,1072,1091)
+		// so real captured rollouts carry "output", not "result". Existing rollouts with "result"
+		// continue to work unchanged.
 		result, ok := payloadString(ev.Payload, "result")
 		if ok {
 			result = capString(result, maxDetailStringBytes)
 		} else {
 			if raw, exists := ev.Payload["result"]; exists {
+				if b := cappedMarshal(raw, maxResultMarshalBytes); b != nil {
+					if len(b) >= maxResultMarshalBytes {
+						b = append(b, []byte("...<truncated>")...)
+					}
+					result = string(b)
+				}
+			}
+		}
+		if result == "" {
+			// Fallback: try "output" key (runner emit key).
+			if out, outOK := payloadString(ev.Payload, "output"); outOK && out != "" {
+				result = capString(out, maxDetailStringBytes)
+			} else if raw, exists := ev.Payload["output"]; exists && result == "" {
 				if b := cappedMarshal(raw, maxResultMarshalBytes); b != nil {
 					if len(b) >= maxResultMarshalBytes {
 						b = append(b, []byte("...<truncated>")...)
@@ -666,7 +689,12 @@ func ReconstructMessages(events []rollout.RolloutEvent, upToStep int) []harness.
 
 		case "tool.call.completed":
 			callID, _ := payloadString(ev.Payload, "call_id")
+			// The runner emits tool outputs under "output" (runner_step_engine.go:847,874,1072,1091).
+			// Fall back to "output" when "result" is absent or empty.
 			toolResult, _ := payloadString(ev.Payload, "result")
+			if toolResult == "" {
+				toolResult, _ = payloadString(ev.Payload, "output")
+			}
 			toolName, _ := payloadString(ev.Payload, "tool")
 			if callID != "" && len(callID) <= maxIDBytes &&
 				announcedCalls[capID(callID)] && startedCalls[capID(callID)] {

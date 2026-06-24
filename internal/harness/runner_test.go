@@ -2353,7 +2353,7 @@ func (f *failingConversationStore) ListConversations(_ context.Context, _ Conver
 func (f *failingConversationStore) DeleteConversation(_ context.Context, _ string) error {
 	return fmt.Errorf("store delete failed")
 }
-func (f *failingConversationStore) SearchMessages(_ context.Context, _ string, _ int) ([]MessageSearchResult, error) {
+func (f *failingConversationStore) SearchMessages(_ context.Context, _ string, _ string, _ int) ([]MessageSearchResult, error) {
 	return nil, fmt.Errorf("store search failed")
 }
 func (f *failingConversationStore) DeleteOldConversations(_ context.Context, _ time.Time) (int, error) {
@@ -2402,7 +2402,7 @@ func (c *capturingConversationStore) ListConversations(_ context.Context, _ Conv
 func (c *capturingConversationStore) DeleteConversation(_ context.Context, _ string) error {
 	return nil
 }
-func (c *capturingConversationStore) SearchMessages(_ context.Context, _ string, _ int) ([]MessageSearchResult, error) {
+func (c *capturingConversationStore) SearchMessages(_ context.Context, _ string, _ string, _ int) ([]MessageSearchResult, error) {
 	return nil, nil
 }
 func (c *capturingConversationStore) DeleteOldConversations(_ context.Context, _ time.Time) (int, error) {

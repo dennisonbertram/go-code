@@ -18,6 +18,7 @@ import (
 
 	"go-agent-harness/internal/config"
 	"go-agent-harness/internal/cron"
+	"go-agent-harness/internal/fakeprovider"
 	"go-agent-harness/internal/harness"
 	htools "go-agent-harness/internal/harness/tools"
 	om "go-agent-harness/internal/observationalmemory"
@@ -327,6 +328,141 @@ func TestResolveDefaultProviderUsesOpenRouterForDynamicSlashModel(t *testing.T) 
 	if !ok || named.name != "openrouter" {
 		t.Fatalf("unexpected provider: %#v", provider)
 	}
+}
+
+// TestResolveDefaultProvider_FakePath covers Path 0: when HARNESS_PROVIDER=="fake",
+// resolveDefaultProvider must return a *fakeprovider.Provider scripted from the
+// turns JSON file named by HARNESS_FAKE_TURNS.  When HARNESS_PROVIDER is absent
+// the existing (OpenAI/registry) path must be untouched.
+func TestResolveDefaultProvider_FakePath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fake provider loaded from turns file", func(t *testing.T) {
+		t.Parallel()
+
+		// Write a minimal turns JSON: one turn with content, usage, cost_usd, cost_status.
+		turnsJSON := `[
+			{
+				"content": "hello from fake",
+				"usage": {"prompt": 10, "completion": 5},
+				"cost_usd": 0.001,
+				"cost_status": "available"
+			}
+		]`
+		turnsFile := filepath.Join(t.TempDir(), "turns.json")
+		if err := os.WriteFile(turnsFile, []byte(turnsJSON), 0o644); err != nil {
+			t.Fatalf("write turns file: %v", err)
+		}
+
+		openAICalled := false
+		provider, err := resolveDefaultProvider(resolveDefaultProviderOptions{
+			getenv: func(key string) string {
+				switch key {
+				case "HARNESS_PROVIDER":
+					return "fake"
+				case "HARNESS_FAKE_TURNS":
+					return turnsFile
+				default:
+					return ""
+				}
+			},
+			newProvider: func(cfg openai.Config) (harness.Provider, error) {
+				openAICalled = true
+				return &namedProvider{name: "openai"}, nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("resolveDefaultProvider: %v", err)
+		}
+		if openAICalled {
+			t.Fatal("OpenAI provider factory must not be called when HARNESS_PROVIDER=fake")
+		}
+
+		fp, ok := provider.(*fakeprovider.Provider)
+		if !ok {
+			t.Fatalf("expected *fakeprovider.Provider, got %T", provider)
+		}
+
+		// Confirm the scripted turn is served correctly.
+		result, err := fp.Complete(context.Background(), harness.CompletionRequest{
+			Messages: []harness.Message{{Role: "user", Content: "ping"}},
+		})
+		if err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+		if result.Content != "hello from fake" {
+			t.Fatalf("Content: got %q, want %q", result.Content, "hello from fake")
+		}
+		if result.Usage == nil {
+			t.Fatal("Usage must not be nil")
+		}
+		if result.Usage.PromptTokens != 10 {
+			t.Fatalf("Usage.PromptTokens: got %d, want 10", result.Usage.PromptTokens)
+		}
+		if result.Usage.CompletionTokens != 5 {
+			t.Fatalf("Usage.CompletionTokens: got %d, want 5", result.Usage.CompletionTokens)
+		}
+		if result.CostUSD == nil || *result.CostUSD != 0.001 {
+			t.Fatalf("CostUSD: got %v, want 0.001", result.CostUSD)
+		}
+		if result.CostStatus != harness.CostStatusAvailable {
+			t.Fatalf("CostStatus: got %q, want %q", result.CostStatus, harness.CostStatusAvailable)
+		}
+	})
+
+	t.Run("missing turns file returns error", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := resolveDefaultProvider(resolveDefaultProviderOptions{
+			getenv: func(key string) string {
+				switch key {
+				case "HARNESS_PROVIDER":
+					return "fake"
+				case "HARNESS_FAKE_TURNS":
+					return "/nonexistent/path/turns.json"
+				default:
+					return ""
+				}
+			},
+			newProvider: func(cfg openai.Config) (harness.Provider, error) {
+				return &namedProvider{name: "openai"}, nil
+			},
+		})
+		if err == nil {
+			t.Fatal("expected error when turns file does not exist")
+		}
+	})
+
+	t.Run("HARNESS_PROVIDER unset leaves existing path untouched", func(t *testing.T) {
+		t.Parallel()
+
+		openAICalled := false
+		provider, err := resolveDefaultProvider(resolveDefaultProviderOptions{
+			getenv: func(key string) string {
+				switch key {
+				case "OPENAI_API_KEY":
+					return "test-key"
+				default:
+					return "" // HARNESS_PROVIDER not set
+				}
+			},
+			newProvider: func(cfg openai.Config) (harness.Provider, error) {
+				openAICalled = true
+				return &namedProvider{name: "openai"}, nil
+			},
+			model: "gpt-4.1-mini",
+		})
+		if err != nil {
+			t.Fatalf("resolveDefaultProvider: %v", err)
+		}
+		if !openAICalled {
+			t.Fatal("expected OpenAI provider factory to be called when HARNESS_PROVIDER is unset")
+		}
+		named, ok := provider.(*namedProvider)
+		if !ok || named.name != "openai" {
+			t.Fatalf("expected namedProvider{openai}, got %T %#v", provider, provider)
+		}
+	})
 }
 
 func TestLoadStartupProfileFallsBackToBuiltInProfile(t *testing.T) {
@@ -1879,7 +2015,7 @@ func TestCallbackRunStarterNilRunner(t *testing.T) {
 	t.Parallel()
 
 	starter := &callbackRunStarter{}
-	err := starter.StartRun("hello", "conv-1")
+	err := starter.StartRun("hello", "conv-1", "tenant-a", "agent-a")
 	if err == nil {
 		t.Fatalf("expected error when runner is nil")
 	}
@@ -1904,7 +2040,7 @@ func TestCallbackRunStarterWithRunner(t *testing.T) {
 	starter.runner = runner
 	starter.mu.Unlock()
 
-	err := starter.StartRun("do something", "")
+	err := starter.StartRun("do something", "", "", "")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

@@ -197,10 +197,13 @@ func (s *Server) handleScriptWorkflowRunByID(w http.ResponseWriter, r *http.Requ
 		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
 
-		// Emit historical events
+		// Emit historical events; short-circuit if a terminal event is already in history.
 		for _, ev := range history {
 			fmt.Fprintf(w, "id: %d\nevent: %s\ndata: %s\n\n", ev.Seq, ev.Type, mustJSON(ev.Payload))
 			flusher.Flush()
+			if ev.Type == workflow.EventWorkflowCompleted || ev.Type == workflow.EventWorkflowFailed {
+				return
+			}
 		}
 		// Stream live events
 		for {

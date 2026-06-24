@@ -1,0 +1,37 @@
+{
+  "schema_version": "1",
+  "description": "Entrant registry for the go-code comparison harness. Only go-code is fully specified here. All other entrants are COMMENTED stubs — fill them in when you actually run a comparison.",
+  "entrants": [
+    {
+      "id": "go-code",
+      "display_name": "go-code (this harness)",
+      "adapter": "adapters/go-code.sh",
+      "description": "go-agent-harness: POST /v1/runs → poll GET /v1/runs/{id} → GET /v1/runs/{id}/summary. Key-free when HARNESS_PROVIDER=fake.",
+      "requires_key": false,
+      "key_env": "OPENAI_API_KEY",
+      "notes": "Set HARNESS_PROVIDER=fake + HARNESS_FAKE_TURNS for key-free deterministic runs. Set HARNESS_BINARY to override harnessd path (default: harnessd on PATH)."
+    }
+  ],
+  "_stub_entrants_not_active": [
+    {
+      "_comment": "STUB — not built, not run. Fill in when you add this entrant.",
+      "id": "entrant-b",
+      "display_name": "TBD",
+      "adapter": "adapters/entrant-b.sh",
+      "description": "TBD — adapter not written; entrant not configured.",
+      "requires_key": true,
+      "key_env": "TBD_API_KEY",
+      "notes": "Operator must write adapters/entrant-b.sh following the contract in adapters/template.sh, then move this entry into the active 'entrants' array."
+    },
+    {
+      "_comment": "STUB — not built, not run. Fill in when you add this entrant.",
+      "id": "entrant-c",
+      "display_name": "TBD",
+      "adapter": "adapters/entrant-c.sh",
+      "description": "TBD — adapter not written; entrant not configured.",
+      "requires_key": true,
+      "key_env": "TBD_API_KEY",
+      "notes": "Operator must write adapters/entrant-c.sh following the contract in adapters/template.sh, then move this entry into the active 'entrants' array."
+    }
+  ]
+}

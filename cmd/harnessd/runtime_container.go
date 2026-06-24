@@ -69,6 +69,7 @@ type httpRuntimeOptions struct {
 	runStore             istore.Store
 	triggers             triggerRuntime
 	callbackStarter      *callbackRunStarter
+	callbackBridge       *harness.CallbackEventBridge
 	msgSummarizer        *lazySummarizer
 	skillManager         server.SkillManager
 	subagentBaseRef      string
@@ -122,6 +123,10 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		opts.callbackStarter.mu.Unlock()
 	}
 
+	if opts.callbackBridge != nil {
+		opts.callbackBridge.BindRunner(runner)
+	}
+
 	if opts.msgSummarizer != nil {
 		opts.msgSummarizer.mu.Lock()
 		opts.msgSummarizer.summarizer = runner.NewMessageSummarizer()
@@ -141,6 +146,7 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		providerRegistry: opts.providerRegistry,
 		runStore:         opts.runStore,
 		triggers:         opts.triggers,
+		rolloutDir:       opts.runnerCfg.RolloutDir,
 	}))
 
 	// Mount the MCP server at /mcp so external MCP clients can drive the harness.

@@ -77,7 +77,21 @@ func (a *conversationStoreAdapter) ListConversations(ctx context.Context, limit,
 }
 
 func (a *conversationStoreAdapter) SearchConversations(ctx context.Context, query string, limit int) ([]htools.ConversationSearchResult, error) {
-	msgs, err := a.store.SearchMessages(ctx, query, limit)
+	// Thread the run's tenant into the search so an agent cannot full-text-search
+	// conversations owned by other tenants via this LLM-exposed tool.
+	// RunMetadata is injected into the tool context by the step engine before any
+	// tool handler is invoked (runner_step_engine.go, ContextKeyRunMetadata).
+	//
+	// Tenant rules:
+	//   • Non-empty TenantID (including "default") → scope search to that tenant.
+	//   • No RunMetadata in context (auth-disabled local callers) → empty tenantID
+	//     disables the filter, preserving the pre-fix behaviour for single-process
+	//     deployments that have no tenant isolation requirement.
+	tenantID := ""
+	if meta, ok := htools.RunMetadataFromContext(ctx); ok {
+		tenantID = meta.TenantID
+	}
+	msgs, err := a.store.SearchMessages(ctx, tenantID, query, limit)
 	if err != nil {
 		return nil, err
 	}

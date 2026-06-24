@@ -122,6 +122,11 @@ func (w *WorktreeWorkspace) Provision(ctx context.Context, opts Options) error {
 	}
 	cmd := exec.CommandContext(ctx, "git", args...)
 	if out, err := cmd.CombinedOutput(); err != nil {
+		// git worktree add can partially succeed: it may create the branch before
+		// failing to check out the working tree (e.g. if the target directory is
+		// read-only). Best-effort cleanup removes the orphaned branch so it does
+		// not pollute the repository.
+		_ = w.Destroy(ctx)
 		return fmt.Errorf("workspace: git worktree add: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
@@ -129,6 +134,10 @@ func (w *WorktreeWorkspace) Provision(ctx context.Context, opts Options) error {
 	if opts.ConfigTOML != "" {
 		cfgPath := filepath.Join(w.path, "harness.toml")
 		if err := os.WriteFile(cfgPath, []byte(opts.ConfigTOML), 0o600); err != nil {
+			// Provisioning failed after the worktree was created. Best-effort
+			// cleanup: destroy the partial workspace so no orphaned directory or
+			// git branch is left behind.
+			_ = w.Destroy(ctx)
 			return fmt.Errorf("workspace: write harness.toml: %w", err)
 		}
 	}
@@ -167,6 +176,15 @@ func (w *WorktreeWorkspace) BaseRef() string {
 func (w *WorktreeWorkspace) Destroy(ctx context.Context) error {
 	if w.path == "" {
 		return nil
+	}
+
+	// Ensure the worktree directory is writable before attempting removal.
+	// Provisioning can fail mid-way (e.g. harness.toml write into a read-only
+	// dir), leaving the worktree directory with restricted permissions. Without
+	// this step, "git worktree remove --force" would itself fail with
+	// "Permission denied" and leave an orphaned branch behind.
+	if info, statErr := os.Stat(w.path); statErr == nil && info.IsDir() {
+		_ = os.Chmod(w.path, 0o755)
 	}
 
 	// Remove the worktree directory.

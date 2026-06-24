@@ -341,6 +341,7 @@ type serverBootstrapOptions struct {
 	providerRegistry *catalog.ProviderRegistry
 	runStore         istore.Store
 	triggers         triggerRuntime
+	rolloutDir       string
 }
 
 func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
@@ -361,5 +362,6 @@ func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
 		GitHubAdapter:    opts.triggers.github,
 		SlackAdapter:     opts.triggers.slack,
 		LinearAdapter:    opts.triggers.linear,
+		RolloutDir:       opts.rolloutDir,
 	}
 }

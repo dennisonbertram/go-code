@@ -16,10 +16,13 @@ import (
 	"syscall"
 	"time"
 
+	"encoding/json"
+
 	"github.com/google/uuid"
 	"go-agent-harness/internal/checkpoints"
 	"go-agent-harness/internal/config"
 	"go-agent-harness/internal/cron"
+	"go-agent-harness/internal/fakeprovider"
 	"go-agent-harness/internal/harness"
 	htools "go-agent-harness/internal/harness/tools"
 	"go-agent-harness/internal/mcp"
@@ -48,7 +51,7 @@ type callbackRunStarter struct {
 	runner *harness.Runner
 }
 
-func (a *callbackRunStarter) StartRun(prompt, conversationID string) error {
+func (a *callbackRunStarter) StartRun(prompt, conversationID, tenantID, agentID string) error {
 	a.mu.Lock()
 	r := a.runner
 	a.mu.Unlock()
@@ -58,6 +61,8 @@ func (a *callbackRunStarter) StartRun(prompt, conversationID string) error {
 	_, err := r.StartRun(harness.RunRequest{
 		Prompt:         prompt,
 		ConversationID: conversationID,
+		TenantID:       tenantID,
+		AgentID:        agentID,
 	})
 	return err
 }
@@ -571,10 +576,16 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 
 	// Delayed callbacks
 	var callbackStarter *callbackRunStarter
+	var callbackBridge *harness.CallbackEventBridge
 	var callbackMgr *htools.CallbackManager
 	if callbacksEnabled {
 		callbackStarter = &callbackRunStarter{}
-		callbackMgr = htools.NewCallbackManager(callbackStarter)
+		// The bridge forwards callback lifecycle events onto the originating
+		// run's SSE stream. It is bound to the Runner lazily (see
+		// buildHTTPRuntime), mirroring callbackStarter, because the manager is
+		// constructed before the Runner exists.
+		callbackBridge = harness.NewCallbackEventBridge()
+		callbackMgr = htools.NewCallbackManager(callbackStarter, htools.WithEventSink(callbackBridge))
 		log.Printf("delayed callbacks enabled")
 	}
 
@@ -797,6 +808,7 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		runStore:             runStore,
 		triggers:             triggerRuntime,
 		callbackStarter:      callbackStarter,
+		callbackBridge:       callbackBridge,
 		msgSummarizer:        msgSummarizer,
 		skillManager:         skillManager,
 		subagentBaseRef:      subagentBaseRef,
@@ -885,9 +897,73 @@ type resolveDefaultProviderOptions struct {
 //     use that provider so startup behavior matches the selected model.
 //  2. Else if OPENAI_API_KEY is set, keep the legacy OpenAI path.
 //  3. Else return a clear error describing the missing model/provider config.
+//
+// fakeProviderTurnJSON is the on-disk JSON shape for a single scripted turn.
+// It maps to fakeprovider.Turn.  Fields match the plan-defined schema:
+//
+//	{content, tool_calls?, usage{prompt,completion}?, cost_usd?, cost_status?}
+//
+// Note: usage uses short keys (prompt/completion) rather than the longer
+// CompletionUsage field names to keep the shell-smoke file concise.
+type fakeProviderTurnJSON struct {
+	Content    string                 `json:"content"`
+	ToolCalls  []harness.ToolCall     `json:"tool_calls,omitempty"`
+	Usage      *fakeProviderUsageJSON `json:"usage,omitempty"`
+	CostUSD    *float64               `json:"cost_usd,omitempty"`
+	CostStatus harness.CostStatus     `json:"cost_status,omitempty"`
+}
+
+type fakeProviderUsageJSON struct {
+	Prompt     int `json:"prompt"`
+	Completion int `json:"completion"`
+}
+
+// loadFakeTurns reads a JSON turns file and converts it to []fakeprovider.Turn.
+func loadFakeTurns(path string) ([]fakeprovider.Turn, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read fake turns file %q: %w", path, err)
+	}
+	var raw []fakeProviderTurnJSON
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return nil, fmt.Errorf("parse fake turns file %q: %w", path, err)
+	}
+	turns := make([]fakeprovider.Turn, len(raw))
+	for i, r := range raw {
+		t := fakeprovider.Turn{
+			Content:    r.Content,
+			ToolCalls:  r.ToolCalls,
+			CostUSD:    r.CostUSD,
+			CostStatus: r.CostStatus,
+		}
+		if r.Usage != nil {
+			total := r.Usage.Prompt + r.Usage.Completion
+			t.Usage = &harness.CompletionUsage{
+				PromptTokens:     r.Usage.Prompt,
+				CompletionTokens: r.Usage.Completion,
+				TotalTokens:      total,
+			}
+		}
+		turns[i] = t
+	}
+	return turns, nil
+}
+
 func resolveDefaultProvider(opts resolveDefaultProviderOptions) (harness.Provider, error) {
 	if opts.getenv == nil {
 		opts.getenv = os.Getenv
+	}
+
+	// Path 0: env-gated fake provider for key-free deterministic shell smoke.
+	// Activated only when HARNESS_PROVIDER=="fake"; default behavior is
+	// unchanged when the env var is absent.
+	if strings.TrimSpace(opts.getenv("HARNESS_PROVIDER")) == "fake" {
+		turnsPath := strings.TrimSpace(opts.getenv("HARNESS_FAKE_TURNS"))
+		turns, err := loadFakeTurns(turnsPath)
+		if err != nil {
+			return nil, fmt.Errorf("fake provider: %w", err)
+		}
+		return fakeprovider.New(turns), nil
 	}
 
 	model := strings.TrimSpace(opts.model)
