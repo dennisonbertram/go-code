@@ -359,6 +359,11 @@ func buildHelpDialog(reg *CommandRegistry, keys KeyMap) helpdialog.Model {
 		{Keys: "down / ctrl+n", Description: keys.ScrollDown.Help().Desc},
 		{Keys: "pgup", Description: keys.PageUp.Help().Desc},
 		{Keys: "pgdn", Description: keys.PageDown.Help().Desc},
+		{Keys: "/", Description: keys.SlashCmd.Help().Desc},
+		{Keys: "@", Description: keys.AtMention.Help().Desc},
+		{Keys: "? / ctrl+h", Description: keys.Help.Help().Desc},
+		{Keys: "ctrl+o", Description: "plan mode / expand active tool"},
+		{Keys: "ctrl+e", Description: keys.EditMode.Help().Desc},
 		{Keys: "esc", Description: keys.Interrupt.Help().Desc},
 		{Keys: "ctrl+s", Description: keys.Copy.Help().Desc},
 		{Keys: "ctrl+c", Description: keys.Quit.Help().Desc},
@@ -1248,7 +1253,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.setStatusMsg("Copy unavailable"))
 			}
 		case key.Matches(msg, m.keys.Interrupt):
-			// Always close the slash-complete dropdown on Escape.
+			// Highest priority: if the slash-complete dropdown is open, Escape
+			// closes ONLY the dropdown and retains the typed input. A second
+			// Escape then falls through to the priority chain below (clear input).
+			if m.slashComplete.IsActive() {
+				m.slashComplete = m.slashComplete.Close()
+				return m, tea.Batch(cmds...)
+			}
+			// Otherwise ensure the dropdown is closed and continue the chain.
 			m.slashComplete = m.slashComplete.Close()
 			// Multi-priority Escape semantics (highest to lowest):
 			// 0. apikeys overlay → back from input or close
@@ -1500,6 +1512,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							})
 							return m, tea.Batch(cmds...)
 						}
+					}
+					return m, tea.Batch(cmds...)
+				}
+				// No suggestion to accept. If the user typed a slash command (e.g.
+				// an unrecognized one), don't silently swallow Enter: dispatch it so
+				// the dispatcher reports an "Unknown command" hint, and clear the
+				// input. This avoids the dead-end where /notacommand + Enter does
+				// nothing and leaves stale text in the input.
+				m.slashComplete = m.slashComplete.Close()
+				raw := strings.TrimSpace(m.input.Value())
+				if parsed, ok := ParseCommand(raw); ok {
+					if _, found := m.commandRegistry.Lookup(parsed.Name); !found {
+						m.input = m.input.Clear()
+						cmds = append(cmds, m.setStatusMsg(UnknownResult(parsed.Name).Hint))
 					}
 				}
 				return m, tea.Batch(cmds...)
@@ -1982,17 +2008,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content string `json:"content"`
 			}
 			if err := json.Unmarshal(msg.Raw, &p); err == nil && p.Content != "" {
-				m.clearThinkingBar()
+				// Accumulate and re-render the assistant message through the
+				// glamour-backed message bubble. Re-rendering the full
+				// accumulated text each delta (rather than appending raw chunks
+				// with AppendChunk) is what enables markdown rendering on the
+				// live stream and avoids chunk-boundary line corruption.
 				m.lastAssistantText += p.Content
-				if !m.responseStarted {
-					// Start a fresh line for the assistant response so that any
-					// preceding tool-call lines are not contaminated by the chunk.
-					m.renderedToolCallID = ""
-					m.vp.AppendLine("")
-					m.responseStarted = true
-				}
-				m.renderedToolCallID = ""
-				m.vp.AppendChunk(p.Content) // accumulate on same line
+				m.renderActiveAssistantBubble()
 			}
 		case "assistant.thinking.delta":
 			var p struct {

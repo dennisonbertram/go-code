@@ -35,6 +35,34 @@ func TestStartRunCmdIncludesWorkspacePath(t *testing.T) {
 	}
 }
 
+func TestStartRunCmdSendsCapabilityProfileAsProfileField(t *testing.T) {
+	t.Parallel()
+
+	var rawBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&rawBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(runCreateResponse{RunID: "run-profile"})
+	}))
+	defer ts.Close()
+
+	// A capability profile selected via /profiles (e.g. "researcher") must be
+	// sent in the "profile" field (harness.RunRequest.ProfileName), NOT in
+	// "prompt_profile" — the server rejects unknown prompt profiles with HTTP 400.
+	msg := startRunCmd(ts.URL, "hello", "", "gpt-test", "openai", "", "researcher", "/tmp/x")()
+	if _, ok := msg.(RunStartedMsg); !ok {
+		t.Fatalf("expected RunStartedMsg, got %T: %+v", msg, msg)
+	}
+	if got, ok := rawBody["profile"]; !ok || got != "researcher" {
+		t.Errorf(`request must include "profile":"researcher"; got profile=%v (present=%v)`, got, ok)
+	}
+	if _, ok := rawBody["prompt_profile"]; ok {
+		t.Errorf(`capability profile must NOT be sent as "prompt_profile"; body=%v`, rawBody)
+	}
+}
+
 func TestLoadSubagentsCmdReturnsDecodedSubagents(t *testing.T) {
 	t.Parallel()
 
