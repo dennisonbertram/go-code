@@ -469,12 +469,13 @@ type RunnerConfig struct {
 	// slots free up. When 0 (the default), there is no cap — all runs start
 	// immediately (the legacy unbounded behaviour).
 	WorkerPoolSize int
-	// MaxCompletedRetention caps terminal run states retained in memory.
-	// Completed, failed, and cancelled runs with active subscribers are not
-	// pruned until the subscriber cancels. Values <= 0 use the default.
+	// MaxCompletedRetention caps completed/failed/cancelled run states retained
+	// in memory after terminal events are persisted and subscribers drain.
+	// 0 uses the default retention window.
 	MaxCompletedRetention int
-	// MaxConversationRetention caps the in-memory conversation mirror. Persistent
-	// ConversationStore implementations are unaffected. Values <= 0 use the default.
+	// MaxConversationRetention caps the in-memory conversation transcript mirror.
+	// Persistent ConversationStore history, when configured, is left untouched.
+	// 0 uses the default retention window.
 	MaxConversationRetention int
 	AskUserTimeout           time.Duration
 	AskUserBroker            htools.AskUserQuestionBroker

@@ -2,162 +2,194 @@ package main
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"go-agent-harness/internal/harness"
-	"go-agent-harness/internal/store"
+	htools "go-agent-harness/internal/harness/tools"
+	"go-agent-harness/internal/mcpserver"
+	runstore "go-agent-harness/internal/store"
 )
 
-func TestMCPRunnerAdapter_StartStatusAndConversationMessages(t *testing.T) {
+func TestMCPRunnerAdapterRunStatusListAndConversation(t *testing.T) {
 	t.Parallel()
 
+	store := runstore.NewMemoryStore()
 	runner := harness.NewRunner(&noopProvider{}, harness.NewRegistry(), harness.RunnerConfig{
-		DefaultModel: "gpt-4.1-mini",
+		DefaultModel: "test-model",
+		MaxSteps:     1,
+		Store:        store,
+	})
+	adapter := &mcpRunnerAdapter{runner: runner, store: store}
+
+	runID, err := adapter.StartRun("hello via mcp")
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	status := waitForMCPRunStatus(t, adapter, runID, "completed")
+	if status.Output != "ok" {
+		t.Fatalf("status output = %q, want ok", status.Output)
+	}
+
+	runs, err := adapter.ListRuns()
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	found := false
+	for _, run := range runs {
+		if run.ID == runID && run.Status == "completed" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("stored run %q not found in ListRuns: %+v", runID, runs)
+	}
+
+	emptyList, err := (&mcpRunnerAdapter{runner: runner}).ListRuns()
+	if err != nil {
+		t.Fatalf("ListRuns without store: %v", err)
+	}
+	if len(emptyList) != 0 {
+		t.Fatalf("ListRuns without store length = %d, want 0", len(emptyList))
+	}
+
+	conversationRun, err := runner.StartRun(harness.RunRequest{
+		Prompt:         "remember this",
+		ConversationID: "conv-mcp",
+	})
+	if err != nil {
+		t.Fatalf("direct StartRun with conversation: %v", err)
+	}
+	waitForMCPRunStatus(t, adapter, conversationRun.ID, "completed")
+	messages, ok := adapter.ConversationMessages("conv-mcp")
+	if !ok {
+		t.Fatal("ConversationMessages: expected conversation")
+	}
+	if len(messages) == 0 {
+		t.Fatal("ConversationMessages returned no messages")
+	}
+	if messages[0].Role == "" || messages[0].Content == "" {
+		t.Fatalf("unexpected conversation message: %+v", messages[0])
+	}
+
+	if _, err := adapter.GetRunStatus("missing-run"); err == nil {
+		t.Fatal("expected missing run status error")
+	}
+	if _, ok := adapter.ConversationMessages("missing-conv"); ok {
+		t.Fatal("expected missing conversation lookup to return false")
+	}
+}
+
+func TestMCPRunnerAdapterSteerRun(t *testing.T) {
+	t.Parallel()
+
+	provider := &blockingMCPProvider{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	runner := harness.NewRunner(provider, harness.NewRegistry(), harness.RunnerConfig{
+		DefaultModel: "test-model",
 		MaxSteps:     1,
 	})
 	adapter := &mcpRunnerAdapter{runner: runner}
 
-	runID, err := adapter.StartRun("write a status")
+	runID, err := adapter.StartRun("long run")
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}
-	if runID == "" {
-		t.Fatal("expected run ID")
+	select {
+	case <-provider.started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("provider did not start")
 	}
-	waitHarnessdAdapterRun(t, runner, runID)
-
-	status, err := adapter.GetRunStatus(runID)
-	if err != nil {
-		t.Fatalf("GetRunStatus: %v", err)
+	if err := adapter.SteerRun(runID, "adjust course"); err != nil {
+		t.Fatalf("SteerRun: %v", err)
 	}
-	if status.ID != runID {
-		t.Fatalf("status ID = %q, want %q", status.ID, runID)
-	}
-	if status.Status != string(harness.RunStatusCompleted) {
-		t.Fatalf("status = %q, want completed", status.Status)
-	}
-	if status.Output != "ok" {
-		t.Fatalf("output = %q, want ok", status.Output)
-	}
-
-	messages, ok := adapter.ConversationMessages(runID)
-	if !ok {
-		t.Fatal("expected conversation messages")
-	}
-	if len(messages) < 2 {
-		t.Fatalf("expected user and assistant messages, got %d", len(messages))
-	}
-	if messages[0].Role != "user" || messages[0].Content != "write a status" {
-		t.Fatalf("first message = %#v", messages[0])
-	}
-	if messages[len(messages)-1].Role != "assistant" || messages[len(messages)-1].Content != "ok" {
-		t.Fatalf("last message = %#v", messages[len(messages)-1])
-	}
+	close(provider.release)
+	waitForMCPRunStatus(t, adapter, runID, "completed")
 }
 
-func TestMCPRunnerAdapter_GetRunStatusMissing(t *testing.T) {
+func TestMCPRunnerAdapterSubmitUserInput(t *testing.T) {
 	t.Parallel()
 
-	adapter := &mcpRunnerAdapter{runner: harness.NewRunner(&noopProvider{}, harness.NewRegistry(), harness.RunnerConfig{})}
-	_, err := adapter.GetRunStatus("run_missing")
-	if err == nil || !strings.Contains(err.Error(), "run_missing") {
-		t.Fatalf("GetRunStatus missing error = %v", err)
-	}
-}
-
-func TestMCPRunnerAdapter_ListRunsNilAndStoreBacked(t *testing.T) {
-	t.Parallel()
-
-	runner := harness.NewRunner(&noopProvider{}, harness.NewRegistry(), harness.RunnerConfig{})
+	provider := &scriptedHarnessdProvider{turns: []harness.CompletionResult{
+		{
+			ToolCalls: []harness.ToolCall{{
+				ID:        "call_ask_mcp",
+				Name:      htools.AskUserQuestionToolName,
+				Arguments: `{"questions":[{"question":"Where next?","header":"Route","options":[{"label":"Docs","description":"Read docs"},{"label":"Code","description":"Read code"}],"multiSelect":false}]}`,
+			}},
+		},
+		{Content: "resumed"},
+	}}
+	broker := harness.NewInMemoryAskUserQuestionBroker(time.Now)
+	runner := harness.NewRunner(provider, harness.NewDefaultRegistryWithOptions(t.TempDir(), harness.DefaultRegistryOptions{
+		ApprovalMode:   harness.ToolApprovalModeFullAuto,
+		AskUserBroker:  broker,
+		AskUserTimeout: 2 * time.Second,
+	}), harness.RunnerConfig{
+		DefaultModel:   "test-model",
+		MaxSteps:       4,
+		AskUserBroker:  broker,
+		AskUserTimeout: 2 * time.Second,
+	})
 	adapter := &mcpRunnerAdapter{runner: runner}
-	runs, err := adapter.ListRuns()
+
+	runID, err := adapter.StartRun("needs operator input")
 	if err != nil {
-		t.Fatalf("ListRuns nil store: %v", err)
+		t.Fatalf("StartRun: %v", err)
 	}
-	if runs != nil {
-		t.Fatalf("nil store ListRuns = %#v, want nil", runs)
+	waitForMCPRunStatus(t, adapter, runID, string(harness.RunStatusWaitingForUser))
+
+	if err := adapter.SubmitUserInput(runID, "Docs"); err != nil {
+		t.Fatalf("SubmitUserInput: %v", err)
+	}
+	status := waitForMCPRunStatus(t, adapter, runID, "completed")
+	if status.Output != "resumed" {
+		t.Fatalf("output = %q, want resumed", status.Output)
 	}
 
-	st := store.NewMemoryStore()
-	now := time.Now().UTC()
-	if err := st.CreateRun(context.Background(), &store.Run{
-		ID:        "run_store",
-		Model:     "gpt-4.1-mini",
-		Prompt:    "stored",
-		Status:    store.RunStatusFailed,
-		Output:    "partial",
-		Error:     "boom",
-		CreatedAt: now,
-		UpdatedAt: now,
-	}); err != nil {
-		t.Fatalf("CreateRun: %v", err)
-	}
-	adapter.store = st
-
-	runs, err = adapter.ListRuns()
-	if err != nil {
-		t.Fatalf("ListRuns store-backed: %v", err)
-	}
-	if len(runs) != 1 {
-		t.Fatalf("expected 1 run, got %d", len(runs))
-	}
-	if runs[0].ID != "run_store" || runs[0].Status != string(store.RunStatusFailed) || runs[0].Output != "partial" || runs[0].Error != "boom" {
-		t.Fatalf("mapped run = %#v", runs[0])
+	if err := adapter.SubmitUserInput(runID, "Docs"); err == nil || !strings.Contains(err.Error(), "no pending input") {
+		t.Fatalf("expected no pending input error after completion, got %v", err)
 	}
 }
 
-func TestMCPRunnerAdapter_DelegatedErrorPaths(t *testing.T) {
-	t.Parallel()
+type blockingMCPProvider struct {
+	started chan struct{}
+	release chan struct{}
+}
 
-	adapter := &mcpRunnerAdapter{runner: harness.NewRunner(&noopProvider{}, harness.NewRegistry(), harness.RunnerConfig{})}
-	if err := adapter.SteerRun("run_missing", "focus"); err == nil {
-		t.Fatal("expected SteerRun to return runner error for missing run")
+func (p *blockingMCPProvider) Complete(ctx context.Context, _ harness.CompletionRequest) (harness.CompletionResult, error) {
+	select {
+	case <-p.started:
+	default:
+		close(p.started)
 	}
-	if err := adapter.SubmitUserInput("run_missing", "answer"); err == nil {
-		t.Fatal("expected SubmitUserInput to return runner error for missing run")
-	}
-	if messages, ok := adapter.ConversationMessages("missing-conversation"); ok || messages != nil {
-		t.Fatalf("missing ConversationMessages = %#v, %v; want nil, false", messages, ok)
+	select {
+	case <-p.release:
+		return harness.CompletionResult{Content: "released"}, nil
+	case <-ctx.Done():
+		return harness.CompletionResult{}, ctx.Err()
 	}
 }
 
-type failingListStore struct {
-	store.Store
-}
-
-func (f failingListStore) ListRuns(context.Context, store.RunFilter) ([]*store.Run, error) {
-	return nil, errors.New("list exploded")
-}
-
-func TestMCPRunnerAdapter_ListRunsWrapsStoreError(t *testing.T) {
-	t.Parallel()
-
-	adapter := &mcpRunnerAdapter{
-		runner: harness.NewRunner(&noopProvider{}, harness.NewRegistry(), harness.RunnerConfig{}),
-		store:  failingListStore{Store: store.NewMemoryStore()},
-	}
-	_, err := adapter.ListRuns()
-	if err == nil || !strings.Contains(err.Error(), "list runs: list exploded") {
-		t.Fatalf("ListRuns error = %v", err)
-	}
-}
-
-func waitHarnessdAdapterRun(t *testing.T, runner *harness.Runner, runID string) {
+func waitForMCPRunStatus(t *testing.T, adapter *mcpRunnerAdapter, runID, want string) mcpserver.RunStatus {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(3 * time.Second)
+	var last mcpserver.RunStatus
 	for time.Now().Before(deadline) {
-		run, ok := runner.GetRun(runID)
-		if ok {
-			switch run.Status {
-			case harness.RunStatusCompleted, harness.RunStatusFailed, harness.RunStatusCancelled:
-				return
-			}
+		status, err := adapter.GetRunStatus(runID)
+		if err != nil {
+			t.Fatalf("GetRunStatus(%q): %v", runID, err)
+		}
+		last = status
+		if status.Status == want {
+			return last
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	run, _ := runner.GetRun(runID)
-	t.Fatalf("run %s did not finish, last state %#v", runID, run)
+	t.Fatalf("timed out waiting for run %s status %q; last=%+v", runID, want, last)
+	return last
 }

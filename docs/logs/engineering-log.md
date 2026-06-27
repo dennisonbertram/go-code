@@ -65,6 +65,72 @@
   - `go test ./...`
   - `go test ./... -race`
 
+## 2026-06-26 (Adapter-First Terminal-Bench Eval Harness)
+
+- Hardened the Terminal-Bench runner and adapter.
+  - `scripts/run-terminal-bench.sh` now performs preflight checks for dataset, Python, Docker daemon, tmux, Terminal-Bench command resolution, provider/key configuration, fake-provider turns, and target arch.
+  - The runner now builds linux/amd64 or linux/arm64 `harnessd` and `harnesscli` once per campaign and passes the binary directory to the adapter through `HARNESS_BENCH_BINARY_DIR`.
+  - The runner now passes explicit Terminal-Bench flags for model, custom agent import path, dataset path, output path, concurrency, attempts, and global timeouts.
+- Added `scripts/terminal_bench_artifacts.py`.
+  - Merges Terminal-Bench oracle output with adapter-produced `benchmark_result.json`.
+  - Validates merged rows against `benchmarks/comparison/result.schema.json`.
+  - Writes merged `results.jsonl`, `summary.json`, `run-env.json`, and an actionable `report.md`.
+  - Classifies failed tasks as `oracle_fail`, `agent_timeout`, `harness_error`, `provider_error`, `tool_contract_error`, `workspace_error`, or `infra_error`.
+- Updated the Terminal-Bench adapter to write per-trial `benchmark_result.json`, `harness_telemetry.json`, and `harnessd.log`, and to support key-free fake-provider mode.
+- Extended the benchmark result schema with external Terminal-Bench `parser_results` and derived failure classification fields.
+- Added `scripts/test_terminal_bench_artifacts.py` and wired it into the fast GitHub workflow.
+- Stabilized `TestWorkerPool_RunQueuedEventEmitted` for race-mode regression runs by using the same longer wait as the adjacent queued-transition test and releasing held provider channels through cleanup-safe helpers.
+- Validation:
+  - `python3 scripts/test_terminal_bench_artifacts.py`
+  - `python3 -m py_compile scripts/terminal_bench_artifacts.py scripts/test_terminal_bench_artifacts.py benchmarks/terminal_bench/agent.py`
+  - `bash -n scripts/run-terminal-bench.sh scripts/build-bench-images.sh`
+  - `git diff --check`
+  - `go test ./internal/... ./cmd/...`
+  - `go test ./internal/harness -race -run TestWorkerPool_RunQueuedEventEmitted -count=1`
+  - `go test ./internal/harness -race -count=1`
+- Full regression:
+  - `scripts/test-regression.sh` was run in tmux.
+  - First run failed in `go test ./... -race` on `internal/harness TestWorkerPool_RunQueuedEventEmitted`; the test was fixed and the package now passes under race.
+  - Second run passed `go test ./...` and `go test ./... -race`, then failed at `coveragegate` despite 83.9% total statement coverage because existing zero-covered functions remain across packages such as `cmd/harnessd`, `internal/checkpoints`, `internal/workflows`, and `internal/workingmemory`.
+- 2026-06-27 follow-up:
+  - Added focused coverage tests for the remaining zero-covered functions across `cmd/harnessd`, checkpoints, cloud scheduler, replay, harness brokers/tools, networks, workflows, and working memory.
+  - Stabilized `internal/harness TestWorktreePartialProvisionFailure_NoOrphan` under race mode by replacing the racy chmod watcher setup with a deterministic committed-directory blocker and bounded git setup.
+  - `scripts/test-regression.sh` now passes in tmux with `coveragegate: PASS (total=84.6%, min=80.0%, zero-functions=0)`.
+  - Refreshed Terminal-Bench CLI behavior from Context7, changed runner liveness from unsupported `--version` to `--help`, recorded the package version through Python metadata, and fixed empty extra-arg handling under `set -u`.
+  - Fixed real-smoke adapter blockers discovered during live runs.
+    - `cmd/harnesscli` now ignores SSE comment/heartbeat blocks such as `: ping` instead of failing with `invalid sse block`.
+    - `benchmarks/terminal_bench/agent.py` now copies provider credentials through a private container env file instead of embedding them in Terminal-Bench `commands.txt`.
+    - The adapter fetches run records, summaries, and harness logs through raw Docker `exec_run` output instead of parsing tmux-wrapped pane text.
+    - The adapter sets `HARNESS_PRICING_CATALOG_PATH` to the copied repo catalog path for models that have catalog pricing.
+  - Ran the accepted real-provider smoke campaign at `.tmp/terminal-bench/real-smoke-20260627-002630/2026-06-27__00-26-42`.
+    - Provenance recorded: git SHA `89b5064fba6b17423029db4a41ac02fb8857d350`, provider `openai`, model `gpt-5-mini`, Terminal-Bench `0.2.18`, dataset hash `31b29122bfa16205e6a66967fc444f5d46924a8ed9f39167cb27fc1e676d5457`, concurrency `1`, attempts `1`, timeouts `1800/300`.
+    - Result: 7/7 tasks passed with per-task `benchmark_result.json`, `harness_telemetry.json`, `harnessd.log`, command logs, pane logs, raw `results.json`, merged `results.jsonl`, `summary.json`, `run-env.json`, and `report.md`.
+    - Secret check: the accepted artifact directory has zero files matching raw OpenAI key patterns.
+  - Promoted `benchmarks/terminal_bench/baseline.json` from the accepted real-provider campaign. Cost is explicit but unpriced: `total_cost_usd=0.0`, `cost_status=unpriced_model`, because `catalog/pricing.json` does not yet include `gpt-5-mini`.
+
+## 2026-06-26 (Issue #649 Completed Run Retention)
+
+- Implemented reliability slice T01 from `docs/plans/2026-06-24-harness-reliability-plan.md` for issue `#649`.
+- Added bounded in-memory retention for terminal run states:
+  - `RunnerConfig.MaxCompletedRetention` defaults to 32.
+  - completed, failed, and cancelled runs are eligible for pruning only when a durable run `Store` is configured, after terminal handling, and when no subscribers remain attached.
+  - subscriber cancellation re-runs pruning so terminal runs held for streaming clients can be released after the stream detaches.
+- Added bounded in-memory conversation mirror retention:
+  - `RunnerConfig.MaxConversationRetention` defaults to 256.
+  - `r.conversations`, `r.conversationOwners`, and conversation recency metadata evict together.
+  - persistent `ConversationStore` history remains the fallback for pruned conversation mirrors.
+- Added regressions in `internal/harness/runner_prune_test.go` covering completed-run pruning, active-subscriber retention, and persistent-store fallback for evicted conversation mirrors.
+- Red phase:
+  - `go test ./internal/harness -run TestRunner_Prune -count=1` failed to build because the retention config fields did not exist.
+- Verification:
+  - `go test ./internal/harness -run TestRunner_Prune -count=1`
+  - `go test ./internal/harness -count=1`
+  - `go test ./internal/server -run TestWorkerPoolLoad -count=1`
+  - `go test ./internal/harness/... -race -count=1`
+- Regression status:
+  - `./scripts/test-regression.sh` passed the `go test ./...` and `go test ./... -race` phases.
+  - `./scripts/test-regression.sh` failed at the coverage-gate phase because existing functions outside this slice still report `0.0%` coverage; total statement coverage was `83.9%`.
+
 ## 2026-05-05 (GitHub Pages User Repositioning)
 
 - Recentered the go-code GitHub Pages copy around the developer visitor.

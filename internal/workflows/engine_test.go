@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,27 +163,35 @@ func TestEngineExecutesRunStep(t *testing.T) {
 	}
 }
 
-func TestEngineDefinitionSubscribeAndFailurePaths(t *testing.T) {
+func TestEngineDefinitionSubscribeAndFailureEvents(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
 	engine := NewEngine(Options{
 		Definitions: []Definition{{
-			Name: "bad-flow",
+			Name: "failing-flow",
 			Steps: []StepDefinition{{
-				ID:   "bad",
-				Type: StepType("unsupported"),
+				ID:   "needs-tool",
+				Type: StepTypeTool,
+				Tool: "missing_executor",
 			}},
 		}},
 		Store: NewMemoryStore(),
 		Now:   func() time.Time { return now },
 	})
-	def, ok := engine.GetDefinition("bad-flow")
-	if !ok || def.Name != "bad-flow" {
-		t.Fatalf("GetDefinition = (%+v, %v), want bad-flow true", def, ok)
+
+	def, ok := engine.GetDefinition("failing-flow")
+	if !ok {
+		t.Fatal("expected failing-flow definition")
+	}
+	if len(def.Steps) != 1 || def.Steps[0].ID != "needs-tool" {
+		t.Fatalf("definition steps = %+v", def.Steps)
+	}
+	if _, ok := engine.GetDefinition("missing"); ok {
+		t.Fatal("missing definition returned ok=true")
 	}
 
-	run, err := engine.Start("bad-flow", nil)
+	run, err := engine.Start("failing-flow", nil)
 	if err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -191,28 +200,27 @@ func TestEngineDefinitionSubscribeAndFailurePaths(t *testing.T) {
 		t.Fatalf("Subscribe: %v", err)
 	}
 	defer cancel()
-	if len(history) == 0 {
-		t.Fatal("expected workflow.started history")
-	}
 
 	finalRun, _, err := waitForWorkflowRun(engine, run.ID)
 	if err != nil {
 		t.Fatalf("waitForWorkflowRun: %v", err)
 	}
 	if finalRun.Status != RunStatusFailed {
-		t.Fatalf("status = %q, want failed", finalRun.Status)
+		t.Fatalf("status = %q, want %q", finalRun.Status, RunStatusFailed)
 	}
-	if finalRun.Error == "" {
-		t.Fatal("expected failure error")
+	if !strings.Contains(finalRun.Error, "tool executor is not configured") {
+		t.Fatalf("error = %q", finalRun.Error)
 	}
 
-	select {
-	case ev := <-live:
-		if ev.WorkflowRunID != run.ID {
-			t.Fatalf("live event run id = %q, want %q", ev.WorkflowRunID, run.ID)
+	events := append([]Event(nil), history...)
+	deadline := time.After(2 * time.Second)
+	for !hasWorkflowEvent(events, "workflow.failed") {
+		select {
+		case event := <-live:
+			events = append(events, event)
+		case <-deadline:
+			t.Fatalf("timed out waiting for workflow.failed event; events=%+v", events)
 		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("timed out waiting for live workflow event")
 	}
 }
 
@@ -258,4 +266,13 @@ func waitForWorkflowRun(engine *Engine, runID string) (Run, []StepState, error) 
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func hasWorkflowEvent(events []Event, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
 }

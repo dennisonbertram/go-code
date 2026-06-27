@@ -5,26 +5,29 @@ import (
 	"testing"
 )
 
-func TestDockerExecutorSimulatedExecuteIncludesJobIdentity(t *testing.T) {
+func TestDockerExecutorSimulatedExecuteIncludesJobAndBackend(t *testing.T) {
 	t.Parallel()
 
-	exec := &DockerExecutor{}
-	raw := exec.simulatedExecute(Job{ID: "job-123", WorkflowName: "nightly"})
+	executor := &DockerExecutor{}
+	out := executor.simulatedExecute(Job{
+		ID:           "job-123",
+		WorkflowName: "nightly-regression",
+	})
 
-	var got map[string]string
-	if err := json.Unmarshal([]byte(raw), &got); err != nil {
-		t.Fatalf("simulatedExecute returned invalid JSON: %v", err)
+	var payload map[string]string
+	if err := json.Unmarshal([]byte(out), &payload); err != nil {
+		t.Fatalf("simulated output is not JSON: %v; output=%q", err, out)
 	}
-	if got["status"] != "completed" {
-		t.Fatalf("status = %q, want completed", got["status"])
+	if payload["status"] != "completed" {
+		t.Fatalf("status = %q, want completed", payload["status"])
 	}
-	if got["workflow"] != "nightly" {
-		t.Fatalf("workflow = %q, want nightly", got["workflow"])
+	if payload["workflow"] != "nightly-regression" {
+		t.Fatalf("workflow = %q, want nightly-regression", payload["workflow"])
 	}
-	if got["result"] != "simulated-job-123" {
-		t.Fatalf("result = %q, want simulated-job-123", got["result"])
+	if payload["result"] != "simulated-job-123" {
+		t.Fatalf("result = %q, want simulated-job-123", payload["result"])
 	}
-	if got["backend"] != "docker-simulated" {
-		t.Fatalf("backend = %q, want docker-simulated", got["backend"])
+	if payload["backend"] != "docker-simulated" {
+		t.Fatalf("backend = %q, want docker-simulated", payload["backend"])
 	}
 }

@@ -40,6 +40,32 @@
   - Treat full-suite/race/regression gates as pending until the broader P0 merge path is executed.
 - Next verification step: finish the remaining #644 slices in order, then run `go test ./...`, `go test ./... -race`, and `./scripts/test-regression.sh` before promoting the reliability epic.
 
+## 2026-06-26 (Adapter-First Eval Harness)
+
+- Command intent: Implement the adapter-first eval harness plan by making Terminal-Bench runs reproducible, schema-validated, explainable, and regression-reportable before introducing any native `go-code eval` surface.
+- User intent: Turn `go-code` into a serious coding harness for Terminal-Bench-style evaluations where pass/fail, cost, logs, and failures can be trusted and compared over time.
+- Success definition:
+  - `scripts/run-terminal-bench.sh` has deterministic preflight for Docker, tmux, Terminal-Bench, model/provider configuration, and fake-provider key-free smoke mode.
+  - The Terminal-Bench adapter writes per-trial harness facts (`benchmark_result.json`, telemetry, and logs) without inventing task pass/fail.
+  - Postprocessing merges Terminal-Bench oracle results into schema-validated `results.jsonl`, writes campaign provenance, classifies failures, and generates an actionable report.
+  - Fast CI covers the artifact merge/report/preflight contract without requiring Docker or paid model calls.
+  - No new baseline is accepted until a green real-provider smoke campaign records git SHA, model, provider, Terminal-Bench version, task-set hash, concurrency, attempts, timeouts, and cost.
+- Non-goals:
+  - Adding a public native `go-code eval` command in this slice.
+  - Expanding the task suite beyond the existing smoke tier in this slice.
+  - Replacing sample baselines with real baselines without running a verified real-provider campaign.
+- Guardrails/constraints:
+  - Keep `is_resolved` and parser results external to the harness adapter.
+  - Keep paid Terminal-Bench runs out of PR gates unless explicitly enabled.
+  - Preserve Terminal-Bench as the primary operator interface.
+- Verification update on 2026-06-27:
+  - `scripts/test-regression.sh` now passes with `coveragegate: PASS (total=84.6%, min=80.0%, zero-functions=0)`.
+  - Initial real-provider attempts exposed and fixed three adapter blockers: `harnesscli` treated SSE keepalive comments as fatal, task command logs exposed inline provider credentials, and adapter JSON fetches parsed tmux-wrapped output instead of raw container stdout.
+  - The final real-provider smoke campaign ran under `.tmp/terminal-bench/real-smoke-20260627-002630/2026-06-27__00-26-42` with `provider=openai`, `model=gpt-5-mini`, Terminal-Bench `0.2.18`, dataset hash `31b29122bfa16205e6a66967fc444f5d46924a8ed9f39167cb27fc1e676d5457`, concurrency `1`, attempts `1`, and timeouts `1800/300`.
+  - The final campaign passed 7/7 and produced raw `results.json`, merged `results.jsonl`, `run-env.json`, `summary.json`, per-task `benchmark_result.json`, per-task `harness_telemetry.json`, logs, and `report.md`.
+  - `baseline.json` was promoted from the green campaign. Cost is recorded as `0.0` with `cost_status=unpriced_model` because `catalog/pricing.json` does not yet include `gpt-5-mini`.
+- Next verification step: add catalog pricing for `gpt-5-mini` or run a priced model before making cost-sensitive gates stricter than the current explicit `unpriced_model` baseline.
+
 ## 2026-05-03 (Repository Rename and Public README Cleanup)
 
 - Command intent: Rename the repository to `go-code` and make the public project presentation clear for first-time visitors.
@@ -1035,3 +1061,24 @@ Decision rule: when uncertain, default to `command intent` and `user intent` bel
 - Open questions:
   - Whether the `spawn_agent` system prompt should continue duplicating the task text while the typed handoff block becomes the canonical parent-context contract.
 - Next verification step: add failing handoff tests in tools/subagents/harness packages, implement the shared handoff helpers and propagation fields, then rerun focused suites and broader relevant tests.
+
+## 2026-06-26 (Issue #649 Harness Retention and Coveragegate Restoration)
+
+- Command intent: Complete the current T01 reliability slice and restore the full repository regression gate, including coveragegate.
+- User intent: Keep the harness reliability work reviewable while proving the repo can pass its actual pre-merge gate without weakening coverage rules.
+- Success definition:
+  - Completed harness run state and conversation mirrors are pruned with bounded retention.
+  - Durable-store compatibility is preserved for completed run lookup.
+  - Existing T01 pruning regressions remain green.
+  - Coveragegate reports zero uncovered functions without reducing `MIN_TOTAL_COVERAGE`, removing the zero-function rule, or excluding code just to pass.
+  - `./scripts/test-regression.sh` exits 0 and prints `[regression] PASS`.
+- Non-goals:
+  - Broad reliability epic implementation outside T01.
+  - Refactoring unrelated runtime, workflow, or tool packages.
+- Guardrails/constraints:
+  - Add focused behavior tests for uncovered functions instead of superficial call-only coverage.
+  - Preserve existing local work and branch name.
+  - Update engineering evidence and local tracker state after verification.
+- Open questions:
+  - None for T01 completion.
+- Next verification step: review the scoped diff and, if accepted, promote through the repo's normal verify-and-merge flow.

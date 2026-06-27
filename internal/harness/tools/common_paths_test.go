@@ -150,14 +150,16 @@ func TestEnsureWorkspaceRootUsable(t *testing.T) {
 	})
 }
 
-func TestIsEACCESIdentifiesPathPermissionError(t *testing.T) {
+func TestIsEACCESRecognizesPathPermissionError(t *testing.T) {
 	t.Parallel()
 
-	err := &os.PathError{Op: "open", Path: "/root/secret", Err: syscall.EACCES}
-	if !isEACCES(err) {
-		t.Fatal("expected EACCES path error to be detected")
+	if !isEACCES(&os.PathError{Op: "open", Path: "secret", Err: syscall.EACCES}) {
+		t.Fatal("expected EACCES path error to be recognized")
+	}
+	if isEACCES(&os.PathError{Op: "open", Path: "missing", Err: syscall.ENOENT}) {
+		t.Fatal("did not expect ENOENT to be recognized as EACCES")
 	}
 	if isEACCES(syscall.EACCES) {
-		t.Fatal("plain syscall errno without PathError should not match")
+		t.Fatal("bare syscall error should not match PathError-specific helper")
 	}
 }

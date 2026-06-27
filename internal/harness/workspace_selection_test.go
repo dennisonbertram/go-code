@@ -31,6 +31,8 @@ func (p *alwaysFailProviderWS) Complete(_ context.Context, _ CompletionRequest) 
 	return CompletionResult{}, errors.New("provider always fails")
 }
 
+var initGitRepoForWSMu sync.Mutex
+
 // drainRunEventsWS subscribes to a run and collects all events until a
 // terminal event is received or the deadline elapses.
 func drainRunEventsWS(t *testing.T, runner *Runner, runID string) []Event {
@@ -73,11 +75,21 @@ func drainRunEventsWS(t *testing.T, runner *Runner, runID string) []Event {
 // initGitRepoForWS creates a temp directory with a minimal git repo.
 func initGitRepoForWS(t *testing.T) string {
 	t.Helper()
+
+	// The race detector and macOS fork/exec can interact poorly when many
+	// parallel tests create git repositories at once. Serializing this test
+	// setup keeps the workspace tests deterministic without changing the
+	// production worktree paths they exercise.
+	initGitRepoForWSMu.Lock()
+	defer initGitRepoForWSMu.Unlock()
+
 	dir := t.TempDir()
 
 	runGitWS := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", args...)
 		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -733,63 +745,33 @@ allow = []
 // success), the runner must Destroy the partial workspace before emitting
 // workspace.provision_failed so no orphaned worktree dir or git branch remains.
 //
-// Failure is induced by making the newly-created worktree directory read-only
-// after git worktree add creates it but before the harness.toml ConfigTOML write
-// runs. A background goroutine watches for the worktree subdirectory to appear
-// and immediately removes write permission (0o555). This causes os.WriteFile to
-// return "permission denied", triggering the partial-failure path.
+// Failure is induced by committing a harness.toml directory into the source
+// repository. The worktree is created successfully, then ConfigTOML writing
+// fails because the target path is a directory. This deterministically triggers
+// the partial-failure cleanup path after git worktree add has succeeded.
 func TestWorktreePartialProvisionFailure_NoOrphan(t *testing.T) {
 	t.Parallel()
 
 	repoDir := initGitRepoForWS(t)
 	worktreeRootDir := t.TempDir()
-
-	// background goroutine: watch for the worktree to be fully provisioned by
-	// git (i.e. the .git file is present inside the worktree dir), then make the
-	// directory read-only so the subsequent harness.toml ConfigTOML write fails.
-	// Waiting for .git ensures git worktree add has completed, so the partial
-	// failure happens at the ConfigTOML write step — not inside git itself.
-	var (
-		mu          sync.Mutex
-		chmodTarget string
-	)
-	watchDone := make(chan struct{})
-	go func() {
-		defer close(watchDone)
-		deadline := time.Now().Add(15 * time.Second)
-		for time.Now().Before(deadline) {
-			entries, err := os.ReadDir(worktreeRootDir)
-			if err == nil && len(entries) > 0 {
-				for _, e := range entries {
-					if !e.IsDir() {
-						continue
-					}
-					// Wait for the .git file to exist inside the worktree,
-					// confirming git worktree add finished before we chmod.
-					gitFile := filepath.Join(worktreeRootDir, e.Name(), ".git")
-					if _, statErr := os.Stat(gitFile); statErr == nil {
-						target := filepath.Join(worktreeRootDir, e.Name())
-						mu.Lock()
-						chmodTarget = target
-						mu.Unlock()
-						_ = os.Chmod(target, 0o555)
-						return
-					}
-				}
-			}
-			time.Sleep(1 * time.Millisecond)
+	blockingDir := filepath.Join(repoDir, "harness.toml")
+	if err := os.Mkdir(blockingDir, 0o755); err != nil {
+		t.Fatalf("mkdir harness.toml blocker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(blockingDir, "placeholder"), []byte("block"), 0o644); err != nil {
+		t.Fatalf("write harness.toml blocker: %v", err)
+	}
+	for _, args := range [][]string{
+		{"add", "harness.toml"},
+		{"commit", "-m", "add harness toml directory blocker"},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoDir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
 		}
-	}()
-	t.Cleanup(func() {
-		// Restore write permission so t.TempDir() cleanup can remove the dir.
-		mu.Lock()
-		target := chmodTarget
-		mu.Unlock()
-		if target != "" {
-			_ = os.Chmod(target, 0o755)
-		}
-		<-watchDone
-	})
+	}
 
 	runner := NewRunner(
 		&staticProviderWS{result: CompletionResult{Content: "done"}},
@@ -799,10 +781,7 @@ func TestWorktreePartialProvisionFailure_NoOrphan(t *testing.T) {
 			WorkspaceBaseOptions: WorkspaceProvisionOptions{
 				RepoPath:        repoDir,
 				WorktreeRootDir: worktreeRootDir,
-				// Non-empty ConfigTOML ensures os.WriteFile is attempted after
-				// git worktree add, giving the goroutine a window to make the
-				// directory read-only and trigger the partial-failure path.
-				ConfigTOML: "[runner]\nmax_steps = 1\n",
+				ConfigTOML:      "[runner]\nmax_steps = 1\n",
 			},
 		},
 	)

@@ -73,36 +73,33 @@ func TestCheckpointApprovalBrokerPersistsPendingApproval(t *testing.T) {
 	}
 }
 
-func TestCheckpointApprovalBrokerDenyResolvesPendingApproval(t *testing.T) {
+func TestCheckpointApprovalBrokerDenyRejectsPendingApproval(t *testing.T) {
 	t.Parallel()
 
-	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
 	checkpointSvc := checkpoints.NewService(checkpoints.NewMemoryStore(), func() time.Time { return now })
 	broker := NewCheckpointApprovalBroker(checkpointSvc)
 
-	done := make(chan error, 1)
+	resultCh := make(chan bool, 1)
+	errCh := make(chan error, 1)
 	go func() {
 		approved, err := broker.Ask(context.Background(), ApprovalRequest{
-			RunID:   "run-deny",
-			CallID:  "call-deny",
+			RunID:   "run-denied",
+			CallID:  "call-denied",
 			Tool:    "write",
-			Args:    `{"path":"README.md"}`,
+			Args:    `{"path":"blocked.txt"}`,
 			Timeout: time.Minute,
 		})
 		if err != nil {
-			done <- err
+			errCh <- err
 			return
 		}
-		if approved {
-			done <- context.Canceled
-			return
-		}
-		done <- nil
+		resultCh <- approved
 	}()
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		if _, ok := broker.Pending("run-deny"); ok {
+		if _, ok := broker.Pending("run-denied"); ok {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -111,11 +108,21 @@ func TestCheckpointApprovalBrokerDenyResolvesPendingApproval(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	if err := broker.Deny("run-deny"); err != nil {
+	if err := broker.Deny("run-denied"); err != nil {
 		t.Fatalf("Deny: %v", err)
 	}
-	if err := <-done; err != nil {
-		t.Fatalf("Ask completion: %v", err)
+	select {
+	case err := <-errCh:
+		t.Fatalf("Ask returned error: %v", err)
+	case approved := <-resultCh:
+		if approved {
+			t.Fatal("denied approval returned approved=true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for denied approval result")
+	}
+	if err := broker.Deny("run-denied"); err != ErrNoPendingApproval {
+		t.Fatalf("Deny after resolution = %v, want ErrNoPendingApproval", err)
 	}
 }
 

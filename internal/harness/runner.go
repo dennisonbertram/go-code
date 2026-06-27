@@ -256,8 +256,9 @@ type Runner struct {
 	// block run queries, while cancellation may still close subscriber channels.
 	subscriberMu      sync.Mutex
 	closedSubscribers map[chan Event]struct{}
-	// conversationTouched records the most recent in-memory mirror update for
-	// each conversation so pruning can evict oldest mirrors deterministically.
+	// conversationTouched tracks recency for the in-memory conversation mirror.
+	// It deliberately mirrors r.conversations only; durable retention is owned
+	// by ConversationStore implementations.
 	conversationTouched map[string]time.Time
 	// conversationOwners maps conversation_id -> owner (tenantID + agentID).
 	// It is populated when a run completes and its conversation is saved to the
@@ -387,6 +388,109 @@ func NewRunner(provider Provider, tools *Registry, config RunnerConfig) *Runner 
 		go r.poolDispatcher()
 	}
 	return r
+}
+
+type retainedRunCandidate struct {
+	id        string
+	updatedAt time.Time
+}
+
+func (r *Runner) pruneCompletedRuns() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pruneCompletedRunsLocked()
+}
+
+func (r *Runner) pruneCompletedRunsLocked() {
+	if r.config.Store == nil {
+		return
+	}
+
+	limit := r.config.MaxCompletedRetention
+	if limit <= 0 {
+		limit = defaultMaxCompletedRetention
+	}
+
+	terminalCount := 0
+	candidates := make([]retainedRunCandidate, 0)
+	for runID, state := range r.runs {
+		if state == nil || !isTerminalRunStatus(state.run.Status) {
+			continue
+		}
+		terminalCount++
+		if len(state.subscribers) == 0 {
+			candidates = append(candidates, retainedRunCandidate{
+				id:        runID,
+				updatedAt: state.run.UpdatedAt,
+			})
+		}
+	}
+	if terminalCount <= limit || len(candidates) == 0 {
+		return
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].updatedAt.Equal(candidates[j].updatedAt) {
+			return candidates[i].id < candidates[j].id
+		}
+		return candidates[i].updatedAt.Before(candidates[j].updatedAt)
+	})
+
+	toDelete := terminalCount - limit
+	if toDelete > len(candidates) {
+		toDelete = len(candidates)
+	}
+	for i := 0; i < toDelete; i++ {
+		delete(r.runs, candidates[i].id)
+	}
+}
+
+type retainedConversationCandidate struct {
+	id        string
+	touchedAt time.Time
+}
+
+func (r *Runner) pruneConversationMirror() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pruneConversationMirrorLocked()
+}
+
+func (r *Runner) pruneConversationMirrorLocked() {
+	limit := r.config.MaxConversationRetention
+	if limit <= 0 {
+		limit = defaultMaxConversationRetention
+	}
+	if len(r.conversations) <= limit {
+		return
+	}
+
+	candidates := make([]retainedConversationCandidate, 0, len(r.conversations))
+	for convID := range r.conversations {
+		touchedAt := r.conversationTouched[convID]
+		candidates = append(candidates, retainedConversationCandidate{
+			id:        convID,
+			touchedAt: touchedAt,
+		})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].touchedAt.Equal(candidates[j].touchedAt) {
+			return candidates[i].id < candidates[j].id
+		}
+		return candidates[i].touchedAt.Before(candidates[j].touchedAt)
+	})
+
+	toDelete := len(r.conversations) - limit
+	for i := 0; i < toDelete; i++ {
+		convID := candidates[i].id
+		delete(r.conversations, convID)
+		delete(r.conversationOwners, convID)
+		delete(r.conversationTouched, convID)
+	}
+}
+
+func isTerminalRunStatus(status RunStatus) bool {
+	return status == RunStatusCompleted || status == RunStatusFailed || status == RunStatusCancelled
 }
 
 // GetProviderRegistry returns the provider registry, if configured.
@@ -2558,8 +2662,9 @@ func (r *Runner) completeRun(runID, output string) {
 		r.mu.RUnlock()
 
 		r.mu.Lock()
+		touchedAt := time.Now().UTC()
 		r.conversations[convID] = msgs
-		r.conversationTouched[convID] = time.Now().UTC()
+		r.conversationTouched[convID] = touchedAt
 		// Record ownership so that future StartRun callers with the same
 		// ConversationID can be validated against the originating tenant+agent
 		// (cross-tenant/cross-agent disclosure prevention, issue #221).
@@ -2567,7 +2672,7 @@ func (r *Runner) completeRun(runID, output string) {
 			tenantID: tenantID,
 			agentID:  agentID,
 		}
-		r.pruneConversationsLocked()
+		r.pruneConversationMirrorLocked()
 		r.mu.Unlock()
 
 		// Persist to SQLite store if configured
@@ -2597,6 +2702,7 @@ func (r *Runner) completeRun(runID, output string) {
 				}
 			}
 		}
+		r.pruneConversationMirror()
 	} else {
 		r.mu.RUnlock()
 	}
@@ -2632,6 +2738,7 @@ func (r *Runner) completeRun(runID, output string) {
 	// S3 backup: upload JSONL after the terminal event is emitted and the
 	// store has been updated. Runs in a goroutine; errors are non-fatal.
 	r.backupRunToS3(runID)
+	r.pruneCompletedRuns()
 }
 
 // maybeEmitProfileEfficiencySuggestion emits a profile.efficiency_suggestion
@@ -2995,6 +3102,7 @@ func (r *Runner) failRun(runID string, err error) {
 	// S3 backup: upload JSONL after the terminal event is emitted.
 	// Runs in a goroutine; errors are non-fatal.
 	r.backupRunToS3(runID)
+	r.pruneCompletedRuns()
 }
 
 // failRunMaxSteps is a specialisation of failRun used when the step loop
@@ -3047,6 +3155,7 @@ func (r *Runner) failRunMaxSteps(runID string, maxSteps int) {
 	// S3 backup: upload JSONL after the terminal event is emitted.
 	// Runs in a goroutine; errors are non-fatal.
 	r.backupRunToS3(runID)
+	r.pruneCompletedRuns()
 }
 
 // failRunMaxTurns is a specialisation of failRun used when the step loop
@@ -3099,6 +3208,7 @@ func (r *Runner) failRunMaxTurns(runID string, maxTurns int) {
 	// S3 backup: upload JSONL after the terminal event is emitted.
 	// Runs in a goroutine; errors are non-fatal.
 	r.backupRunToS3(runID)
+	r.pruneCompletedRuns()
 }
 
 // cancelledRun emits the run.cancelled terminal event and sets the run's status
@@ -3134,6 +3244,7 @@ func (r *Runner) cancelledRun(runID string) {
 		"usage_totals": usageTotals,
 		"cost_totals":  costTotals,
 	})
+	r.pruneCompletedRuns()
 }
 
 // CancelRun requests cooperative cancellation of the run identified by runID.
@@ -4515,78 +4626,6 @@ func (r *Runner) emit(runID string, eventType EventType, payload map[string]any)
 		r.pruneCompletedRuns()
 	}
 	journal.dispatch(delivery)
-}
-
-func isTerminalRunStatus(status RunStatus) bool {
-	return status == RunStatusCompleted || status == RunStatusFailed || status == RunStatusCancelled
-}
-
-func (r *Runner) pruneCompletedRunsLocked() {
-	limit := r.config.MaxCompletedRetention
-	if limit <= 0 {
-		return
-	}
-
-	type candidate struct {
-		id        string
-		updatedAt time.Time
-	}
-	candidates := make([]candidate, 0, len(r.runs))
-	for id, state := range r.runs {
-		if state == nil || !isTerminalRunStatus(state.run.Status) || len(state.subscribers) > 0 {
-			continue
-		}
-		updatedAt := state.run.UpdatedAt
-		if updatedAt.IsZero() {
-			updatedAt = state.run.CreatedAt
-		}
-		candidates = append(candidates, candidate{id: id, updatedAt: updatedAt})
-	}
-	if len(candidates) <= limit {
-		return
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].updatedAt.Equal(candidates[j].updatedAt) {
-			return candidates[i].id < candidates[j].id
-		}
-		return candidates[i].updatedAt.Before(candidates[j].updatedAt)
-	})
-	for _, entry := range candidates[:len(candidates)-limit] {
-		delete(r.runs, entry.id)
-	}
-}
-
-func (r *Runner) pruneCompletedRuns() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.pruneCompletedRunsLocked()
-}
-
-func (r *Runner) pruneConversationsLocked() {
-	limit := r.config.MaxConversationRetention
-	if limit <= 0 || len(r.conversations) <= limit {
-		return
-	}
-
-	type candidate struct {
-		id        string
-		touchedAt time.Time
-	}
-	candidates := make([]candidate, 0, len(r.conversations))
-	for id := range r.conversations {
-		candidates = append(candidates, candidate{id: id, touchedAt: r.conversationTouched[id]})
-	}
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].touchedAt.Equal(candidates[j].touchedAt) {
-			return candidates[i].id < candidates[j].id
-		}
-		return candidates[i].touchedAt.Before(candidates[j].touchedAt)
-	})
-	for _, entry := range candidates[:len(candidates)-limit] {
-		delete(r.conversations, entry.id)
-		delete(r.conversationOwners, entry.id)
-		delete(r.conversationTouched, entry.id)
-	}
 }
 
 func (r *Runner) emitCompletionDelta(runID string, step int, delta CompletionDelta) {
