@@ -103,6 +103,13 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 			return catalogBootstrap{}, fmt.Errorf("load pricing catalog from %s: %w", pricingCatalogPath, err)
 		}
 		bootstrap.pricingResolver = resolver
+	} else if bootstrap.modelCatalog != nil {
+		// No explicit pricing file — fall back to the pricing blocks embedded in
+		// the model catalog itself (catalog/models.json already has Anthropic and
+		// OpenAI rates). This ensures cost reporting works out of the box without
+		// requiring HARNESS_PRICING_CATALOG_PATH to be set.
+		bootstrap.pricingResolver = catalog.NewCatalogPricingResolver(bootstrap.modelCatalog)
+		opts.logger("pricing resolver wired from model catalog (fallback)")
 	}
 
 	if bootstrap.providerRegistry != nil {
