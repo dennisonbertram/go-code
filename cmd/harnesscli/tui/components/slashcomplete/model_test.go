@@ -291,3 +291,144 @@ func TestTUI042_VisualSnapshot_200x50(t *testing.T) {
 		t.Error("View() returned empty output at width 200")
 	}
 }
+
+// make14Suggestions returns 14 suggestions for scroll tests.
+func make14Suggestions() []slashcomplete.Suggestion {
+	names := []string{
+		"aaa", "bbb", "ccc", "ddd", "eee", "fff", "ggg", "hhh",
+		"iii", "jjj", "kkk", "lll", "mmm", "nnn",
+	}
+	out := make([]slashcomplete.Suggestion, len(names))
+	for i, n := range names {
+		out[i] = slashcomplete.Suggestion{Name: n, Description: "item " + n}
+	}
+	return out
+}
+
+// TestTUI063_ScrollWindowAdvances verifies that navigating Down() 9 times with 14
+// suggestions keeps the selected index within the visible window [windowStart, windowStart+8).
+// This is the primary regression test for #663.
+func TestTUI063_ScrollWindowAdvances(t *testing.T) {
+	m := slashcomplete.New(make14Suggestions())
+	m = m.Open()
+
+	for i := 0; i < 9; i++ {
+		m = m.Down()
+	}
+
+	// After 9 Down() calls, selected should be at index 9.
+	s, ok := m.Selected()
+	if !ok {
+		t.Fatal("Selected() returned ok=false after 9 Down() calls")
+	}
+	want := "jjj" // 10th item (index 9)
+	if s.Name != want {
+		t.Errorf("After 9 Down(), selected = %q, want %q", s.Name, want)
+	}
+
+	// The scroll window must have advanced so selected (9) is within [start, start+8).
+	windowStart := m.ScrollOffset()
+	if windowStart > 9 || windowStart+8 <= 9 {
+		t.Errorf("ScrollOffset()=%d does not contain selected=9; window=[%d,%d)",
+			windowStart, windowStart, windowStart+8)
+	}
+}
+
+// TestTUI063_ViewContains9thItemAfterNav verifies that View() renders the 9th
+// suggestion's name after navigating to it (the regression: previously item 9
+// was not rendered at all because only filtered[0:8] was shown).
+func TestTUI063_ViewContains9thItemAfterNav(t *testing.T) {
+	m := slashcomplete.New(make14Suggestions())
+	m = m.Open()
+
+	for i := 0; i < 9; i++ {
+		m = m.Down()
+	}
+
+	view := m.View(80)
+	// "jjj" is the 10th item (index 9); it should appear in the rendered view.
+	if !strings.Contains(view, "jjj") {
+		t.Errorf("View() does not contain 'jjj' after navigating to index 9.\nView:\n%s", view)
+	}
+}
+
+// TestTUI063_SetQueryResetsScrollOffset verifies that calling SetQuery() resets
+// the scroll offset back to 0.
+func TestTUI063_SetQueryResetsScrollOffset(t *testing.T) {
+	m := slashcomplete.New(make14Suggestions())
+	m = m.Open()
+
+	// Navigate deep to advance the scroll window.
+	for i := 0; i < 10; i++ {
+		m = m.Down()
+	}
+	if m.ScrollOffset() == 0 {
+		// scroll might not have moved yet if window didn't need to scroll; still valid
+		// but let's make sure we actually did move it past 8 before asserting reset.
+	}
+
+	// SetQuery resets offset.
+	m = m.SetQuery("")
+	if m.ScrollOffset() != 0 {
+		t.Errorf("SetQuery reset: ScrollOffset()=%d, want 0", m.ScrollOffset())
+	}
+}
+
+// TestTUI063_ScrollUpKeepsSelectedVisible verifies that navigating Up() from a
+// scrolled position brings the selected item back into view.
+func TestTUI063_ScrollUpKeepsSelectedVisible(t *testing.T) {
+	m := slashcomplete.New(make14Suggestions())
+	m = m.Open()
+
+	// Go down 10 times to scroll the window.
+	for i := 0; i < 10; i++ {
+		m = m.Down()
+	}
+
+	// Now go back up 3 times — window must follow.
+	for i := 0; i < 3; i++ {
+		m = m.Up()
+	}
+
+	// selected = 7
+	s, ok := m.Selected()
+	if !ok {
+		t.Fatal("Selected() returned ok=false")
+	}
+	want := "hhh" // index 7
+	if s.Name != want {
+		t.Errorf("After 10 Down + 3 Up, selected = %q, want %q", s.Name, want)
+	}
+
+	// Window must include selected (7).
+	ws := m.ScrollOffset()
+	if ws > 7 || ws+8 <= 7 {
+		t.Errorf("ScrollOffset=%d does not contain selected=7; window=[%d,%d)",
+			ws, ws, ws+8)
+	}
+}
+
+// TestTUI063_MoreIndicatorsPresent verifies that "▲"/"▼" scroll indicators appear
+// when the list extends beyond the visible window in either direction.
+func TestTUI063_MoreIndicatorsPresent(t *testing.T) {
+	m := slashcomplete.New(make14Suggestions())
+	m = m.Open()
+
+	// At index 0 with 14 items: only "below" indicator should appear.
+	view := m.View(80)
+	if !strings.Contains(view, "▼") {
+		t.Errorf("expected ▼ indicator when items extend below; view:\n%s", view)
+	}
+
+	// Navigate down 10: both above and below should be visible.
+	for i := 0; i < 10; i++ {
+		m = m.Down()
+	}
+	view = m.View(80)
+	if !strings.Contains(view, "▲") {
+		t.Errorf("expected ▲ indicator when items extend above; view:\n%s", view)
+	}
+	if !strings.Contains(view, "▼") {
+		t.Errorf("expected ▼ indicator when items extend below; view:\n%s", view)
+	}
+}
