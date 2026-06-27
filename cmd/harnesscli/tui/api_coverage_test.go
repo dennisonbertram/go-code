@@ -140,6 +140,33 @@ func TestFlattenJSONRendersNestedMapsAndSkipsNil(t *testing.T) {
 	}
 }
 
+func TestStartRunCmdSetsAllowFallback(t *testing.T) {
+	t.Parallel()
+
+	var got runCreateRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/runs" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(runCreateResponse{RunID: "run-fallback"}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer ts.Close()
+
+	msg := startRunCmd(ts.URL, "hello", "", "gpt-test", "openai", "low", "default", "")()
+	if _, ok := msg.(RunStartedMsg); !ok {
+		t.Fatalf("expected RunStartedMsg, got %T: %+v", msg, msg)
+	}
+	if !got.AllowFallback {
+		t.Fatalf("expected allow_fallback=true in POST body, got false")
+	}
+}
+
 func TestFormatSubagentsLinesRendersSummaryAndDetails(t *testing.T) {
 	t.Parallel()
 

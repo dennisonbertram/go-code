@@ -27,6 +27,10 @@ type runCreateRequest struct {
 	// name in prompt_profile makes the server reject the run with HTTP 400.
 	ProfileName   string `json:"profile,omitempty"`
 	WorkspacePath string `json:"workspace_path,omitempty"`
+	// AllowFallback lets the server degrade to its default provider when the
+	// requested model's provider can't be resolved, instead of hard-failing
+	// the run. Always true from the TUI.
+	AllowFallback bool `json:"allow_fallback,omitempty"`
 }
 
 type runCreateResponse struct {
@@ -65,6 +69,7 @@ func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffo
 			ReasoningEffort: reasoningEffort,
 			ProfileName:     profile,
 			WorkspacePath:   workspace,
+			AllowFallback:   true,
 		})
 		url := strings.TrimRight(baseURL, "/") + "/v1/runs"
 		resp, err := http.Post(url, "application/json", bytes.NewReader(body))
