@@ -363,7 +363,7 @@ func TestTUI041_BuiltinCommandsRegistered(t *testing.T) {
 	required := []string{
 		"clear", "context", "export", "help", "keys",
 		"model", "quit", "stats", "subagents",
-		"attach", "cancel", "doctor", "replay", "resume", "runs",
+		"attach", "cancel", "doctor", "permissions", "replay", "resume", "runs",
 	}
 	for _, name := range required {
 		entry, ok := r.Lookup(name)
@@ -397,7 +397,7 @@ func TestTUI364_RegistryCompleteness(t *testing.T) {
 	// These are the exact built-in slash commands the TUI exposes.
 	knownCommands := []string{
 		"attach", "cancel", "clear", "context", "doctor", "export", "help", "history", "keys",
-		"model", "new", "profiles", "quit", "replay", "resume", "runs", "search",
+		"model", "new", "permissions", "profiles", "quit", "replay", "resume", "runs", "search",
 		"sessions", "stats", "subagents",
 	}
 

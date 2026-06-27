@@ -22,8 +22,17 @@ type runCreateRequest struct {
 	Model           string `json:"model,omitempty"`
 	ProviderName    string `json:"provider_name,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
-	PromptProfile   string `json:"prompt_profile,omitempty"`
-	WorkspacePath   string `json:"workspace_path,omitempty"`
+	// ProfileName carries the capability profile selected via /profiles. It maps
+	// to harness.RunRequest.ProfileName (JSON "profile"), which applies tool
+	// restrictions, approval policy, and workspace isolation. This is distinct
+	// from "prompt_profile" (prompt/model routing); sending a capability profile
+	// name in prompt_profile makes the server reject the run with HTTP 400.
+	ProfileName   string `json:"profile,omitempty"`
+	WorkspacePath string `json:"workspace_path,omitempty"`
+	// AllowFallback lets the server degrade to its default provider when the
+	// requested model's provider can't be resolved, instead of hard-failing
+	// the run. Always true from the TUI.
+	AllowFallback bool `json:"allow_fallback,omitempty"`
 }
 
 type runCreateResponse struct {
@@ -72,7 +81,9 @@ type RemoteSubagent struct {
 // conversationID may be empty for the first message in a new conversation;
 // subsequent messages should pass the run ID returned by the first run so that
 // the harness groups them under the same conversation.
-// profile is the name of the prompt profile to use (may be empty).
+// profile is the name of the capability profile to use (may be empty); it is
+// sent as the "profile" field so the server applies the profile's tool
+// restrictions and isolation.
 func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile, workspace string) tea.Cmd {
 	return func() tea.Msg {
 		body, _ := json.Marshal(runCreateRequest{
@@ -81,8 +92,9 @@ func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffo
 			Model:           model,
 			ProviderName:    provider,
 			ReasoningEffort: reasoningEffort,
-			PromptProfile:   profile,
+			ProfileName:     profile,
 			WorkspacePath:   workspace,
+			AllowFallback:   true,
 		})
 		url := strings.TrimRight(baseURL, "/") + "/v1/runs"
 		resp, err := http.Post(url, "application/json", bytes.NewReader(body))

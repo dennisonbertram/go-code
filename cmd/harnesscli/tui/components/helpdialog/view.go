@@ -38,6 +38,14 @@ var (
 
 	styleAboutLine = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("252"))
+
+	styleOverflowIndicator = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("244")).
+				Faint(true)
+
+	styleFooterHint = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("244")).
+			Faint(true)
 )
 
 // tabNames holds the display names for each tab.
@@ -55,9 +63,9 @@ func render(m Model, width, height int) string {
 		dialogWidth = 20
 	}
 
-	// Dialog inner height: border (2) + tab row (1) + separator (1) + content.
-	// Available content lines = height - 4 (border top/bottom + tab + separator).
-	contentLines := height - 6
+	// Dialog inner height: border (2) + tab row (1) + separator (1) + content + footer hint (1).
+	// Available content lines = height - 7 (border top/bottom + tab + separator + footer).
+	contentLines := height - 7
 	if contentLines < 3 {
 		contentLines = 3
 	}
@@ -65,8 +73,9 @@ func render(m Model, width, height int) string {
 	tabRow := renderTabs(m.activeTab, dialogWidth)
 	sep := renderSeparator(dialogWidth)
 	content := renderContent(m, dialogWidth, contentLines)
+	footer := renderFooterHint(dialogWidth)
 
-	body := tabRow + "\n" + sep + "\n" + content
+	body := tabRow + "\n" + sep + "\n" + content + "\n" + footer
 
 	dialog := styleDialog.
 		Width(dialogWidth).
@@ -103,43 +112,85 @@ func renderSeparator(width int) string {
 }
 
 // renderContent renders the scrollable body for the active tab.
+// When content exceeds maxLines, overflow indicators ("▼ more" / "▲ more") are
+// shown so the user knows there is more content to scroll to.
 func renderContent(m Model, width, maxLines int) string {
-	var lines []string
+	var allLines []string
 	switch m.activeTab {
 	case TabCommands:
-		lines = renderCommandLines(m.commands, width)
+		allLines = renderCommandLines(m.commands, width)
 	case TabKeybindings:
-		lines = renderKeybindingLines(m.keybindings, width)
+		allLines = renderKeybindingLines(m.keybindings, width)
 	case TabAbout:
-		lines = renderAboutLines(m.aboutLines, width)
+		allLines = renderAboutLines(m.aboutLines, width)
 	default:
 		// Clamp to Commands on unexpected tab value.
-		lines = renderCommandLines(m.commands, width)
+		allLines = renderCommandLines(m.commands, width)
 	}
+
+	total := len(allLines)
 
 	// Apply scroll offset.
 	start := m.scrollOffset
 	if start < 0 {
 		start = 0
 	}
-	if start >= len(lines) && len(lines) > 0 {
-		start = len(lines) - 1
-	}
-	if start > 0 {
-		lines = lines[start:]
+	if start >= total && total > 0 {
+		start = total - 1
 	}
 
-	// Truncate to maxLines.
-	if len(lines) > maxLines {
-		lines = lines[:maxLines]
+	// Determine overflow: content above and/or below the visible window.
+	hasAbove := start > 0
+	// How many lines we can show: reserve 1 line each for above/below indicators when needed.
+	// We compute visible lines after slicing, then check if there's content below.
+	visLines := allLines[start:]
+	hasBelow := len(visLines) > maxLines
+
+	// Reserve slots for indicators.
+	contentSlots := maxLines
+	if hasAbove {
+		contentSlots-- // one slot for ▲ more
+	}
+	if hasBelow {
+		contentSlots-- // one slot for ▼ more
+	}
+	if contentSlots < 1 {
+		contentSlots = 1
+	}
+
+	// Trim to contentSlots.
+	var displayLines []string
+	if hasAbove {
+		aboveCount := start
+		displayLines = append(displayLines,
+			styleOverflowIndicator.Render(fmt.Sprintf("  ▲ %d more above", aboveCount)))
+	}
+	sliceEnd := contentSlots
+	if sliceEnd > len(visLines) {
+		sliceEnd = len(visLines)
+	}
+	displayLines = append(displayLines, visLines[:sliceEnd]...)
+	if hasBelow {
+		belowCount := len(visLines) - contentSlots
+		displayLines = append(displayLines,
+			styleOverflowIndicator.Render(fmt.Sprintf("  ▼ %d more below", belowCount)))
 	}
 
 	// Pad to maxLines with blank lines so the dialog height is stable.
-	for len(lines) < maxLines {
-		lines = append(lines, "")
+	for len(displayLines) < maxLines {
+		displayLines = append(displayLines, "")
 	}
 
-	return strings.Join(lines, "\n")
+	return strings.Join(displayLines, "\n")
+}
+
+// renderFooterHint renders the navigation hint footer line.
+func renderFooterHint(width int) string {
+	hint := "tab/shift+tab switch tabs  ↑/↓ navigate  esc close"
+	return styleFooterHint.
+		Width(width).
+		Align(lipgloss.Center).
+		Render(hint)
 }
 
 // truncateDesc truncates s to maxLen runes, appending "..." if truncation occurs.

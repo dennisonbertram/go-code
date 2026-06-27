@@ -82,16 +82,36 @@ func (m Model) View() string {
 			}
 
 			if isSelected {
-				// Render full row with reverse-video highlight.
-				padded := rowContent + strings.Repeat(" ", innerWidth-len([]rune(rowContent)))
+				// Prepend a visible text selection marker so selection is clear without color.
+				const marker = "> "
+				markerLen := len([]rune(marker))
+				// Trim rowContent to leave room for marker within innerWidth.
+				maxRowWidth := innerWidth - markerLen
+				if maxRowWidth < 0 {
+					maxRowWidth = 0
+				}
+				rr := []rune(rowContent)
+				if len(rr) > maxRowWidth {
+					rr = rr[:maxRowWidth]
+					rowContent = string(rr)
+				}
+				markedContent := marker + rowContent
+				// Pad to innerWidth for consistent highlight width.
+				padded := markedContent + strings.Repeat(" ", innerWidth-len([]rune(markedContent)))
 				sb.WriteString(ppHighlightStyle.Render(padded))
 			} else {
 				// Dim the metadata portion, normal color for description.
-				metaRunes := []rune(metaPart)
-				if len(metaRunes) > innerWidth {
-					metaRunes = metaRunes[:innerWidth]
+				// Unselected rows use 2-space indent (matching marker width) for alignment.
+				const indent = "  "
+				metaRunes := []rune(indent + metaPart)
+				maxMeta := innerWidth
+				if len(metaRunes) > maxMeta {
+					metaRunes = metaRunes[:maxMeta]
 				}
 				remainWidth := innerWidth - len(metaRunes)
+				if remainWidth < 0 {
+					remainWidth = 0
+				}
 				descRunes := []rune(desc)
 				if len(descRunes) > remainWidth {
 					descRunes = descRunes[:remainWidth]

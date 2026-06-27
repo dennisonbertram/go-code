@@ -180,29 +180,35 @@ func (m Model) viewProviderList(width int) string {
 				currentSuffix = "  ← current"
 			}
 
+			// Unified row template: both selected and unselected use the same column math.
+			// The count+indicator column is right-aligned to textWidth in all states.
+			// Only the style wrapper (highlight vs dim) differs — never the layout.
+			//
+			// Layout: "  {label}{currentSuffix}{padding}{countStr}{indicator}"
+			//         ↑ 2 indent            ↑ right-aligned count column
+			label := p.Label + currentSuffix
+			countPart := countStr + indicator
+			labelRunes := []rune(label)
+			countRunes := []rune(countPart)
+			pad := textWidth - len(labelRunes) - len(countRunes)
+			if pad < 1 {
+				pad = 1
+			}
+
 			if isSelected {
-				// Highlighted row: "> {Label}{padding}{count}{indicator}{current}"
-				full := p.Label + currentSuffix + indicator
-				countPart := "  " + countStr
-				runes := []rune("> " + full + countPart)
-				// Pad to innerWidth for consistent highlight width.
-				padNeeded := innerWidth - len(runes) - 2
-				if padNeeded < 0 {
-					padNeeded = 0
+				// Highlighted row uses same layout; wrap the whole row in highlightStyle.
+				// Replace the 2-space indent with "> " prefix (same width).
+				rowText := "> " + label + strings.Repeat(" ", pad) + countPart
+				// Pad to innerWidth for consistent highlight block width.
+				rowRunes := []rune(rowText)
+				blockPad := innerWidth - len(rowRunes) - 2
+				if blockPad < 0 {
+					blockPad = 0
 				}
-				highlighted := highlightStyle.Render(string(runes) + strings.Repeat(" ", padNeeded))
+				highlighted := highlightStyle.Render(rowText + strings.Repeat(" ", blockPad))
 				sb.WriteString(highlighted)
 			} else {
-				// Dim/normal row: "  {Label}{spaces}{count}{indicator}"
-				label := p.Label + currentSuffix
-				countPart := countStr + indicator
-				// Compute padding to right-align count within textWidth.
-				labelRunes := []rune(label)
-				countRunes := []rune(countPart)
-				pad := textWidth - len(labelRunes) - len(countRunes)
-				if pad < 1 {
-					pad = 1
-				}
+				// Dim/normal row: indent + label + padding + dimmed count.
 				sb.WriteString("  ")
 				sb.WriteString(label)
 				sb.WriteString(strings.Repeat(" ", pad))

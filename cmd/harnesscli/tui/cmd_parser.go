@@ -239,6 +239,14 @@ func builtinCommandEntries() []CommandEntry {
 			},
 			Execute: executeDoctorCommand,
 		},
+		{
+			Name:        "permissions",
+			Description: "View session tool permissions",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executePermissionsCommand,
+		},
 	}
 }
 

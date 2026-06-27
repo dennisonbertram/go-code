@@ -55,9 +55,12 @@ func New(commands []CommandEntry, keybindings []KeyEntry, aboutLines []string) M
 	}
 }
 
-// Open activates the dialog overlay.
+// Open activates the dialog overlay, always resetting to the Commands tab at scroll offset 0.
+// This ensures reopening /help always starts fresh on Commands at the top.
 func (m Model) Open() Model {
 	m.active = true
+	m.activeTab = TabCommands
+	m.scrollOffset = 0
 	return m
 }
 
@@ -104,6 +107,11 @@ func (m Model) ScrollUp(n int) Model {
 // ActiveTab returns the currently active tab.
 func (m Model) ActiveTab() Tab {
 	return m.activeTab
+}
+
+// ScrollOffset returns the current scroll offset (number of lines scrolled down).
+func (m Model) ScrollOffset() int {
+	return m.scrollOffset
 }
 
 // View renders the help dialog at the given terminal dimensions.

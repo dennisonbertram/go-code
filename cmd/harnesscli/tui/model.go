@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -18,9 +19,12 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/contextgrid"
 	"go-agent-harness/cmd/harnesscli/tui/components/helpdialog"
 	"go-agent-harness/cmd/harnesscli/tui/components/inputarea"
+	"go-agent-harness/cmd/harnesscli/tui/components/interruptui"
 	"go-agent-harness/cmd/harnesscli/tui/components/layout"
 	"go-agent-harness/cmd/harnesscli/tui/components/messagebubble"
 	"go-agent-harness/cmd/harnesscli/tui/components/modelswitcher"
+	"go-agent-harness/cmd/harnesscli/tui/components/permissionspanel"
+	"go-agent-harness/cmd/harnesscli/tui/components/planoverlay"
 	"go-agent-harness/cmd/harnesscli/tui/components/profilepicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/sessionpicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/slashcomplete"
@@ -120,6 +124,17 @@ type Model struct {
 	// rendered block for a tool call when that block is currently at the tail.
 	toolLineCounts map[string]int
 
+	// toolLineStarts records the absolute start offset (in viewport lines) of
+	// each tool card at the time it was first appended. This allows in-place
+	// updates even when the card is no longer at the viewport tail (e.g. after
+	// an assistant delta has been appended since the card was started).
+	toolLineStarts map[string]int
+
+	// toolLineOrder records the insertion order of call IDs so that when a
+	// card's line count changes (delta), the start offsets of all later cards
+	// can be shifted accordingly.
+	toolLineOrder []string
+
 	// renderedToolCallID is the tool call currently occupying the viewport tail.
 	// It allows lifecycle updates to replace the last rendered tool block
 	// instead of appending duplicate start/completed rows.
@@ -142,6 +157,10 @@ type Model struct {
 
 	// thinkingBar renders the visible thinking indicator above the input area.
 	thinkingBar thinkingbar.Model
+
+	// interruptBanner renders the two-stage interrupt confirmation banner above
+	// the input area when the user presses Ctrl+C during an active run.
+	interruptBanner interruptui.Model
 
 	// transcript accumulates entries for the current session (used by /export).
 	transcript []transcriptexport.TranscriptEntry
@@ -233,6 +252,9 @@ type Model struct {
 	sessionPicker sessionpicker.Model
 	sessionStore  *SessionStore
 
+	// permissionsPanel shows the client-local session permission rules.
+	permissionsPanel permissionspanel.Model
+
 	// pendingLastMsg holds the most-recently submitted user message (up to 60
 	// chars) so RunStartedMsg can record it on the session entry as LastMsg.
 	pendingLastMsg string
@@ -260,6 +282,13 @@ type Model struct {
 	// askUser.active is true when the overlay is shown.
 	askUser askUserState
 
+	// planOverlay is the plan mode overlay component (immutable value semantics).
+	// It is visible when planOverlay.IsVisible() returns true.
+	planOverlay planoverlay.Model
+
+	// planMode tracks whether plan mode is toggled on (ctrl+o when idle).
+	planMode bool
+
 	// pluginsDir is the directory from which custom slash-command plugins are loaded.
 	// Defaults to ~/.config/harnesscli/plugins when empty.
 	pluginsDir string
@@ -272,13 +301,15 @@ type Model struct {
 // New creates a new root Model.
 func New(cfg TUIConfig) Model {
 	m := Model{
-		config:        cfg,
-		keys:          DefaultKeyMap(),
-		theme:         DefaultTheme(),
-		contextGrid:   contextgrid.New(),
-		statsPanel:    statspanel.New(nil),
-		thinkingBar:   thinkingbar.New(),
-		selectedModel: cfg.Model,
+		config:          cfg,
+		keys:            DefaultKeyMap(),
+		theme:           DefaultTheme(),
+		contextGrid:     contextgrid.New(),
+		statsPanel:      statspanel.New(nil),
+		thinkingBar:     thinkingbar.New(),
+		interruptBanner: interruptui.New(),
+		planOverlay:     planoverlay.New(),
+		selectedModel:   cfg.Model,
 	}
 	m.modelSwitcher = modelswitcher.New(cfg.Model)
 	// Initialize history store with defaults.
@@ -296,6 +327,8 @@ func New(cfg TUIConfig) Model {
 	m.sessionStore = NewSessionStore(defaultSessionConfigDir())
 	_ = m.sessionStore.Load() // errors are silently ignored at startup
 	m.sessionPicker = sessionpicker.New(sessionEntriesToPicker(m.sessionStore.List()))
+	// Initialize permissions panel (client-local, starts with no rules).
+	m.permissionsPanel = permissionspanel.New()
 	// Bootstrap: read known provider keys from the shell environment so models
 	// show as available immediately — without requiring the user to enter them
 	// via /keys. These keys are stored separately (envAPIKeys) and are NOT
@@ -359,9 +392,14 @@ func buildHelpDialog(reg *CommandRegistry, keys KeyMap) helpdialog.Model {
 		{Keys: "down / ctrl+n", Description: keys.ScrollDown.Help().Desc},
 		{Keys: "pgup", Description: keys.PageUp.Help().Desc},
 		{Keys: "pgdn", Description: keys.PageDown.Help().Desc},
+		{Keys: "/", Description: keys.SlashCmd.Help().Desc},
+		{Keys: "@", Description: keys.AtMention.Help().Desc},
+		{Keys: "? / ctrl+h", Description: keys.Help.Help().Desc},
+		{Keys: "ctrl+o", Description: "plan mode / expand active tool"},
+		{Keys: "ctrl+e", Description: keys.EditMode.Help().Desc},
 		{Keys: "esc", Description: keys.Interrupt.Help().Desc},
 		{Keys: "ctrl+s", Description: keys.Copy.Help().Desc},
-		{Keys: "ctrl+c", Description: keys.Quit.Help().Desc},
+		{Keys: "ctrl+c", Description: "interrupt run (twice) / quit when idle"},
 	}
 
 	about := []string{
@@ -572,6 +610,27 @@ func (m Model) AskUserActive() bool {
 	return m.askUser.active
 }
 
+// PlanMode returns true when plan mode is toggled on (for testing).
+func (m Model) PlanMode() bool {
+	return m.planMode
+}
+
+// InterruptBannerVisible returns true when the interrupt confirmation banner is
+// currently visible (State != Hidden). Used by tests to assert two-stage behavior.
+func (m Model) InterruptBannerVisible() bool {
+	return m.interruptBanner.IsVisible()
+}
+
+// InterruptBannerState returns the current state of the interrupt banner (for testing).
+func (m Model) InterruptBannerState() interruptui.State {
+	return m.interruptBanner.CurrentState()
+}
+
+// PlanOverlayVisible returns true when the plan overlay is currently visible (for testing).
+func (m Model) PlanOverlayVisible() bool {
+	return m.planOverlay.IsVisible()
+}
+
 // AskUserQuestions returns the pending questions for the active AskUserQuestion overlay (for testing).
 func (m Model) AskUserQuestions() []AskUserQuestion {
 	return m.askUser.questions
@@ -668,14 +727,58 @@ func (m *Model) appendToolUseView(view tooluse.Model) {
 	if len(lines) == 0 {
 		return
 	}
-	if prevCount := m.toolLineCounts[view.CallID]; prevCount > 0 && m.renderedToolCallID == view.CallID {
-		m.vp.ReplaceTailLines(prevCount, lines)
+
+	callID := view.CallID
+	prevCount, known := m.toolLineCounts[callID]
+
+	if known && prevCount > 0 {
+		// Card already placed in the viewport. Try fast-path first: if it's
+		// still at the tail, use ReplaceTailLines. Otherwise use ReplaceLineRange
+		// to update in-place even though other content was appended after it.
+		if m.renderedToolCallID == callID {
+			// Fast path: card is at the tail.
+			m.vp.ReplaceTailLines(prevCount, lines)
+		} else {
+			// In-place update: replace the card at its recorded start offset.
+			start, hasStart := m.toolLineStarts[callID]
+			if hasStart {
+				lineDelta := len(lines) - prevCount
+				m.vp.ReplaceLineRange(start, prevCount, lines)
+				// Shift stored start offsets of all cards that were appended
+				// after this one (they are now at a different position).
+				if lineDelta != 0 {
+					found := false
+					for _, id := range m.toolLineOrder {
+						if found {
+							if s, ok := m.toolLineStarts[id]; ok {
+								m.toolLineStarts[id] = s + lineDelta
+							}
+						}
+						if id == callID {
+							found = true
+						}
+					}
+				}
+			} else {
+				// No recorded start — fall back to append (first time we see
+				// a callID that arrived before we started tracking).
+				start := m.vp.LineCount()
+				m.toolLineStarts[callID] = start
+				m.toolLineOrder = append(m.toolLineOrder, callID)
+				m.vp.AppendLines(lines)
+			}
+		}
 	} else {
+		// New card: record its start offset and append.
+		start := m.vp.LineCount()
+		m.toolLineStarts[callID] = start
+		m.toolLineOrder = append(m.toolLineOrder, callID)
 		m.vp.AppendLines(lines)
 	}
-	m.toolViews[view.CallID] = view
-	m.toolLineCounts[view.CallID] = len(lines)
-	m.renderedToolCallID = view.CallID
+
+	m.toolViews[callID] = view
+	m.toolLineCounts[callID] = len(lines)
+	m.renderedToolCallID = callID
 }
 
 func compactJSON(raw json.RawMessage) string {
@@ -687,6 +790,109 @@ func compactJSON(raw json.RawMessage) string {
 		return strings.TrimSpace(string(raw))
 	}
 	return compact.String()
+}
+
+// summarizeToolArgs returns a concise, human-readable summary of the tool arguments
+// suitable for display in a collapsed card. It never includes raw file content.
+//
+//   - write/edit/create/str_replace tools: "<path> (N lines)" using the content field.
+//   - read/view tools: "<path>" using the path/file_path/filename field.
+//   - bash/shell tools: the command string, single-line, capped to 60 chars.
+//   - fallback: a compact JSON snippet capped to ~60 chars with an ellipsis.
+func summarizeToolArgs(toolName string, input json.RawMessage) string {
+	if len(input) == 0 {
+		return ""
+	}
+
+	lowerName := strings.ToLower(toolName)
+
+	// Bash/shell: show the command, not the full JSON.
+	if strings.EqualFold(toolName, "bash") || lowerName == "shell" || lowerName == "run_shell_cmd" {
+		var params map[string]any
+		if err := json.Unmarshal(input, &params); err == nil {
+			for _, key := range []string{"command", "cmd"} {
+				if v, ok := params[key].(string); ok && v != "" {
+					// Single-line, capped.
+					cmd := strings.SplitN(strings.TrimSpace(v), "\n", 2)[0]
+					if len([]rune(cmd)) > 60 {
+						cmd = string([]rune(cmd)[:57]) + "…"
+					}
+					return cmd
+				}
+			}
+		}
+		// Try plain string input.
+		var s string
+		if err := json.Unmarshal(input, &s); err == nil && s != "" {
+			cmd := strings.SplitN(strings.TrimSpace(s), "\n", 2)[0]
+			if len([]rune(cmd)) > 60 {
+				cmd = string([]rune(cmd)[:57]) + "…"
+			}
+			return cmd
+		}
+	}
+
+	// Write/edit/create/str_replace tools: path + line count of content.
+	isWriteLike := lowerName == "write_file" || lowerName == "write" ||
+		lowerName == "edit_file" || lowerName == "edit" ||
+		lowerName == "create_file" || lowerName == "create" ||
+		lowerName == "str_replace_based_edit_tool" || lowerName == "str_replace_editor" ||
+		strings.HasPrefix(lowerName, "write_") || strings.HasPrefix(lowerName, "edit_") ||
+		strings.HasPrefix(lowerName, "create_")
+	if isWriteLike {
+		var params map[string]any
+		if err := json.Unmarshal(input, &params); err == nil {
+			path := extractStringField(params, "path", "file_path", "filename", "file")
+			content := extractStringField(params, "content", "new_content", "new_str")
+			if path != "" {
+				if content != "" {
+					lineCount := strings.Count(content, "\n")
+					if lineCount == 0 && content != "" {
+						lineCount = 1
+					}
+					return fmt.Sprintf("%s (%d lines)", path, lineCount)
+				}
+				return path
+			}
+		}
+	}
+
+	// Read/view tools: just the path.
+	isReadLike := lowerName == "read_file" || lowerName == "read" ||
+		lowerName == "view_file" || lowerName == "view" ||
+		lowerName == "cat_file" || lowerName == "cat" ||
+		strings.HasPrefix(lowerName, "read_") || strings.HasPrefix(lowerName, "view_")
+	if isReadLike {
+		var params map[string]any
+		if err := json.Unmarshal(input, &params); err == nil {
+			if path := extractStringField(params, "path", "file_path", "filename", "file"); path != "" {
+				return path
+			}
+		}
+		// Try plain string input (path as string).
+		var s string
+		if err := json.Unmarshal(input, &s); err == nil && s != "" {
+			return s
+		}
+	}
+
+	// Fallback: compact JSON snippet capped at 60 chars.
+	compact := compactJSON(input)
+	if len([]rune(compact)) > 60 {
+		compact = string([]rune(compact)[:57]) + "…"
+	}
+	return compact
+}
+
+// extractStringField returns the first non-empty string value found for any of
+// the given keys in params.
+func extractStringField(params map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := params[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func formatToolParamValue(v any) string {
@@ -761,6 +967,9 @@ func (m *Model) ensureToolStateMaps() {
 	if m.toolLineCounts == nil {
 		m.toolLineCounts = make(map[string]int)
 	}
+	if m.toolLineStarts == nil {
+		m.toolLineStarts = make(map[string]int)
+	}
 }
 
 func normalizeThinkingLabel(text string) string {
@@ -800,11 +1009,41 @@ func (m *Model) rerenderActiveToolView() {
 	m.appendToolUseView(view)
 }
 
+// unwrapToolInput normalizes tool-call arguments that arrive double-encoded.
+// The harness emits tool arguments as a JSON string whose contents are
+// themselves JSON (e.g. "{\"command\":\"ls -l\"}"). Left as-is, the argument
+// summarizers see a string instead of an object and fall back to dumping the
+// raw inner JSON. When the input is a JSON string that itself contains a JSON
+// object/array, return that inner JSON; otherwise return the input unchanged.
+func unwrapToolInput(raw json.RawMessage) json.RawMessage {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '"' {
+		return raw
+	}
+	var s string
+	if err := json.Unmarshal(trimmed, &s); err != nil {
+		return raw
+	}
+	inner := strings.TrimSpace(s)
+	if len(inner) > 0 && (inner[0] == '{' || inner[0] == '[') && json.Valid([]byte(inner)) {
+		return json.RawMessage(inner)
+	}
+	return raw
+}
+
 func (m *Model) handleToolStart(callID, name string, input json.RawMessage) {
 	m.ensureToolStateMaps()
 	m.clearThinkingBar()
+	// Tool arguments may arrive double-encoded (a JSON string of JSON); unwrap
+	// once so the summarizer, params, and command extraction all see the object.
+	input = unwrapToolInput(input)
+	// Use a concise summary for the collapsed Args line so that large content
+	// fields (e.g. file bodies) never appear in the collapsed card. The full
+	// parameters are still available in Params for the expanded view.
 	args := callID
-	if compact := compactJSON(input); compact != "" {
+	if summary := summarizeToolArgs(name, input); summary != "" {
+		args = summary
+	} else if compact := compactJSON(input); compact != "" {
 		args = compact
 	}
 	timer := tooluse.NewTimer().Start()
@@ -946,6 +1185,8 @@ func executeClearCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.lastAssistantText = ""
 	m.responseStarted = false
 	m.activeAssistantLineCount = 0
+	m.toolLineStarts = make(map[string]int)
+	m.toolLineOrder = nil
 	m.clearThinkingBar()
 	return []tea.Cmd{m.setStatusMsg("Conversation cleared")}, false
 }
@@ -1152,6 +1393,18 @@ func executeDoctorCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	return []tea.Cmd{m.setStatusMsg("Run: go test ./cmd/harnesscli && bash -n scripts/go-code.sh")}, false
 }
 
+func executePermissionsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	// Open the panel with an empty rule set — there is no /v1/permissions server
+	// route, so this is a client-local panel. The truthful empty state is shown
+	// when no rules have been accumulated locally (the normal case on startup).
+	m.permissionsPanel = m.permissionsPanel.Open(nil)
+	m.permissionsPanel.Width = m.width
+	m.permissionsPanel.Height = m.layout.ViewportHeight
+	m.overlayActive = true
+	m.activeOverlay = "permissions"
+	return nil, false
+}
+
 // searchPageSize is the maximum number of results shown at once in the overlay.
 const searchPageSize = 20
 
@@ -1269,7 +1522,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusBar = statusbar.New(msg.Width)
 		m.statusBar.SetModel(m.statusBarModelLabel())
 		m.statusBar.SetCost(m.cumulativeCostUSD)
-		m.vp = viewport.New(msg.Width, m.layout.ViewportHeight)
+		m.interruptBanner.Width = msg.Width
+		// Preserve conversation history across window resizes (#664). On the
+		// first WindowSizeMsg the viewport has no content yet, so create it; on
+		// subsequent resizes, resize the existing viewport in place instead of
+		// replacing it with an empty one (which discarded all messages/cards).
+		if alreadyReady {
+			m.vp.SetSize(msg.Width, m.layout.ViewportHeight)
+		} else {
+			m.vp = viewport.New(msg.Width, m.layout.ViewportHeight)
+		}
 		// Preserve current history across window resizes: on subsequent resizes
 		// (alreadyReady == true), sync historyStore from the live input state so
 		// any commands typed since startup are preserved. On the first WindowSizeMsg
@@ -1295,18 +1557,51 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		}
+		// Plan overlay has second-highest key priority when visible.
+		if m.planOverlay.IsVisible() {
+			switch {
+			case msg.Type == tea.KeyRunes && string(msg.Runes) == "y":
+				m.planOverlay = m.planOverlay.Approve()
+				m.planOverlay = m.planOverlay.Hide()
+				m.overlayActive = false
+			case msg.Type == tea.KeyRunes && string(msg.Runes) == "n":
+				m.planOverlay = m.planOverlay.Reject()
+				m.planOverlay = m.planOverlay.Hide()
+				m.overlayActive = false
+			case msg.Type == tea.KeyEsc:
+				m.planOverlay = m.planOverlay.Hide()
+				m.overlayActive = false
+			case msg.Type == tea.KeyUp:
+				m.planOverlay = m.planOverlay.ScrollUp()
+			case msg.Type == tea.KeyDown:
+				lines := strings.Count(m.planOverlay.PlanText, "\n") + 1
+				m.planOverlay = m.planOverlay.ScrollDown(lines)
+			}
+			return m, tea.Batch(cmds...)
+		}
 		switch {
 		case key.Matches(msg, m.keys.Quit):
-			// If a run is active, Ctrl+C cancels the run instead of quitting.
-			if m.runActive && m.cancelRun != nil {
-				m.cancelRun()
+			// Two-stage Ctrl+C interrupt when a run is active.
+			if m.runActive {
+				if !m.interruptBanner.IsVisible() {
+					// First Ctrl+C: show the confirmation banner, do NOT cancel yet.
+					m.interruptBanner = m.interruptBanner.Show()
+					m.interruptBanner.Width = m.width
+					cmds = append(cmds, m.setStatusMsg("Press ctrl+c again to interrupt"))
+					return m, tea.Batch(cmds...)
+				}
+				// Second Ctrl+C (banner already showing): confirm the interrupt.
+				m.interruptBanner = m.interruptBanner.Hide()
+				if m.cancelRun != nil {
+					m.cancelRun()
+					m.cancelRun = nil
+				}
 				m.runActive = false
-				m.cancelRun = nil
 				cmds = append(cmds, m.setStatusMsg("Interrupted"))
-				// Do NOT quit — return without tea.Quit
 				return m, tea.Batch(cmds...)
 			}
-			// No active run: fall through to default quit behavior.
+			// No active run: hide banner if somehow visible, then quit.
+			m.interruptBanner = m.interruptBanner.Hide()
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.Copy):
 			ok := CopyToClipboard(m.lastAssistantText)
@@ -1316,7 +1611,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.setStatusMsg("Copy unavailable"))
 			}
 		case key.Matches(msg, m.keys.Interrupt):
-			// Always close the slash-complete dropdown on Escape.
+			// If the interrupt banner is visible, Escape dismisses it without
+			// cancelling the run (user changed their mind).
+			if m.interruptBanner.IsVisible() {
+				m.interruptBanner = m.interruptBanner.Hide()
+				cmds = append(cmds, m.setStatusMsg("Interrupt cancelled"))
+				return m, tea.Batch(cmds...)
+			}
+			// Highest priority: if the slash-complete dropdown is open, Escape
+			// closes ONLY the dropdown and retains the typed input. A second
+			// Escape then falls through to the priority chain below (clear input).
+			if m.slashComplete.IsActive() {
+				m.slashComplete = m.slashComplete.Close()
+				return m, tea.Batch(cmds...)
+			}
+			// Otherwise ensure the dropdown is closed and continue the chain.
 			m.slashComplete = m.slashComplete.Close()
 			// Multi-priority Escape semantics (highest to lowest):
 			// 0. apikeys overlay → back from input or close
@@ -1374,6 +1683,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeOverlay = ""
 				return m, tea.Batch(cmds...)
 			}
+			if m.activeOverlay == "permissions" {
+				m.permissionsPanel = m.permissionsPanel.Close()
+				m.overlayActive = false
+				m.activeOverlay = ""
+				return m, tea.Batch(cmds...)
+			}
 			if m.activeOverlay == "sessions" {
 				m.sessionPicker = m.sessionPicker.Close()
 				m.overlayActive = false
@@ -1411,13 +1726,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// No-op.
 			return m, tea.Batch(cmds...)
 		case key.Matches(msg, m.keys.ExpandTool):
-			// Toggle expanded/collapsed state for the active tool call.
+			// Dual-purpose ctrl+o with precedence (highest first):
+			// 1. Active tool call present → expand/collapse it (UNCHANGED behavior).
+			// 2. Idle (no run, no active tool) → toggle plan mode.
+			// This ordering ensures a later tool-card expansion ticket can add
+			// completed-card expansion between (1) and (2) without conflict.
 			if m.activeToolCallID != "" {
+				// Highest priority: expand/collapse the active tool call.
 				if m.toolExpanded == nil {
 					m.toolExpanded = make(map[string]bool)
 				}
 				m.toolExpanded[m.activeToolCallID] = !m.toolExpanded[m.activeToolCallID]
 				m.rerenderActiveToolView()
+			} else if !m.runActive {
+				// Idle (no run active, no active tool): toggle plan mode.
+				m.planMode = !m.planMode
+				if m.planMode {
+					cmds = append(cmds, m.setStatusMsg("Plan mode: ON"))
+				} else {
+					cmds = append(cmds, m.setStatusMsg("Plan mode: OFF"))
+				}
 			}
 		case key.Matches(msg, m.keys.Submit):
 			// When the search overlay is active, Enter dismisses the overlay and
@@ -1569,6 +1897,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							return m, tea.Batch(cmds...)
 						}
 					}
+					return m, tea.Batch(cmds...)
+				}
+				// No suggestion to accept. If the user typed a slash command (e.g.
+				// an unrecognized one), don't silently swallow Enter: dispatch it so
+				// the dispatcher reports an "Unknown command" hint, and clear the
+				// input. This avoids the dead-end where /notacommand + Enter does
+				// nothing and leaves stale text in the input.
+				m.slashComplete = m.slashComplete.Close()
+				raw := strings.TrimSpace(m.input.Value())
+				if parsed, ok := ParseCommand(raw); ok {
+					if _, found := m.commandRegistry.Lookup(parsed.Name); !found {
+						m.input = m.input.Clear()
+						cmds = append(cmds, m.setStatusMsg(UnknownResult(parsed.Name).Hint))
+					}
 				}
 				return m, tea.Batch(cmds...)
 			}
@@ -1580,11 +1922,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case m.overlayActive && m.activeOverlay == "help":
 			// BUG-4/BUG-3: Route keyboard input to the help dialog when it is open.
+			// #670: also wire Up/Down (and vim j/k) to scroll the dialog content.
 			switch {
 			case msg.Type == tea.KeyTab || msg.Type == tea.KeyRight || msg.String() == "l":
 				m.helpDialog = m.helpDialog.NextTab()
 			case msg.Type == tea.KeyShiftTab || msg.Type == tea.KeyLeft || msg.String() == "h":
 				m.helpDialog = m.helpDialog.PrevTab()
+			case msg.Type == tea.KeyDown || msg.String() == "j":
+				m.helpDialog = m.helpDialog.ScrollDown(1)
+			case msg.Type == tea.KeyUp || msg.String() == "k":
+				m.helpDialog = m.helpDialog.ScrollUp(1)
 			}
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "stats":
@@ -1719,6 +2066,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				})
 			}
 			return m, tea.Batch(cmds...)
+		case m.overlayActive && m.activeOverlay == "permissions":
+			// Route Up/Down/k/j to SelectUp/SelectDown; t/Enter to Toggle; d to Remove.
+			switch {
+			case msg.Type == tea.KeyUp || msg.String() == "k":
+				m.permissionsPanel = m.permissionsPanel.SelectUp()
+			case msg.Type == tea.KeyDown || msg.String() == "j":
+				m.permissionsPanel = m.permissionsPanel.SelectDown()
+			case msg.String() == "t" || msg.Type == tea.KeyEnter || msg.String() == " ":
+				m.permissionsPanel = m.permissionsPanel.ToggleSelected()
+			case msg.String() == "d":
+				m.permissionsPanel = m.permissionsPanel.RemoveSelected()
+			}
+			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "search" && (msg.Type == tea.KeyUp || msg.Type == tea.KeyDown || msg.String() == "k" || msg.String() == "j"):
 			// Navigate search results with Up/Down or vim k/j.
 			isUp := msg.Type == tea.KeyUp || msg.String() == "k"
@@ -1796,6 +2156,70 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp.ScrollUp(m.vp.Height() / 2)
 		case key.Matches(msg, m.keys.PageDown):
 			m.vp.ScrollDown(m.vp.Height() / 2)
+
+		// #668 (1): ctrl+u clears the main input when no overlay is active.
+		// The apikeys and model-config overlay arms above already matched earlier
+		// in their own overlay-specific case branches, so this arm only fires
+		// when no overlay is open.
+		case msg.Type == tea.KeyCtrlU && !m.overlayActive:
+			m.input = m.input.Clear()
+			cmds = append(cmds, m.setStatusMsg("Input cleared"))
+			return m, tea.Batch(cmds...)
+
+		// #668 (2): "?" opens help when input is empty; falls through to input
+		// when input is non-empty.  ctrl+h (also bound to m.keys.Help) always
+		// opens help regardless of input content.
+		case key.Matches(msg, m.keys.Help) && !m.overlayActive:
+			// "?" with non-empty input: do NOT consume — let it type into the input.
+			if msg.Type == tea.KeyRunes && string(msg.Runes) == "?" && m.input.Value() != "" {
+				var cmd tea.Cmd
+				m.input, cmd = m.input.Update(msg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				m.slashComplete = syncSlashComplete(m.slashComplete, m.input.Value())
+				return m, tea.Batch(cmds...)
+			}
+			// ctrl+h, or "?" with empty input: open help overlay.
+			executeHelpCommand(&m, Command{})
+			return m, tea.Batch(cmds...)
+
+		// #668 (3): "@" inserts into the input when no overlay is active.
+		// The combined autocomplete provider (already wired) will offer file-path
+		// completions when the user subsequently presses Tab.
+		case key.Matches(msg, m.keys.AtMention) && !m.overlayActive:
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			// Sync the slash-complete dropdown (will be a no-op for "@").
+			m.slashComplete = syncSlashComplete(m.slashComplete, m.input.Value())
+			return m, tea.Batch(cmds...)
+
+		// #668 (4): ctrl+e launches $EDITOR when set; shows a status message when
+		// $EDITOR is unset so the key is never a silent no-op.
+		case msg.Type == tea.KeyCtrlE && !m.overlayActive:
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				cmds = append(cmds, m.setStatusMsg("$EDITOR not set"))
+				return m, tea.Batch(cmds...)
+			}
+			// $EDITOR is set: write current input to a temp file and open it.
+			// Load the edited content back when the editor exits.
+			currentInput := m.input.Value()
+			tmpFile, tmpErr := writeTempEditorFile(currentInput)
+			if tmpErr != nil {
+				cmds = append(cmds, m.setStatusMsg("editor: could not create temp file"))
+				return m, tea.Batch(cmds...)
+			}
+			return m, tea.ExecProcess(
+				editorExecCommand(editor, tmpFile),
+				func(err error) tea.Msg {
+					return editorDoneMsg{tmpFile: tmpFile, err: err}
+				},
+			)
+
 		default:
 			// When model overlay is open (not config panel), intercept keys for navigation, search, and star.
 			if m.overlayActive && m.activeOverlay == "model" && !m.modelConfigMode {
@@ -1840,7 +2264,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, tea.Batch(cmds...)
 					}
 					// All other printable characters accumulate into search query.
-					m.modelSwitcher = m.modelSwitcher.SetSearch(m.modelSwitcher.SearchQuery() + msg.String())
+					// Route through HandleSearchKey so the component's "/" swallow
+					// is respected (fixes #667: "/" must not leak into search).
+					m.modelSwitcher = m.modelSwitcher.HandleSearchKey(msg.String())
 					return m, tea.Batch(cmds...)
 				}
 				return m, tea.Batch(cmds...)
@@ -2014,6 +2440,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Kind != "" {
 			m.activeOverlay = msg.Kind
 		}
+		// Reset help dialog state when (re-)opening via message, matching the
+		// /help command handler which calls helpDialog.Open() (resets tab+scroll).
+		if msg.Kind == "help" {
+			m.helpDialog = m.helpDialog.Open()
+		}
 
 	case OverlayCloseMsg:
 		m.overlayActive = false
@@ -2023,6 +2454,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ClearMsg:
 		m.vp = viewport.New(m.width, m.layout.ViewportHeight)
 		m.transcript = nil
+		m.toolLineStarts = make(map[string]int)
+		m.toolLineOrder = nil
 		m.clearThinkingBar()
 
 	case ExportTranscriptMsg:
@@ -2031,6 +2464,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			cmds = append(cmds, m.setStatusMsg("Export failed"))
 		}
+
+	case editorDoneMsg:
+		// #668 (4): editor process exited. Load the edited content back into the
+		// input if the editor succeeded and produced a non-empty result.
+		if msg.err != nil || msg.tmpFile == "" {
+			// Editor exited with an error — surface it but don't clobber input.
+			cmds = append(cmds, m.setStatusMsg("Editor exited with error"))
+			return m, tea.Batch(cmds...)
+		}
+		content, readErr := os.ReadFile(msg.tmpFile)
+		_ = os.Remove(msg.tmpFile) // best-effort cleanup
+		if readErr != nil {
+			cmds = append(cmds, m.setStatusMsg("editor: could not read temp file"))
+			return m, tea.Batch(cmds...)
+		}
+		// Trim trailing newline that most editors append.
+		edited := strings.TrimRight(string(content), "\n")
+		m.input = m.input.SetValue(edited)
 
 	case SubagentsLoadedMsg:
 		for _, line := range formatSubagentsLines(msg.Subagents) {
@@ -2086,17 +2537,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content string `json:"content"`
 			}
 			if err := json.Unmarshal(msg.Raw, &p); err == nil && p.Content != "" {
-				m.clearThinkingBar()
+				// Accumulate and re-render the assistant message through the
+				// glamour-backed message bubble. Re-rendering the full
+				// accumulated text each delta (rather than appending raw chunks
+				// with AppendChunk) is what enables markdown rendering on the
+				// live stream and avoids chunk-boundary line corruption.
 				m.lastAssistantText += p.Content
-				if !m.responseStarted {
-					// Start a fresh line for the assistant response so that any
-					// preceding tool-call lines are not contaminated by the chunk.
-					m.renderedToolCallID = ""
-					m.vp.AppendLine("")
-					m.responseStarted = true
-				}
-				m.renderedToolCallID = ""
-				m.vp.AppendChunk(p.Content) // accumulate on same line
+				m.renderActiveAssistantBubble()
 			}
 		case "assistant.thinking.delta":
 			var p struct {
@@ -2168,6 +2615,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "run.resumed":
 			// Dismiss the ask-user overlay when the run resumes.
 			m.askUser = askUserState{}
+		case "plan.proposed":
+			// Forward-looking stub: if the server ever emits a plan.proposed event,
+			// show the plan overlay. The server does not emit this event yet; this
+			// case is harmless until it does (no live test drives it via SSE).
+			var p struct {
+				Plan    string `json:"plan"`
+				Content string `json:"content"`
+			}
+			if err := json.Unmarshal(msg.Raw, &p); err == nil {
+				planText := p.Plan
+				if planText == "" {
+					planText = p.Content
+				}
+				if planText != "" {
+					m.planOverlay = m.planOverlay.Show(planText)
+					m.overlayActive = true
+				}
+			}
 		}
 		// Continue polling the SSE channel.
 		if m.sseCh != nil {
@@ -2210,6 +2675,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sseCh != nil {
 			cmds = append(cmds, pollSSECmd(m.sseCh))
 		}
+
+	case PlanProposedMsg:
+		// Show the plan overlay. Driven by tests via PlanProposedMsg directly;
+		// the SSE "plan.proposed" case below is the forward-looking server stub.
+		m.planOverlay = m.planOverlay.Show(msg.Plan)
+		m.overlayActive = true
 
 	case AskUserPendingMsg:
 		// Pending questions fetched — populate the overlay and start deadline timer.
@@ -2465,19 +2936,33 @@ func (m Model) View() string {
 		} else {
 			mainContent = m.vp.View()
 		}
+	} else if m.planOverlay.IsVisible() {
+		// Plan overlay has second-highest priority — render on top of viewport.
+		po := m.planOverlay
+		po.Width = m.width
+		po.Height = m.layout.ViewportHeight
+		overlayView := po.View()
+		if overlayView != "" {
+			mainContent = m.vp.View() + "\n" + overlayView
+		} else {
+			mainContent = m.vp.View()
+		}
 	} else if m.overlayActive {
 		switch m.activeOverlay {
 		case "help":
 			mainContent = m.helpDialog.View(m.width, m.layout.ViewportHeight)
 		case "stats":
-			mainContent = m.statsPanel.SetWidth(m.width).View()
+			// Box the stats overlay for consistent chrome (#666).
+			mainContent = boxOverlay(m.statsPanel.SetWidth(m.width-2).View(), m.width)
 		case "context":
+			// Box the context overlay for consistent chrome (#666).
 			cg := m.contextGrid
-			cg.Width = m.width
-			mainContent = cg.View()
-			if mainContent == "" {
-				mainContent = "Context grid not available"
+			cg.Width = m.width - 2
+			raw := cg.View()
+			if raw == "" {
+				raw = "Context grid not available"
 			}
+			mainContent = boxOverlay(raw, m.width)
 		case "model":
 			if m.modelConfigMode {
 				mainContent = m.viewModelConfigPanel()
@@ -2502,6 +2987,11 @@ func (m Model) View() string {
 			}
 		case "search":
 			mainContent = m.viewSearchOverlay()
+		case "permissions":
+			m.permissionsPanel.Width = m.width
+			m.permissionsPanel.Height = m.layout.ViewportHeight
+			raw := m.permissionsPanel.View()
+			mainContent = boxOverlay(raw, m.width)
 		default:
 			// Unknown overlay kind — fall back to viewport.
 			mainContent = m.vp.View()
@@ -2520,10 +3010,11 @@ func (m Model) View() string {
 		}
 	}
 
-	// Stack: main content / separator / autocomplete dropdown / input / separator / status bar
+	// Stack: main content / separator / thinking / interrupt banner / autocomplete dropdown / input / separator / status bar
 	inputView := m.input.View()
 	dropdownView := m.slashComplete.View(m.width)
 	thinkingView := m.thinkingBar.View()
+	bannerView := m.interruptBanner.View()
 
 	sections := []string{
 		mainContent,
@@ -2531,6 +3022,9 @@ func (m Model) View() string {
 	}
 	if thinkingView != "" {
 		sections = append(sections, thinkingView)
+	}
+	if bannerView != "" {
+		sections = append(sections, bannerView)
 	}
 	if dropdownView != "" {
 		sections = append(sections, dropdownView)
@@ -2950,5 +3444,51 @@ func isCodexModel(modelID string) bool {
 // HelpDialogActiveTab returns the currently active tab index in the help dialog (for testing).
 func (m Model) HelpDialogActiveTab() int { return int(m.helpDialog.ActiveTab()) }
 
+// HelpDialogScrollOffset returns the current scroll offset of the help dialog (for testing).
+func (m Model) HelpDialogScrollOffset() int { return m.helpDialog.ScrollOffset() }
+
+// boxOverlay wraps overlay content in a RoundedBorder lipgloss box so that
+// /stats and /context get consistent chrome matching /help, /model etc.
+func boxOverlay(content string, width int) string {
+	if width <= 2 {
+		return content
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Width(width - 2).
+		Render(content)
+}
+
 // StatsPanelActivePeriod returns the currently active period in the stats panel (for testing).
 func (m Model) StatsPanelActivePeriod() int { return int(m.statsPanel.ActivePeriod()) }
+
+// editorDoneMsg is sent when the external editor process launched by ctrl+e exits.
+type editorDoneMsg struct {
+	// tmpFile is the path of the temp file that was edited.
+	tmpFile string
+	// err is non-nil when the editor process itself failed.
+	err error
+}
+
+// writeTempEditorFile creates a temp file seeded with content and returns its path.
+func writeTempEditorFile(content string) (string, error) {
+	f, err := os.CreateTemp("", "harnesscli-edit-*.txt")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(content); err != nil {
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+// editorExecCommand returns an *exec.Cmd that opens file in the given editor.
+func editorExecCommand(editor, file string) *exec.Cmd {
+	cmd := exec.Command(editor, file)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd
+}

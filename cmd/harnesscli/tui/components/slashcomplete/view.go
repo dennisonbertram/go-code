@@ -40,7 +40,7 @@ func (m Model) View(width int) string {
 	selectedStyle := lipgloss.NewStyle().Reverse(true)
 	dimStyle := lipgloss.NewStyle().Faint(true)
 
-	// Determine the longest name for alignment.
+	// Determine the longest name for alignment (across the full list for stable columns).
 	maxName := 0
 	for _, s := range filtered {
 		if len(s.Name) > maxName {
@@ -50,16 +50,70 @@ func (m Model) View(width int) string {
 	// Name column: "/" + name padded to maxName+1
 	nameColWidth := maxName + 1 // +1 for leading "/"
 
-	// Cap visible rows.
-	visCount := total
-	truncated := 0
-	if total > maxVis {
-		visCount = maxVis
-		truncated = total - maxVis
+	// Compute the scroll window: [windowStart, windowEnd).
+	// We need to reserve rows for indicators when items exist outside the window.
+	// Strategy: start with a maxVis window, then shrink for any needed indicator rows
+	// while keeping m.selected within the rendered range.
+	windowStart := m.scrollOffset
+	if windowStart < 0 {
+		windowStart = 0
 	}
 
+	// Determine which indicators are needed (based on raw window before shrinking).
+	rawEnd := windowStart + maxVis
+	if rawEnd > total {
+		rawEnd = total
+	}
+	showAbove := windowStart > 0
+	showBelow := rawEnd < total
+
+	// Compute effective content capacity after reserving indicator rows.
+	contentCap := maxVis
+	if showAbove {
+		contentCap--
+	}
+	if showBelow {
+		contentCap--
+	}
+	if contentCap < 1 {
+		contentCap = 1
+	}
+
+	// Place the content window so that m.selected is always visible.
+	// Window: [windowStart, windowStart+contentCap).
+	// If selected is beyond the end, shift windowStart forward.
+	if m.selected >= windowStart+contentCap {
+		windowStart = m.selected - contentCap + 1
+	}
+	// If selected is before windowStart, bring windowStart back.
+	if m.selected < windowStart {
+		windowStart = m.selected
+	}
+	// Clamp windowStart.
+	if windowStart < 0 {
+		windowStart = 0
+	}
+	if windowStart >= total {
+		windowStart = total - 1
+	}
+
+	windowEnd := windowStart + contentCap
+	if windowEnd > total {
+		windowEnd = total
+	}
+
+	// Recompute indicators based on final window position.
+	showAbove = windowStart > 0
+	showBelow = windowEnd < total
+
 	var sb strings.Builder
-	for i := 0; i < visCount; i++ {
+
+	if showAbove {
+		indicator := fmt.Sprintf("  ▲ %d more above", windowStart)
+		sb.WriteString(dimStyle.Render(indicator) + "\n")
+	}
+
+	for i := windowStart; i < windowEnd; i++ {
 		s := filtered[i]
 		isSelected := i == m.selected
 
@@ -91,9 +145,9 @@ func (m Model) View(width int) string {
 		sb.WriteString(line + "\n")
 	}
 
-	// Truncation indicator
-	if truncated > 0 {
-		indicator := fmt.Sprintf("  ... %d more", truncated)
+	if showBelow {
+		below := total - windowEnd
+		indicator := fmt.Sprintf("  ▼ %d more below", below)
 		sb.WriteString(dimStyle.Render(indicator) + "\n")
 	}
 

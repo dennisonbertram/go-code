@@ -11,6 +11,7 @@ Command Registry - 200x50
 /keys — Manage provider API keys
 /model — Select AI model
 /new — Start a new session (resets conversation)
+/permissions — View session tool permissions
 /profiles — View and select a profile for next run
 /quit — Quit the TUI
 /replay — Replay a run
