@@ -2390,14 +2390,17 @@ func (m Model) View() string {
 		case "help":
 			mainContent = m.helpDialog.View(m.width, m.layout.ViewportHeight)
 		case "stats":
-			mainContent = m.statsPanel.SetWidth(m.width).View()
+			// Box the stats overlay for consistent chrome (#666).
+			mainContent = boxOverlay(m.statsPanel.SetWidth(m.width-2).View(), m.width)
 		case "context":
+			// Box the context overlay for consistent chrome (#666).
 			cg := m.contextGrid
-			cg.Width = m.width
-			mainContent = cg.View()
-			if mainContent == "" {
-				mainContent = "Context grid not available"
+			cg.Width = m.width - 2
+			raw := cg.View()
+			if raw == "" {
+				raw = "Context grid not available"
 			}
+			mainContent = boxOverlay(raw, m.width)
 		case "model":
 			if m.modelConfigMode {
 				mainContent = m.viewModelConfigPanel()
@@ -2848,6 +2851,19 @@ func isCodexModel(modelID string) bool {
 
 // HelpDialogActiveTab returns the currently active tab index in the help dialog (for testing).
 func (m Model) HelpDialogActiveTab() int { return int(m.helpDialog.ActiveTab()) }
+
+// boxOverlay wraps overlay content in a RoundedBorder lipgloss box so that
+// /stats and /context get consistent chrome matching /help, /model etc.
+func boxOverlay(content string, width int) string {
+	if width <= 2 {
+		return content
+	}
+	return lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color("62")).
+		Width(width - 2).
+		Render(content)
+}
 
 // StatsPanelActivePeriod returns the currently active period in the stats panel (for testing).
 func (m Model) StatsPanelActivePeriod() int { return int(m.statsPanel.ActivePeriod()) }
