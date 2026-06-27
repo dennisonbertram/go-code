@@ -1538,11 +1538,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case m.overlayActive && m.activeOverlay == "help":
 			// BUG-4/BUG-3: Route keyboard input to the help dialog when it is open.
+			// #670: also wire Up/Down (and vim j/k) to scroll the dialog content.
 			switch {
 			case msg.Type == tea.KeyTab || msg.Type == tea.KeyRight || msg.String() == "l":
 				m.helpDialog = m.helpDialog.NextTab()
 			case msg.Type == tea.KeyShiftTab || msg.Type == tea.KeyLeft || msg.String() == "h":
 				m.helpDialog = m.helpDialog.PrevTab()
+			case msg.Type == tea.KeyDown || msg.String() == "j":
+				m.helpDialog = m.helpDialog.ScrollDown(1)
+			case msg.Type == tea.KeyUp || msg.String() == "k":
+				m.helpDialog = m.helpDialog.ScrollUp(1)
 			}
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "stats":
@@ -1973,6 +1978,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlayActive = true
 		if msg.Kind != "" {
 			m.activeOverlay = msg.Kind
+		}
+		// Reset help dialog state when (re-)opening via message, matching the
+		// /help command handler which calls helpDialog.Open() (resets tab+scroll).
+		if msg.Kind == "help" {
+			m.helpDialog = m.helpDialog.Open()
 		}
 
 	case OverlayCloseMsg:
@@ -2851,6 +2861,9 @@ func isCodexModel(modelID string) bool {
 
 // HelpDialogActiveTab returns the currently active tab index in the help dialog (for testing).
 func (m Model) HelpDialogActiveTab() int { return int(m.helpDialog.ActiveTab()) }
+
+// HelpDialogScrollOffset returns the current scroll offset of the help dialog (for testing).
+func (m Model) HelpDialogScrollOffset() int { return m.helpDialog.ScrollOffset() }
 
 // boxOverlay wraps overlay content in a RoundedBorder lipgloss box so that
 // /stats and /context get consistent chrome matching /help, /model etc.

@@ -109,6 +109,11 @@ func (m Model) ActiveTab() Tab {
 	return m.activeTab
 }
 
+// ScrollOffset returns the current scroll offset (number of lines scrolled down).
+func (m Model) ScrollOffset() int {
+	return m.scrollOffset
+}
+
 // View renders the help dialog at the given terminal dimensions.
 // If width or height are zero, defaults of 60x15 are used.
 func (m Model) View(width, height int) string {
