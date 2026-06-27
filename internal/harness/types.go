@@ -291,6 +291,7 @@ type Run struct {
 	ParentContextHandoff *htools.ParentContextHandoff `json:"parent_context_handoff,omitempty"`
 	UsageTotals          *RunUsageTotals              `json:"usage_totals,omitempty"`
 	CostTotals           *RunCostTotals               `json:"cost_totals,omitempty"`
+	Recap                *store.WorkflowRecap         `json:"recap,omitempty"`
 	TenantID             string                       `json:"tenant_id,omitempty"`
 	ConversationID       string                       `json:"conversation_id,omitempty"`
 	AgentID              string                       `json:"agent_id,omitempty"`
@@ -468,8 +469,15 @@ type RunnerConfig struct {
 	// slots free up. When 0 (the default), there is no cap — all runs start
 	// immediately (the legacy unbounded behaviour).
 	WorkerPoolSize int
-	AskUserTimeout time.Duration
-	AskUserBroker  htools.AskUserQuestionBroker
+	// MaxCompletedRetention caps terminal run states retained in memory.
+	// Completed, failed, and cancelled runs with active subscribers are not
+	// pruned until the subscriber cancels. Values <= 0 use the default.
+	MaxCompletedRetention int
+	// MaxConversationRetention caps the in-memory conversation mirror. Persistent
+	// ConversationStore implementations are unaffected. Values <= 0 use the default.
+	MaxConversationRetention int
+	AskUserTimeout           time.Duration
+	AskUserBroker            htools.AskUserQuestionBroker
 	// ApprovalBroker is the broker used to pause/resume tool calls that require
 	// operator approval. When nil, no approval pausing occurs even if
 	// PermissionConfig.Approval is set to ApprovalPolicyDestructive or

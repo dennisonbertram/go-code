@@ -2,10 +2,15 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // runGit is a test helper that runs a git command in the given directory and
@@ -200,6 +205,128 @@ func TestWorktreeWorkspace_Provision_CustomRootAndBaseRef(t *testing.T) {
 	if ws.BranchName() == "" {
 		t.Fatal("expected branch name")
 	}
+}
+
+func TestWorktreeWorkspace_ProvisionSerializesWorktreeAddPerRepo(t *testing.T) {
+	oldRunGitCommand := runGitCommand
+	defer func() { runGitCommand = oldRunGitCommand }()
+
+	var activeAdds atomic.Int32
+	var overlapped atomic.Bool
+	runGitCommand = func(_ context.Context, args ...string) ([]byte, error) {
+		if isWorktreeTestCommand(args, "add") {
+			if activeAdds.Add(1) != 1 {
+				overlapped.Store(true)
+			}
+			time.Sleep(50 * time.Millisecond)
+			activeAdds.Add(-1)
+		}
+		return []byte("ok"), nil
+	}
+
+	repo := t.TempDir()
+	root := t.TempDir()
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, id := range []string{"one", "two"} {
+		id := id
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ws := NewWorktree(defaultHarnessURL, repo)
+			errs <- ws.Provision(context.Background(), Options{
+				ID:              id,
+				WorktreeRootDir: root,
+			})
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("Provision: %v", err)
+		}
+	}
+	if overlapped.Load() {
+		t.Fatal("same-repo git worktree add commands overlapped")
+	}
+}
+
+func TestWorktreeWorkspace_DestroyPrunesAfterRemoveError(t *testing.T) {
+	oldRunGitCommand := runGitCommand
+	defer func() { runGitCommand = oldRunGitCommand }()
+
+	var commands [][]string
+	runGitCommand = func(_ context.Context, args ...string) ([]byte, error) {
+		commands = append(commands, slices.Clone(args))
+		if isWorktreeTestCommand(args, "remove") {
+			return []byte("remove failed"), errors.New("remove failed")
+		}
+		return []byte("ok"), nil
+	}
+
+	ws := &WorktreeWorkspace{
+		repoPath: t.TempDir(),
+		path:     filepath.Join(t.TempDir(), "wt"),
+		branch:   "workspace-test",
+	}
+	err := ws.Destroy(context.Background())
+	if err == nil {
+		t.Fatal("expected remove error")
+	}
+	if !worktreeTestSawCommand(commands, "prune") {
+		t.Fatalf("expected git worktree prune after remove error, saw %v", commands)
+	}
+}
+
+func TestPoolClosePrunesEachDistinctWorktreeRepoOnce(t *testing.T) {
+	oldRunGitCommand := runGitCommand
+	defer func() { runGitCommand = oldRunGitCommand }()
+
+	repoOne := filepath.Join(t.TempDir(), "repo-one")
+	repoTwo := filepath.Join(t.TempDir(), "repo-two")
+	prunes := map[string]int{}
+	runGitCommand = func(_ context.Context, args ...string) ([]byte, error) {
+		if isWorktreeTestCommand(args, "prune") && len(args) >= 2 {
+			prunes[args[1]]++
+		}
+		return []byte("ok"), nil
+	}
+
+	p := &Pool{
+		cancel: func() {},
+		entries: []*poolEntry{
+			{ws: &WorktreeWorkspace{repoPath: repoOne}},
+			{ws: &WorktreeWorkspace{repoPath: repoOne}},
+			{ws: &WorktreeWorkspace{repoPath: repoTwo}},
+		},
+	}
+	p.Close()
+
+	if prunes[repoOne] != 1 {
+		t.Fatalf("repoOne prune count = %d, want 1", prunes[repoOne])
+	}
+	if prunes[repoTwo] != 1 {
+		t.Fatalf("repoTwo prune count = %d, want 1", prunes[repoTwo])
+	}
+}
+
+func isWorktreeTestCommand(args []string, subcommand string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "worktree" && args[i+1] == subcommand {
+			return true
+		}
+	}
+	return false
+}
+
+func worktreeTestSawCommand(commands [][]string, subcommand string) bool {
+	for _, args := range commands {
+		if isWorktreeTestCommand(args, subcommand) {
+			return true
+		}
+	}
+	return false
 }
 
 // --------------------------------------------------------------------------

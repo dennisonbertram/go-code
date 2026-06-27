@@ -104,10 +104,22 @@ func dispatch(args []string) int {
 		return runAuth(args[1:])
 	case "list":
 		return runList(args[1:])
+	case "runs":
+		return runList(args[1:])
 	case "cancel":
 		return runCancel(args[1:])
 	case "status":
 		return runStatus(args[1:])
+	case "show":
+		return runStatus(args[1:])
+	case "continue":
+		return runContinue(args[1:])
+	case "replay":
+		return runReplay(args[1:])
+	case "search":
+		return runSearch(args[1:])
+	case "improve":
+		return runImprove(args[1:])
 	default:
 		return run(args)
 	}

@@ -190,6 +190,55 @@ func builtinCommandEntries() []CommandEntry {
 			},
 			Execute: executeHistoryCommand,
 		},
+		{
+			Name:        "attach",
+			Description: "Attach file context with @path tokens",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeAttachCommand,
+		},
+		{
+			Name:        "runs",
+			Description: "List recent harness runs",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeRunsCommand,
+		},
+		{
+			Name:        "cancel",
+			Description: "Cancel a harness run",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeCancelCommand,
+		},
+		{
+			Name:        "replay",
+			Description: "Replay a run",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeReplayCommand,
+		},
+		{
+			Name:        "resume",
+			Aliases:     []string{"continue"},
+			Description: "Continue a completed run",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeResumeCommand,
+		},
+		{
+			Name:        "doctor",
+			Description: "Show local harness diagnostic commands",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeDoctorCommand,
+		},
 	}
 }
 

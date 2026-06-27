@@ -1,5 +1,70 @@
 # Engineering Log
 
+## 2026-06-26 (Reliability T01 Memory Retention)
+
+- Implemented reliability plan slice T01 locally:
+  - Added bounded in-memory retention for terminal run states with default cap 32.
+  - Added bounded in-memory conversation mirror retention with default cap 256.
+  - Terminal runs with active subscribers are kept until the subscriber cancels; subscriber cancellation re-runs pruning.
+- Added failing-first coverage in `internal/harness/runner_prune_test.go` for completed-run pruning, subscriber-protected terminal runs, and conversation mirror pruning.
+- Validation:
+  - Red phase: `go test ./internal/harness -run 'TestRunnerPrune' -count=1` failed to build because retention config fields did not exist.
+  - `go test ./internal/harness -run 'TestRunnerPrune' -count=1`
+  - `go test ./internal/harness -race -run 'TestRunnerPrune|TestRecorderGoroutine_DoneClosedAfterRun' -count=1`
+  - `go test ./internal/harness -race -count=1`
+
+## 2026-06-26 (Regression Coverage Gate Cleanup)
+
+- Fixed the current `./scripts/test-regression.sh` coveragegate blocker without weakening the gate.
+- Added meaningful zero-coverage tests across:
+  - `cmd/harnessd/mcp_runner_adapter.go`
+  - checkpoint service/store helpers
+  - Docker fallback execution
+  - replay tool dispatch lookup
+  - callback manager construction
+  - checkpoint approval denial
+  - workspace path permission detection
+  - deferred goal tool actions
+  - networks/workflow/workflows stores and helpers
+  - SQLite working-memory deletion
+- Fixed two race/baseline issues surfaced by the regression run:
+  - workflow subscriber cancellation can no longer close a channel while `emit` is sending;
+  - the recorder goroutine test now holds the provider until `recorderDone` is observable.
+- Validation:
+  - `go run ./cmd/coveragegate -coverprofile=coverage.out -min-total=80.0` passed with total 84.5% and zero zero-coverage functions.
+  - `./scripts/test-regression.sh` passed end to end.
+
+## 2026-06-26 (Reliability T03 Empty Response Exhaustion)
+
+- Implemented reliability plan slice T03 locally:
+  - Empty-response retry exhaustion now fails the run with `max_empty_responses` instead of silently completing with empty output.
+  - Retryable empty responses no longer consume outer step budget, so a run with `MaxSteps=1` can recover after retryable empty responses.
+- Added failing-first coverage in `internal/harness/runner_empty_response_test.go` for both exhaustion failure and retry budget preservation.
+- Validation:
+  - `go test ./internal/harness -run 'TestEmptyResponseRetry_MaxRetriesExhausted|TestEmptyResponseRetry_DoesNotConsumeStepBudget' -count=1`
+  - `go test ./...`
+  - `go test ./... -race`
+- Regression gate note:
+  - `./scripts/test-regression.sh` still fails in the coverage gate because pre-existing zero-coverage functions remain outside this slice, including `cmd/harnessd/mcp_runner_adapter.go` and workflow/checkpoint store functions. Total coverage is above threshold at 83.7%, and the new daily TUI handlers are covered.
+
+## 2026-06-26 (TUI-First Daily Harness Command Slice)
+
+- Added first-pass daily run-control commands for the personal TUI-first harness plan:
+  - `harnesscli continue <run-id> <prompt>` starts a continuation and streams the new run's events.
+  - `harnesscli replay <run-id-or-rollout-path>` posts to the replay endpoint and prints formatted JSON.
+  - `harnesscli search <query>` filters persisted run metadata locally.
+  - `harnesscli runs` and `harnesscli show` alias the existing list/status behavior.
+- Updated `scripts/go-code.sh` so installed `go-code` exposes `runs`, `show`, `cancel`, `continue`, `replay`, and `search` directly.
+- Registered the remaining daily TUI slash-command entry points (`/attach`, `/runs`, `/replay`, `/resume`, `/doctor`) while preserving existing `/sessions`, `/search`, and `@path` file expansion behavior.
+- Added bare run-ID replay resolution: `POST /v1/runs/replay` can now resolve `run_...` to `<RolloutDir>/*/<run_id>.jsonl` when a rollout directory is configured.
+- Added shared Conductor repository settings for setup/build and concurrent workspace daemon runs.
+- Reconciled stale `docs/context/known-issues.md` continuation-tool-filter status.
+- Validation:
+  - `go test ./cmd/harnesscli ./internal/server -run 'TestRunContinue|TestRunReplay|TestRunSearch|TestDispatch_DailyAliases|TestGoCodeScriptRoutesDailyCommands|TestHandleRunReplay_SimulateResolvesBareRunID|TestTUI041_BuiltinCommandsRegistered' -count=1`
+  - `go test ./cmd/harnesscli ./cmd/harnesscli/tui ./internal/server -count=1`
+  - `go test ./...`
+  - `go test ./... -race`
+
 ## 2026-05-05 (GitHub Pages User Repositioning)
 
 - Recentered the go-code GitHub Pages copy around the developer visitor.
@@ -1115,3 +1180,156 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
   - `TMPDIR=$PWD/.tmp/tmp GOCACHE=$PWD/.tmp/go-build go test ./cmd/harnesscli/tui/... -count=1`
   - `TMPDIR=$PWD/.tmp/tmp GOCACHE=$PWD/.tmp/go-build go test ./internal/... ./cmd/... -count=1`
   - `git diff --check`
+
+## 2026-06-26 (Reliability T02 Terminal Event Fanout)
+
+- Moved terminal event store append and subscriber fanout out of the runner mutex while preserving append-before-subscriber-observe ordering.
+- Added a subscriber send/close guard for terminal fanout so cancellation cannot race a captured terminal subscriber channel.
+- Added `TestTerminalStoreAppendDoesNotBlockRunnerQueries`, which blocks terminal event persistence and verifies unrelated run queries still return.
+- Updated the terminal ordering test to exercise the out-of-lock publish path directly.
+- Validation:
+  - `go test ./internal/harness -run 'TestTerminalStoreAppendDoesNotBlockRunnerQueries|TestEventJournalDispatch_TerminalStoreAppendPrecedesSubscriberNotification' -count=1`
+  - `go test ./internal/harness -race -run 'TestTerminalStoreAppendDoesNotBlockRunnerQueries|TestEventJournalDispatch_TerminalStoreAppendPrecedesSubscriberNotification|TestRunnerPrune|TestRecorderGoroutine_DoneClosedAfterRun' -count=1`
+
+## 2026-06-26 (Reliability T04 Background Bash Shutdown)
+
+- Bound background bash jobs to the tool execution context instead of `context.Background()`, so run cancellation terminates background jobs.
+- Added `JobManager.Shutdown(ctx)` to cancel tracked jobs, wait for their `cmd.Wait` goroutines, and clear the jobs map.
+- Added registry shutdown hooks and wired default registries to shut down their bash job manager.
+- Updated `Runner.Shutdown` to invoke shutdown hooks once for the base registry and any per-run workspace registries after active runs are cancelled or drained.
+- Added failing-first coverage for run-context cancellation, job-manager shutdown cleanup, and runner-level registry shutdown invocation.
+- Validation:
+  - `go test ./internal/harness/tools -run 'TestRunBackgroundCancelsWithRunContext|TestJobManagerShutdownCancelsAndClearsJobs' -count=1`
+  - `go test ./internal/harness -run TestRunnerShutdownInvokesToolRegistryShutdownAfterCancellingRuns -count=1`
+  - `go test ./internal/harness/tools ./internal/harness -race -run 'TestRunBackgroundCancelsWithRunContext|TestJobManagerShutdownCancelsAndClearsJobs|TestRunnerShutdownInvokesToolRegistryShutdownAfterCancellingRuns|TestRunnerShutdownStopsPoolDispatcher|TestRunnerShutdownIdempotent' -count=1`
+
+## 2026-06-26 (Reliability T05 Scoped MCP Shutdown)
+
+- Added a shutdown sweep that closes scoped per-run MCP registries for all live run states after shutdown cancellation or normal drain.
+- Made `closeScopedMCP` atomically detach `state.scopedMCPRegistry` before closing so re-entry is a no-op and closed registries are not retained in memory.
+- Added an `execute()` defer safety net so scoped MCP registries are closed even when execution exits outside the normal terminal helpers.
+- Added `TestRunnerShutdownClosesWedgedScopedMCPRegistry`, which attaches an already-connected scoped MCP registry to a wedged run and verifies shutdown closes and clears it.
+- Validation:
+  - `go test ./internal/harness -run TestRunnerShutdownClosesWedgedScopedMCPRegistry -count=1`
+  - `go test ./internal/harness -race -run 'TestRunnerShutdownClosesWedgedScopedMCPRegistry|TestRunnerShutdownInvokesToolRegistryShutdownAfterCancellingRuns|TestScopedMCPRegistry_Close|TestRunPreflight_BuildsScopedMCPRegistry|TestStartRun_MCPServers' -count=1`
+
+## 2026-06-26 (Reliability T06 Shared Audit Buckets)
+
+- Added shared audit writer buckets keyed by UTC date so same-day runs append through one runner-owned writer instead of one writer per run.
+- Changed terminal audit cleanup to detach run state from the shared writer; buckets are closed once during `Runner.Shutdown`.
+- Added `TestAuditTrail_ActiveRunsShareDateBucketWriter`, which keeps two same-day runs active and verifies both point at the same audit writer.
+- Preserved existing audit persistence and hash-chain behavior with the writer's internal mutex and file-lock chain resume.
+- Validation:
+  - `go test ./internal/harness -run 'TestAuditTrail_ActiveRunsShareDateBucketWriter|TestAuditTrail_HashChainValid|TestAuditTrail_RunStarted_WrittenOnEnable|TestAuditTrail_RunCompleted_Written|TestTerminalSealing_AuditWriterWithRolloutDirClosesOnTerminal|TestTerminalSealing_AuditWriterFailedRunClosesOnTerminal' -count=1`
+  - `go test ./internal/harness ./internal/forensics/audittrail -race -run 'TestAuditTrail_|TestTerminalSealing_AuditWriter|TestAuditWriter_(ConcurrentWrites|HashChain|HashChainIntegrity|CloseIdempotent|WriteAfterClose)' -count=1`
+
+## 2026-06-26 (Reliability T07 Pool Dispatcher Recovery)
+
+- Wrapped each bounded-pool dispatcher iteration with panic recovery so one bad queued item cannot kill the dispatcher goroutine.
+- On dispatcher panic, the runner now releases the acquired worker token, marks the affected queued run failed, decrements its inflight count, logs the panic, and continues dispatching later queued items.
+- Added a deterministic `poolDispatchHook` test seam and `TestPoolDispatcherRecoverKeepsDispatchAlive`, which queues work behind a held worker, panics one queued item, and verifies later items still complete and shutdown does not hang.
+- Validation:
+  - `go test ./internal/harness -run TestPoolDispatcherRecoverKeepsDispatchAlive -count=1`
+  - `go test ./internal/harness -race -run 'TestPoolDispatcherRecoverKeepsDispatchAlive|TestRunnerShutdownDrainsBufferedQueue|TestRunnerShutdownStopsPoolDispatcher|TestPanicInProviderEmitsRunFailed|TestPanicInToolHandlerEmitsRunFailed' -count=1`
+
+## 2026-06-26 (Reliability T08 Container Workspace Cleanup)
+
+- Added a small Docker-client interface seam so container lifecycle cleanup can be tested without a live Docker daemon.
+- `Provision` now records the workspace path as soon as the directory is created and force-destroys partial resources on create/start/inspect/config-write failures.
+- `Destroy` now uses its own bounded background context for stop/remove, force-removes the container, and removes the workspace directory after successful cleanup.
+- Added fake-client coverage for start-failure cleanup, workspace directory removal, and destroy behavior when the caller context is already cancelled.
+- Validation:
+  - `go test ./internal/workspace -run 'TestContainerWorkspace_(ProvisionStartErrorCleansContainerAndWorkspaceDir|DestroyRemovesWorkspaceDir|DestroyUsesForceContextWhenCallerContextCancelled)' -count=1`
+  - `go test ./internal/workspace -count=1`
+  - `go test ./internal/workspace -race -count=1`
+
+## 2026-06-26 (Reliability T09 VM Post-Create Cleanup)
+
+- `HetznerProvider.Create` now best-effort deletes the created server with a bounded background context when polling, timeout, disappearance, or caller cancellation happens after `Server.Create` succeeds.
+- `VMWorkspace.Provision` now stores `vmID` immediately after provider create succeeds and before post-create setup, so caller cleanup can delete the VM if later setup fails.
+- Added an HTTP-backed Hetzner regression for delete-after-poll-error and a VMWorkspace regression that simulates post-create failure and verifies `Destroy` deletes the retained VM ID.
+- Validation:
+  - `go test ./internal/workspace -run 'TestHetznerProvider_CreateDeletesServerAfterPollingError|TestVMWorkspace_ProvisionKeepsVMIDOnPostCreateError' -count=1`
+  - `go test ./internal/workspace -count=1`
+  - `go test ./internal/workspace -race -count=1`
+
+## 2026-06-26 (Reliability T10 Worktree Serialization)
+
+- Added a `runGitCommand` seam and per-repo mutex so `git worktree add`, `git worktree remove`, `git branch -D`, and `git worktree prune` are serialized by repository path.
+- `Destroy` now runs `git worktree prune` even when worktree removal returns an error.
+- `Pool.Close` now prunes each distinct worktree repository path once after destroying live workspaces.
+- Added focused coverage for same-repo add serialization, prune-after-remove-error, and distinct repo pruning from pool close.
+- Validation:
+  - `go test ./internal/workspace -run 'TestWorktreeWorkspace_(ProvisionSerializesWorktreeAddPerRepo|DestroyPrunesAfterRemoveError)|TestPoolClosePrunesEachDistinctWorktreeRepoOnce' -count=1`
+  - `go test ./internal/workspace -count=1`
+  - `go test ./internal/workspace -race -count=1`
+
+## 2026-06-26 (Reliability T11 Bash Streaming Long Lines)
+
+- Replaced the foreground bash streaming `bufio.Scanner` with a draining `bufio.Reader` loop.
+- The streamer now caps each emitted line at `defaultMaxStreamLineBytes` while continuing to drain the rest of an overlong line, preventing subprocess pipe blockage.
+- Added result metadata for stream truncation: `stream_truncated`, `max_line_bytes`, and `stream_error`.
+- Added a regression that streams a 4 MiB single line and verifies the command returns promptly without timing out.
+- Validation:
+  - `go test ./internal/harness/tools -run TestJobManagerRunForegroundStreamingOverlongLineReturnsPromptly -count=1`
+  - `go test ./internal/harness/tools -count=1`
+  - `go test ./internal/harness/tools -race -count=1`
+
+## 2026-06-26 (Reliability T12 Cron Tenant Isolation)
+
+- Added `tenant_id` ownership to cron job types, create requests, the HTTP cron client, the embedded cron adapter, and the SQLite cron store.
+- `POST /v1/cron/jobs` now stamps jobs from the authenticated tenant context; list/get/update/delete/pause/resume only expose jobs for that tenant and return `404 not_found` on cross-tenant access.
+- Cron by-ID handlers now distinguish typed job-not-found errors from backend failures, so real store/client errors return `500 internal_error`.
+- Added SQLite migration coverage for legacy `cron_jobs` tables without `tenant_id`, plus persistence coverage for create/get/update/list and missing-delete not-found behavior.
+- Updated `TestWorkerPoolLoad` to set `MaxCompletedRetention: totalRuns`; after T01, the default terminal-run retention is 32 and the load test starts 50 runs, so the test must opt into retention for its final GET assertions.
+- Validation:
+  - `go test ./internal/server -run 'TestCron(GetJob_Returns500ForBackendError|Jobs_AreTenantIsolated)' -count=1` failed before implementation because `tools.CronJob.TenantID` did not exist.
+  - `go test ./internal/server ./internal/cron -run 'TestCron(GetJob_Returns500ForBackendError|Jobs_AreTenantIsolated)|Test(CreateJob_PreservesTenantID|Migrate_AddsTenantIDToExistingCronJobs|DeleteJob_NotFound)' -count=1`
+  - `go test ./internal/server ./internal/cron ./cmd/harnessd -count=1`
+  - `go test ./internal/server ./internal/cron ./cmd/harnessd -race -count=1`
+
+## 2026-06-26 (Reliability T13 Server Hardening)
+
+- Added a top-level server hardening wrapper that applies `http.MaxBytesReader` to request bodies and `http.TimeoutHandler` to non-streaming requests.
+- Streaming-style routes whose final path segment is `events`, `stream`, or `wait` bypass the timeout wrapper so SSE and blocking wait endpoints keep their own `r.Context().Done()` behavior.
+- `POST /v1/runs` now maps `http.MaxBytesError` to `413 request_too_large` instead of reporting malformed JSON after the body limit is exceeded.
+- `buildHTTPRuntime` now constructs the daemon `http.Server` with `ReadTimeout: 60s`, `ReadHeaderTimeout: 10s`, `IdleTimeout: 120s`, and `MaxHeaderBytes: 1 MiB`.
+- Added focused coverage for oversized request-body reads, non-streaming timeout behavior, streaming timeout bypass, and daemon server settings.
+- Validation:
+  - `go test ./internal/server ./cmd/harnessd -run 'Test(PostRunRejectsOversizedBodyWithoutReadingAll|HardenedHandlerTimesOutNonStreamingRequests|HardenedHandlerDoesNotTimeoutSSERequests)|TestBuildHTTPRuntimeAssemblesRunnerSubagentsAndHTTPServer' -count=1`
+  - `go test ./internal/server ./cmd/harnessd -count=1`
+  - `go test ./internal/server ./cmd/harnessd -race -count=1`
+
+## 2026-06-26 (Reliability T14 Replay Drift Gate)
+
+- Added a small semaphore around `detect_drift:true` replay simulation so drift detection returns `503 replay_busy` instead of constructing additional throwaway replay runners when capacity is saturated.
+- Added `ReplayDriftConcurrency` to `ServerOptions`; values <= 0 use the default of 2 concurrent drift detections.
+- Added a drift-runner factory seam so tests can prove a saturated gate fails before `runDriftDetection` constructs a replay runner.
+- Validation:
+  - `go test ./internal/server -run TestHandleRunReplay_DetectDriftReturns503WhenSemaphoreFull -count=1`
+  - `go test ./internal/server -run 'TestHandleRunReplay|TestReplaySimulate' -count=1`
+  - `go test ./internal/server -count=1`
+  - `go test ./internal/server -race -count=1`
+
+## 2026-06-26 (Reliability T15 Registry Hot-Swap Safety)
+
+- Added per-tool in-flight tracking in `Registry.Execute`; hot reloads now wait for old matching handlers to return before replacing tools with the same source tag.
+- MCP tools registered via `RegisterMCPTools` now carry an `mcp_server:<name>` tag and retained server metadata.
+- `ReplaceByTag` rebuilds `mcpServerTools` from surviving and replacement tools after the swap, so `UnregisterMCPServer` removes the current MCP-owned tools instead of stale names.
+- Added regressions for MCP ownership rebuild after replacement and waiting for an in-flight handler before hot-swap completion.
+- Validation:
+  - `go test ./internal/harness -run 'TestRegistry_ReplaceByTag(RebuildsMCPServerTools|WaitsForInFlightExecution)' -count=1`
+  - `go test ./internal/harness -count=1`
+  - `go test ./internal/harness -race -count=1`
+
+## 2026-06-27 (TUI Daily Loop, Workflow Recaps, Self-Improvement Command)
+
+- Replaced TUI run-control guidance-only commands with HTTP-backed `/runs`, `/cancel`, `/replay`, and `/resume` actions. `/resume` expands `@path` attachments and emits `RunStartedMsg` so the existing SSE/session path continues the run.
+- Added TUI run-list snapshots at 80x24, 120x40, and 200x50, plus focused tests for `/model` issue coverage, command routing, and run-control endpoint behavior.
+- Added deterministic workflow recaps to terminal run state and durable run storage. Recaps include goal, changed files, tests run, failure cause, fix pattern, useful commands, and a next continuation prompt.
+- Extended `harnesscli search`/`go-code search` to match recap content and `show` to print recap details when present.
+- Added `harnesscli improve` and `go-code improve`, exposing the existing autoresearch loop as a first-class command with `--dry-run` planning and `--score-only` repo-native checks.
+- Validation:
+  - `go test ./cmd/harnesscli/tui ./cmd/harnesscli/tui/components/modelswitcher -run 'TestRunControl_|TestTUI_DailyHarnessCommandsSetGuidance|TestTUI041_BuiltinCommandsRegistered|TestTUI364_RegistryCompleteness|TestTUI573_|TestIssue57|TestModelSearch' -count=1`
+  - `go test ./internal/store ./internal/harness ./cmd/harnesscli -run 'TestMemoryStore/UpdateRun_PersistsWorkflowRecap|TestSQLiteStore/UpdateRun_PersistsWorkflowRecap|TestRunnerStore_CompletedRunPersistsWorkflowRecap|TestRunSearch_(FiltersRunMetadata|MatchesWorkflowRecap)' -count=1`
+  - `go test ./cmd/harnesscli -run 'TestGoCodeScriptRoutesDailyCommands|TestRunImproveDryRunPrintsSelfImprovementPlan|TestDispatchRoutesImprove' -count=1`

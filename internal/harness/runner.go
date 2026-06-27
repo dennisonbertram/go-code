@@ -9,6 +9,7 @@ import (
 	osuser "os/user"
 	"runtime"
 	"runtime/debug"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -211,9 +212,14 @@ const recorderDrainTimeout = 30 * time.Second
 
 // maxEmptyRetries is the maximum number of consecutive empty LLM responses
 // (no text content, no tool calls) before the runner stops retrying and
-// treats the run as complete. Handles Gemini 2.5 Flash thinking mode where
+// fails the run explicitly. Handles Gemini 2.5 Flash thinking mode where
 // the model returns 0 completion_tokens with empty content.
 const maxEmptyRetries = 3
+
+const (
+	defaultMaxCompletedRetention    = 32
+	defaultMaxConversationRetention = 256
+)
 
 // conversationOwner records the tenant and agent that own a conversation.
 // This is used to enforce conversation scoping: a caller-supplied ConversationID
@@ -229,6 +235,10 @@ type queuedRun struct {
 	req   RunRequest
 }
 
+type auditBucket struct {
+	writer *audittrail.AuditWriter
+}
+
 type Runner struct {
 	provider         Provider
 	tools            *Registry
@@ -241,6 +251,14 @@ type Runner struct {
 	mu            sync.RWMutex
 	runs          map[string]*runState
 	conversations map[string][]Message
+	// subscriberMu serializes terminal fanout with subscriber cancellation.
+	// Terminal fanout intentionally runs outside mu so slow persistence cannot
+	// block run queries, while cancellation may still close subscriber channels.
+	subscriberMu      sync.Mutex
+	closedSubscribers map[chan Event]struct{}
+	// conversationTouched records the most recent in-memory mirror update for
+	// each conversation so pruning can evict oldest mirrors deterministically.
+	conversationTouched map[string]time.Time
 	// conversationOwners maps conversation_id -> owner (tenantID + agentID).
 	// It is populated when a run completes and its conversation is saved to the
 	// in-memory conversations map. Used to validate caller-supplied conversation IDs.
@@ -257,6 +275,9 @@ type Runner struct {
 	// (by the deferred releaseWorker closure) when execute() returns. When the
 	// channel is nil the runner operates in the legacy unbounded mode.
 	workerSem chan struct{}
+	// poolDispatchHook is a test seam invoked after a queued item acquires a
+	// worker token and before execute() is launched.
+	poolDispatchHook func(queuedRun)
 	// runQueue is a FIFO channel of pending (runID, req) pairs waiting for a
 	// worker slot. It is only used when workerSem is non-nil.
 	runQueue chan queuedRun
@@ -268,6 +289,14 @@ type Runner struct {
 	// shutdownOnce ensures close(done) happens exactly once even if Shutdown is
 	// called concurrently from multiple goroutines.
 	shutdownOnce sync.Once
+	// toolShutdownOnce ensures registry shutdown hooks run at most once.
+	toolShutdownOnce sync.Once
+	toolShutdownErr  error
+	// auditBuckets holds shared audit writers keyed by UTC date (YYYY-MM-DD).
+	auditMu           sync.Mutex
+	auditBuckets      map[string]*auditBucket
+	auditShutdownOnce sync.Once
+	auditShutdownErr  error
 	// inflight counts goroutines currently inside execute() (or executeWithRelease).
 	// Shutdown waits until this reaches zero before returning.
 	inflight sync.WaitGroup
@@ -299,6 +328,12 @@ func NewRunner(provider Provider, tools *Registry, config RunnerConfig) *Runner 
 	if config.ModelContextWindow == 0 {
 		config.ModelContextWindow = 128000
 	}
+	if config.MaxCompletedRetention <= 0 {
+		config.MaxCompletedRetention = defaultMaxCompletedRetention
+	}
+	if config.MaxConversationRetention <= 0 {
+		config.MaxConversationRetention = defaultMaxConversationRetention
+	}
 	if tools == nil {
 		tools = NewRegistry()
 	}
@@ -327,17 +362,20 @@ func NewRunner(provider Provider, tools *Registry, config RunnerConfig) *Runner 
 	}
 
 	r := &Runner{
-		provider:           provider,
-		tools:              tools,
-		config:             config,
-		providerRegistry:   config.ProviderRegistry,
-		activations:        activations,
-		skillConstraints:   skillConstraints,
-		envInfo:            envInfo,
-		runs:               make(map[string]*runState),
-		conversations:      make(map[string][]Message),
-		conversationOwners: make(map[string]conversationOwner),
-		done:               make(chan struct{}),
+		provider:            provider,
+		tools:               tools,
+		config:              config,
+		providerRegistry:    config.ProviderRegistry,
+		activations:         activations,
+		skillConstraints:    skillConstraints,
+		envInfo:             envInfo,
+		runs:                make(map[string]*runState),
+		conversations:       make(map[string][]Message),
+		closedSubscribers:   make(map[chan Event]struct{}),
+		conversationTouched: make(map[string]time.Time),
+		conversationOwners:  make(map[string]conversationOwner),
+		auditBuckets:        make(map[string]*auditBucket),
+		done:                make(chan struct{}),
 	}
 	if config.WorkerPoolSize > 0 {
 		// Bounded pool: workerSem acts as a counting semaphore.
@@ -394,51 +432,87 @@ func (r *Runner) toolsForRun(runID string) *Registry {
 // r.inflight.Done() once per drained item to allow Shutdown's Wait to complete.
 func (r *Runner) poolDispatcher() {
 	for {
+		if !r.poolDispatcherStep() {
+			return
+		}
+	}
+}
+
+func (r *Runner) poolDispatcherStep() (keepGoing bool) {
+	keepGoing = true
+	var item queuedRun
+	haveItem := false
+	acquiredWorker := false
+	defer func() {
+		if p := recover(); p != nil {
+			if acquiredWorker {
+				<-r.workerSem
+			}
+			if haveItem {
+				r.failRun(item.runID, fmt.Errorf("pool dispatcher panic: %v", p))
+				r.inflight.Done()
+			}
+			if r.config.Logger != nil {
+				r.config.Logger.Error("runner: recovered panic in pool dispatcher",
+					"run_id", item.runID,
+					"panic", p,
+				)
+			}
+			keepGoing = true
+		}
+	}()
+
+	select {
+	case <-r.done:
+		// Drain any items that raced into the buffer after done was closed.
+		// Each was counted in r.inflight by dispatchRun; account for them now.
+		for {
+			select {
+			case _, ok := <-r.runQueue:
+				if !ok {
+					return false
+				}
+				r.inflight.Done()
+			default:
+				return false
+			}
+		}
+	case queued, ok := <-r.runQueue:
+		if !ok {
+			return false
+		}
+		item = queued
+		haveItem = true
+		// Acquire a worker slot. This blocks when all slots are occupied,
+		// naturally serializing pending items until a slot frees up.
+		// Check done again while waiting for a slot so Shutdown can
+		// interrupt a poolDispatcher that is blocked on a full semaphore.
 		select {
 		case <-r.done:
-			// Drain any items that raced into the buffer after done was closed.
-			// Each was counted in r.inflight by dispatchRun; account for them now.
+			// Also drain here: we dequeued one item and are about to exit.
+			r.inflight.Done()
 			for {
 				select {
 				case _, ok := <-r.runQueue:
 					if !ok {
-						return
+						return false
 					}
 					r.inflight.Done()
 				default:
-					return
+					return false
 				}
 			}
-		case item, ok := <-r.runQueue:
-			if !ok {
-				return
-			}
-			// Acquire a worker slot. This blocks when all slots are occupied,
-			// naturally serializing pending items until a slot frees up.
-			// Check done again while waiting for a slot so Shutdown can
-			// interrupt a poolDispatcher that is blocked on a full semaphore.
-			select {
-			case <-r.done:
-				// Also drain here: we dequeued one item and are about to exit.
-				r.inflight.Done()
-				for {
-					select {
-					case _, ok := <-r.runQueue:
-						if !ok {
-							return
-						}
-						r.inflight.Done()
-					default:
-						return
-					}
-				}
-			case r.workerSem <- struct{}{}:
-			}
-			// Mark transition from queued → running before launching the goroutine
-			// so that the status is accurate by the time the caller's goroutine
-			// observes it.
-			go r.executeWithRelease(item.runID, item.req)
+		case r.workerSem <- struct{}{}:
+			acquiredWorker = true
 		}
+		if r.poolDispatchHook != nil {
+			r.poolDispatchHook(item)
+		}
+		// Mark transition from queued → running before launching the goroutine
+		// so that the status is accurate by the time the caller's goroutine
+		// observes it.
+		go r.executeWithRelease(item.runID, item.req)
+		return true
 	}
 }
 
@@ -635,14 +709,13 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 		}
 	}
 
-	// Create audit writer when AuditTrailEnabled and RolloutDir are set.
+	// Attach the shared audit writer for today's UTC date when enabled.
 	// The audit log is written to <RolloutDir>/<YYYY-MM-DD>/audit.jsonl, a single
 	// shared file (not per-run) since it captures all runs in the session.
 	var aw *audittrail.AuditWriter
 	if r.config.AuditTrailEnabled && r.config.RolloutDir != "" {
-		auditPath := auditLogPath(r.config.RolloutDir)
 		var awErr error
-		aw, awErr = audittrail.NewAuditWriter(auditPath)
+		aw, awErr = r.auditWriterFor(time.Now().UTC())
 		if awErr != nil && r.config.Logger != nil {
 			r.config.Logger.Error("audit trail: failed to create writer", "run_id", run.ID, "error", awErr)
 		}
@@ -696,18 +769,14 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 		// Runner was shut down between the early check and here.  Remove the
 		// half-created run state so callers never see an orphan run.
 		// Before deleting, clean up any resources that were attached to the
-		// half-created state: the recorder goroutine and the audit writer.
-		// If we skip these, the recorder goroutine blocks forever on its
-		// channel and the audit file descriptor is never closed.
+		// half-created state. If we skip this, the recorder goroutine blocks
+		// forever on its channel.
 		if state.closeRecorderOnce != nil {
 			state.closeRecorderOnce()
 		}
-		if aw != nil {
-			_ = aw.Close()
-		}
 		r.mu.Lock()
-		// Zero out auditWriter so that closeAuditWriter on a concurrent path
-		// is a no-op (we already closed it above).
+		// Zero out auditWriter so that closeAuditWriter on a concurrent path is
+		// a no-op. The shared date-bucket writer is closed by Runner.Shutdown.
 		if s, ok := r.runs[run.ID]; ok {
 			s.auditWriter = nil
 		}
@@ -1155,6 +1224,9 @@ func (r *Runner) GetRun(runID string) (Run, bool) {
 		cost := *state.run.CostTotals
 		out.CostTotals = &cost
 	}
+	if state.run.Recap != nil {
+		out.Recap = cloneWorkflowRecap(state.run.Recap)
+	}
 	return out, true
 }
 
@@ -1346,20 +1418,18 @@ func (r *Runner) ContinueRunWithOptions(runID string, req ContinueRunRequest) (R
 		//
 		// Three cleanup actions are required:
 		// 1. Close the recorder goroutine so it doesn't block forever.
-		// 2. Close the audit writer file descriptor.
+		// 2. Detach any audit writer from the orphan continuation state.
 		// 3. Revert state.continued on the SOURCE run so it can be continued
 		//    again (the continuation never actually started).
 		if contState.closeRecorderOnce != nil {
 			contState.closeRecorderOnce()
 		}
 		r.mu.Lock()
-		// Close any audit writer on the continuation state (forward-compat guard;
-		// ContinueRunWithOptions does not create one today, but guard for safety).
+		// Detach any audit writer on the continuation state (forward-compat
+		// guard; ContinueRunWithOptions does not create one today). Shared
+		// date-bucket writers are closed by Runner.Shutdown.
 		if s, ok := r.runs[newRun.ID]; ok {
-			if s.auditWriter != nil {
-				_ = s.auditWriter.Close()
-				s.auditWriter = nil
-			}
+			s.auditWriter = nil
 		}
 		delete(r.runs, newRun.ID)
 		// Revert state.continued on the source run so it remains continuable.
@@ -1536,18 +1606,46 @@ func (r *Runner) Subscribe(runID string) ([]Event, <-chan Event, func(), error) 
 
 	cancel := func() {
 		r.mu.Lock()
-		defer r.mu.Unlock()
-
 		state, ok := r.runs[runID]
 		if !ok {
+			r.mu.Unlock()
 			return
 		}
+		shouldClose := false
 		if _, exists := state.subscribers[ch]; exists {
 			delete(state.subscribers, ch)
-			close(ch)
+			shouldClose = true
+			r.pruneCompletedRunsLocked()
+		}
+		r.mu.Unlock()
+		if shouldClose {
+			r.closeSubscriber(ch)
 		}
 	}
 	return history, ch, cancel, nil
+}
+
+func (r *Runner) closeSubscriber(ch chan Event) {
+	r.subscriberMu.Lock()
+	defer r.subscriberMu.Unlock()
+	if _, closed := r.closedSubscribers[ch]; closed {
+		return
+	}
+	r.closedSubscribers[ch] = struct{}{}
+	close(ch)
+}
+
+func (r *Runner) sendTerminalSubscriberEvent(ch chan Event, ev Event) {
+	r.subscriberMu.Lock()
+	defer r.subscriberMu.Unlock()
+	if _, closed := r.closedSubscribers[ch]; closed {
+		return
+	}
+	select {
+	case ch <- ev:
+	default:
+		// Drop if subscriber is too slow; event is still persisted in run history.
+	}
 }
 
 // RunPrompt implements htools.AgentRunner. It starts a new run with the given
@@ -1842,6 +1940,7 @@ func (r *Runner) execute(runID string, req RunRequest) {
 			closeFn()
 		}
 	}()
+	defer r.closeScopedMCP(runID)
 
 	// Recover from any panic inside the step loop so that a misbehaving tool
 	// handler or internal bug does not crash the entire server process.
@@ -2460,6 +2559,7 @@ func (r *Runner) completeRun(runID, output string) {
 
 		r.mu.Lock()
 		r.conversations[convID] = msgs
+		r.conversationTouched[convID] = time.Now().UTC()
 		// Record ownership so that future StartRun callers with the same
 		// ConversationID can be validated against the originating tenant+agent
 		// (cross-tenant/cross-agent disclosure prevention, issue #221).
@@ -2467,6 +2567,7 @@ func (r *Runner) completeRun(runID, output string) {
 			tenantID: tenantID,
 			agentID:  agentID,
 		}
+		r.pruneConversationsLocked()
 		r.mu.Unlock()
 
 		// Persist to SQLite store if configured
@@ -2685,13 +2786,14 @@ func (r *Runner) runWorkspaceCleanup(runID string) {
 // same server name can be re-registered on subsequent runs. It is a no-op when
 // no scoped registry exists.
 func (r *Runner) closeScopedMCP(runID string) {
-	r.mu.RLock()
+	r.mu.Lock()
 	state, ok := r.runs[runID]
 	var scoped *ScopedMCPRegistry
 	if ok {
 		scoped = state.scopedMCPRegistry
+		state.scopedMCPRegistry = nil
 	}
-	r.mu.RUnlock()
+	r.mu.Unlock()
 	if scoped != nil {
 		// Deregister per-run tools from whichever registry they were registered
 		// into (per-run when provisioning happened, otherwise the global registry)
@@ -2702,6 +2804,21 @@ func (r *Runner) closeScopedMCP(runID string) {
 			toolReg.UnregisterMCPServer(serverName)
 		}
 		_ = scoped.Close()
+	}
+}
+
+func (r *Runner) closeAllScopedMCP() {
+	r.mu.RLock()
+	runIDs := make([]string, 0, len(r.runs))
+	for runID, state := range r.runs {
+		if state != nil && state.scopedMCPRegistry != nil {
+			runIDs = append(runIDs, runID)
+		}
+	}
+	r.mu.RUnlock()
+
+	for _, runID := range runIDs {
+		r.closeScopedMCP(runID)
 	}
 }
 
@@ -3077,7 +3194,8 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 
 	select {
 	case <-inflightDone:
-		return nil
+		r.closeAllScopedMCP()
+		return errors.Join(r.shutdownToolRegistriesOnce(ctx), r.closeAuditBucketsOnce())
 	case <-ctx.Done():
 		// Context expired — cancel all remaining in-flight runs cooperatively.
 		r.cancelFuncs.Range(func(_, v any) bool {
@@ -3086,8 +3204,40 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 			}
 			return true
 		})
-		return ctx.Err()
+		r.closeAllScopedMCP()
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Second)
+		defer cleanupCancel()
+		return errors.Join(ctx.Err(), r.shutdownToolRegistriesOnce(cleanupCtx), r.closeAuditBucketsOnce())
 	}
+}
+
+func (r *Runner) shutdownToolRegistriesOnce(ctx context.Context) error {
+	r.toolShutdownOnce.Do(func() {
+		r.toolShutdownErr = r.shutdownToolRegistries(ctx)
+	})
+	return r.toolShutdownErr
+}
+
+func (r *Runner) shutdownToolRegistries(ctx context.Context) error {
+	registries := map[*Registry]struct{}{}
+	if r.tools != nil {
+		registries[r.tools] = struct{}{}
+	}
+	r.mu.RLock()
+	for _, state := range r.runs {
+		if state != nil && state.perRunTools != nil {
+			registries[state.perRunTools] = struct{}{}
+		}
+	}
+	r.mu.RUnlock()
+
+	var joined error
+	for registry := range registries {
+		if err := registry.Shutdown(ctx); err != nil {
+			joined = errors.Join(joined, err)
+		}
+	}
+	return joined
 }
 
 func (r *Runner) recordAccounting(runID string, result CompletionResult, step int) map[string]any {
@@ -3317,6 +3467,11 @@ func (r *Runner) setStatus(runID string, status RunStatus, output, runErr string
 	state.run.Output = output
 	state.run.Error = runErr
 	state.run.UpdatedAt = time.Now().UTC()
+	if shouldPersistWorkflowRecap(status) {
+		state.run.Recap = buildWorkflowRecap(state.run, state.messages, state.events)
+	} else {
+		state.run.Recap = nil
+	}
 	r.mu.Unlock()
 
 	// Persist the updated run state to the store (non-fatal, called after unlock).
@@ -4350,14 +4505,88 @@ func (r *Runner) emit(runID string, eventType EventType, payload map[string]any)
 	}
 	journal := newEventJournal(r)
 	delivery, deliver := journal.prepareLocked(state, runID, eventType, payload)
-	if deliver && !delivery.dropped && IsTerminalEvent(eventType) {
-		journal.publishTerminalLocked(delivery)
-	}
+	publishTerminal := deliver && !delivery.dropped && IsTerminalEvent(eventType)
 	r.mu.Unlock()
 	if !deliver {
 		return
 	}
+	if publishTerminal {
+		journal.publishTerminal(delivery)
+		r.pruneCompletedRuns()
+	}
 	journal.dispatch(delivery)
+}
+
+func isTerminalRunStatus(status RunStatus) bool {
+	return status == RunStatusCompleted || status == RunStatusFailed || status == RunStatusCancelled
+}
+
+func (r *Runner) pruneCompletedRunsLocked() {
+	limit := r.config.MaxCompletedRetention
+	if limit <= 0 {
+		return
+	}
+
+	type candidate struct {
+		id        string
+		updatedAt time.Time
+	}
+	candidates := make([]candidate, 0, len(r.runs))
+	for id, state := range r.runs {
+		if state == nil || !isTerminalRunStatus(state.run.Status) || len(state.subscribers) > 0 {
+			continue
+		}
+		updatedAt := state.run.UpdatedAt
+		if updatedAt.IsZero() {
+			updatedAt = state.run.CreatedAt
+		}
+		candidates = append(candidates, candidate{id: id, updatedAt: updatedAt})
+	}
+	if len(candidates) <= limit {
+		return
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].updatedAt.Equal(candidates[j].updatedAt) {
+			return candidates[i].id < candidates[j].id
+		}
+		return candidates[i].updatedAt.Before(candidates[j].updatedAt)
+	})
+	for _, entry := range candidates[:len(candidates)-limit] {
+		delete(r.runs, entry.id)
+	}
+}
+
+func (r *Runner) pruneCompletedRuns() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pruneCompletedRunsLocked()
+}
+
+func (r *Runner) pruneConversationsLocked() {
+	limit := r.config.MaxConversationRetention
+	if limit <= 0 || len(r.conversations) <= limit {
+		return
+	}
+
+	type candidate struct {
+		id        string
+		touchedAt time.Time
+	}
+	candidates := make([]candidate, 0, len(r.conversations))
+	for id := range r.conversations {
+		candidates = append(candidates, candidate{id: id, touchedAt: r.conversationTouched[id]})
+	}
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].touchedAt.Equal(candidates[j].touchedAt) {
+			return candidates[i].id < candidates[j].id
+		}
+		return candidates[i].touchedAt.Before(candidates[j].touchedAt)
+	})
+	for _, entry := range candidates[:len(candidates)-limit] {
+		delete(r.conversations, entry.id)
+		delete(r.conversationOwners, entry.id)
+		delete(r.conversationTouched, entry.id)
+	}
 }
 
 func (r *Runner) emitCompletionDelta(runID string, step int, delta CompletionDelta) {
@@ -4400,8 +4629,54 @@ func mustJSON(v any) string {
 // auditLogPath returns the path for the audit.jsonl file under the given
 // rollout directory, partitioned by the current UTC date.
 func auditLogPath(rolloutDir string) string {
-	dateDir := rolloutDir + "/" + time.Now().UTC().Format("2006-01-02")
+	return auditLogPathForDate(rolloutDir, time.Now().UTC().Format("2006-01-02"))
+}
+
+func auditLogPathForDate(rolloutDir, dateKey string) string {
+	dateDir := rolloutDir + "/" + dateKey
 	return dateDir + "/audit.jsonl"
+}
+
+func (r *Runner) auditWriterFor(now time.Time) (*audittrail.AuditWriter, error) {
+	if !r.config.AuditTrailEnabled || r.config.RolloutDir == "" {
+		return nil, nil
+	}
+	dateKey := now.UTC().Format("2006-01-02")
+
+	r.auditMu.Lock()
+	defer r.auditMu.Unlock()
+	if bucket := r.auditBuckets[dateKey]; bucket != nil && bucket.writer != nil {
+		return bucket.writer, nil
+	}
+
+	writer, err := audittrail.NewAuditWriter(auditLogPathForDate(r.config.RolloutDir, dateKey))
+	if err != nil {
+		return nil, err
+	}
+	r.auditBuckets[dateKey] = &auditBucket{writer: writer}
+	return writer, nil
+}
+
+func (r *Runner) closeAuditBucketsOnce() error {
+	r.auditShutdownOnce.Do(func() {
+		r.auditShutdownErr = r.closeAuditBuckets()
+	})
+	return r.auditShutdownErr
+}
+
+func (r *Runner) closeAuditBuckets() error {
+	r.auditMu.Lock()
+	buckets := r.auditBuckets
+	r.auditBuckets = make(map[string]*auditBucket)
+	r.auditMu.Unlock()
+
+	var joined error
+	for _, bucket := range buckets {
+		if bucket != nil && bucket.writer != nil {
+			joined = errors.Join(joined, bucket.writer.Close())
+		}
+	}
+	return joined
 }
 
 // writeAudit writes a record to the run's audit writer if audit trail is
@@ -4463,7 +4738,7 @@ func (r *Runner) resolveRoleModels(req RunRequest) RoleModels {
 	return result
 }
 
-// closeAuditWriter closes the audit writer for a run, if any.
+// closeAuditWriter detaches the run from the shared audit writer, if any.
 func (r *Runner) closeAuditWriter(runID string) {
 	r.mu.Lock()
 	state, ok := r.runs[runID]
@@ -4471,13 +4746,8 @@ func (r *Runner) closeAuditWriter(runID string) {
 		r.mu.Unlock()
 		return
 	}
-	aw := state.auditWriter
 	state.auditWriter = nil
 	r.mu.Unlock()
-
-	if aw != nil {
-		_ = aw.Close()
-	}
 }
 
 // --- store.Store persistence helpers ---
@@ -4519,6 +4789,10 @@ func (r *Runner) storeUpdateRun(runID string) {
 			r.config.Logger.Error("store: UpdateRun failed", "run_id", runID, "error", err)
 		}
 	}
+}
+
+func shouldPersistWorkflowRecap(status RunStatus) bool {
+	return status == RunStatusCompleted || status == RunStatusFailed || status == RunStatusCancelled
 }
 
 // storeAppendEvent persists a single event to the store.
@@ -4607,6 +4881,7 @@ func runToStoreRun(run Run) *store.Run {
 		Status:         store.RunStatus(run.Status),
 		Output:         run.Output,
 		Error:          run.Error,
+		Recap:          cloneWorkflowRecap(run.Recap),
 		CreatedAt:      run.CreatedAt,
 		UpdatedAt:      run.UpdatedAt,
 	}

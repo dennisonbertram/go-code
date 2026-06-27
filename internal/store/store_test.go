@@ -127,6 +127,49 @@ func runContractTests(t *testing.T, factory storeFactory) {
 		}
 	})
 
+	t.Run("UpdateRun_PersistsWorkflowRecap", func(t *testing.T) {
+		s := factory(t)
+		ctx := context.Background()
+
+		run := &store.Run{
+			ID:        "recap-1",
+			Status:    store.RunStatusQueued,
+			Prompt:    "fix flaky tests",
+			CreatedAt: time.Now().UTC().Truncate(time.Second),
+			UpdatedAt: time.Now().UTC().Truncate(time.Second),
+		}
+		if err := s.CreateRun(ctx, run); err != nil {
+			t.Fatalf("CreateRun: %v", err)
+		}
+
+		run.Status = store.RunStatusCompleted
+		run.Recap = &store.WorkflowRecap{
+			Goal:                   "fix flaky tests",
+			ChangedFiles:           []string{"internal/harness/runner.go"},
+			TestsRun:               []string{"go test ./internal/harness"},
+			FixPattern:             "added regression coverage before code changes",
+			UsefulCommands:         []string{"go test ./internal/harness"},
+			NextContinuationPrompt: "Continue from recap-1",
+		}
+		if err := s.UpdateRun(ctx, run); err != nil {
+			t.Fatalf("UpdateRun: %v", err)
+		}
+
+		got, err := s.GetRun(ctx, "recap-1")
+		if err != nil {
+			t.Fatalf("GetRun after recap update: %v", err)
+		}
+		if got.Recap == nil {
+			t.Fatal("Recap is nil after update")
+		}
+		if got.Recap.Goal != "fix flaky tests" {
+			t.Errorf("Recap.Goal = %q", got.Recap.Goal)
+		}
+		if len(got.Recap.ChangedFiles) != 1 || got.Recap.ChangedFiles[0] != "internal/harness/runner.go" {
+			t.Errorf("Recap.ChangedFiles = %#v", got.Recap.ChangedFiles)
+		}
+	})
+
 	t.Run("UpdateRun_StatusTransition_NoBackward", func(t *testing.T) {
 		// Status must not go backwards: completed -> queued is illegal.
 		// Implementations may or may not enforce this at the store level.

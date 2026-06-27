@@ -122,3 +122,24 @@ func TestCompileDefinitionIncludesStructuredResultInstructions(t *testing.T) {
 		t.Fatal("expected compiled run step")
 	}
 }
+
+func TestEngineGetDefinition(t *testing.T) {
+	t.Parallel()
+
+	engine := NewEngine(Options{
+		Definitions: []Definition{{
+			Name:        "review-network",
+			Description: "review work",
+		}},
+	})
+	def, ok := engine.GetDefinition("review-network")
+	if !ok {
+		t.Fatal("expected review-network definition")
+	}
+	if def.Description != "review work" {
+		t.Fatalf("description = %q, want review work", def.Description)
+	}
+	if _, ok := engine.GetDefinition("missing"); ok {
+		t.Fatal("expected missing definition to be absent")
+	}
+}

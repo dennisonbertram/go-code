@@ -141,6 +141,21 @@ type SubagentsLoadedMsg struct{ Subagents []RemoteSubagent }
 
 type SubagentsLoadFailedMsg struct{ Err string }
 
+// RunsFetchedMsg carries recent run metadata fetched by /runs.
+type RunsFetchedMsg struct {
+	Runs []tuiRunRecord
+	Err  string
+}
+
+// RunControlResultMsg carries a one-shot run control result for commands such
+// as /cancel and /replay.
+type RunControlResultMsg struct {
+	Kind   string
+	RunID  string
+	Output string
+	Err    string
+}
+
 // statusTickMsg is sent after statusMsgDuration to clear the transient status bar message.
 type statusTickMsg struct{}
 

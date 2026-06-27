@@ -138,15 +138,11 @@ func (j *eventJournal) prepareLocked(state *runState, runID string, eventType Ev
 	return delivery, true
 }
 
-func (j *eventJournal) publishTerminalLocked(delivery eventDispatch) {
+func (j *eventJournal) publishTerminal(delivery eventDispatch) {
 	j.runner.storeAppendEvent(delivery.event, delivery.eventSeq)
 
 	for _, sub := range delivery.subscribers {
-		select {
-		case sub.ch <- sub.event:
-		default:
-			// Drop if subscriber is too slow; event is still persisted in run history.
-		}
+		j.runner.sendTerminalSubscriberEvent(sub.ch, sub.event)
 	}
 }
 

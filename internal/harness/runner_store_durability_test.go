@@ -7,11 +7,21 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
 	"go-agent-harness/internal/store"
 )
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
 
 // TestRunnerStore_CreateRunCalledOnStartRun verifies that StartRun calls
 // store.CreateRun with the correct initial run state (status=queued).
@@ -89,6 +99,72 @@ func TestRunnerStore_RunStatusTransitions(t *testing.T) {
 	}
 	if storedRun.Output != "finished" {
 		t.Errorf("final stored output: got %q, want %q", storedRun.Output, "finished")
+	}
+}
+
+func TestRunnerStore_CompletedRunPersistsWorkflowRecap(t *testing.T) {
+	t.Parallel()
+
+	st := store.NewMemoryStore()
+	registry := NewRegistry()
+	if err := registry.Register(ToolDefinition{
+		Name:        "bash",
+		Description: "run command",
+		Parameters:  map[string]any{"type": "object"},
+	}, func(_ context.Context, _ json.RawMessage) (string, error) {
+		return "ok", nil
+	}); err != nil {
+		t.Fatalf("register bash: %v", err)
+	}
+	if err := registry.Register(ToolDefinition{
+		Name:        "edit",
+		Description: "edit file",
+		Parameters:  map[string]any{"type": "object"},
+	}, func(_ context.Context, _ json.RawMessage) (string, error) {
+		return "updated", nil
+	}); err != nil {
+		t.Fatalf("register edit: %v", err)
+	}
+
+	provider := &stubProvider{turns: []CompletionResult{
+		{ToolCalls: []ToolCall{
+			{ID: "cmd-1", Name: "bash", Arguments: `{"cmd":"go test ./internal/harness"}`},
+			{ID: "edit-1", Name: "edit", Arguments: `{"path":"internal/harness/runner.go"}`},
+		}},
+		{Content: "fixed"},
+	}}
+	runner := NewRunner(provider, registry, RunnerConfig{
+		DefaultModel: "test",
+		MaxSteps:     4,
+		Store:        st,
+	})
+
+	run, err := runner.StartRun(RunRequest{Prompt: "fix flaky harness tests"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	if _, err := collectRunEvents(t, runner, run.ID); err != nil {
+		t.Fatalf("collectRunEvents: %v", err)
+	}
+
+	storedRun, err := st.GetRun(context.Background(), run.ID)
+	if err != nil {
+		t.Fatalf("store.GetRun: %v", err)
+	}
+	if storedRun.Recap == nil {
+		t.Fatal("expected completed run recap")
+	}
+	if storedRun.Recap.Goal != "fix flaky harness tests" {
+		t.Errorf("recap goal = %q", storedRun.Recap.Goal)
+	}
+	if !containsString(storedRun.Recap.TestsRun, "go test ./internal/harness") {
+		t.Errorf("recap tests = %#v", storedRun.Recap.TestsRun)
+	}
+	if !containsString(storedRun.Recap.ChangedFiles, "internal/harness/runner.go") {
+		t.Errorf("recap changed files = %#v", storedRun.Recap.ChangedFiles)
+	}
+	if !strings.Contains(storedRun.Recap.NextContinuationPrompt, run.ID) {
+		t.Errorf("next continuation prompt = %q", storedRun.Recap.NextContinuationPrompt)
 	}
 }
 

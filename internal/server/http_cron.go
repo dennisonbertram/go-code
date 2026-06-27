@@ -1,7 +1,9 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -107,6 +109,7 @@ func (s *Server) handleCronListJobs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
+	jobs = filterCronJobsByTenant(jobs, TenantIDFromContext(r.Context()))
 	if jobs == nil {
 		jobs = []tools.CronJob{}
 	}
@@ -128,6 +131,7 @@ func (s *Server) handleCronCreateJob(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "schedule is required")
 		return
 	}
+	req.TenantID = TenantIDFromContext(r.Context())
 
 	job, err := s.cronClient.CreateJob(r.Context(), req)
 	if err != nil {
@@ -139,9 +143,9 @@ func (s *Server) handleCronCreateJob(w http.ResponseWriter, r *http.Request) {
 
 // handleCronGetJob handles GET /v1/cron/jobs/{id}.
 func (s *Server) handleCronGetJob(w http.ResponseWriter, r *http.Request, id string) {
-	job, err := s.cronClient.GetJob(r.Context(), id)
+	job, err := s.cronJobForTenant(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "not_found", "job not found")
+		writeCronJobError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
@@ -154,9 +158,17 @@ func (s *Server) handleCronUpdateJob(w http.ResponseWriter, r *http.Request, id 
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
 		return
 	}
+	if _, err := s.cronJobForTenant(r.Context(), id); err != nil {
+		writeCronJobError(w, err)
+		return
+	}
 	job, err := s.cronClient.UpdateJob(r.Context(), id, req)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		writeCronJobError(w, err)
+		return
+	}
+	if !cronJobVisibleToTenant(job, TenantIDFromContext(r.Context())) {
+		writeCronJobError(w, tools.ErrCronJobNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
@@ -164,8 +176,12 @@ func (s *Server) handleCronUpdateJob(w http.ResponseWriter, r *http.Request, id 
 
 // handleCronDeleteJob handles DELETE /v1/cron/jobs/{id}.
 func (s *Server) handleCronDeleteJob(w http.ResponseWriter, r *http.Request, id string) {
+	if _, err := s.cronJobForTenant(r.Context(), id); err != nil {
+		writeCronJobError(w, err)
+		return
+	}
 	if err := s.cronClient.DeleteJob(r.Context(), id); err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		writeCronJobError(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -177,12 +193,20 @@ func (s *Server) handleCronPauseJob(w http.ResponseWriter, r *http.Request, id s
 		writeMethodNotAllowed(w, http.MethodPost)
 		return
 	}
+	if _, err := s.cronJobForTenant(r.Context(), id); err != nil {
+		writeCronJobError(w, err)
+		return
+	}
 	paused := "paused"
 	job, err := s.cronClient.UpdateJob(r.Context(), id, tools.CronUpdateJobRequest{
 		Status: &paused,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		writeCronJobError(w, err)
+		return
+	}
+	if !cronJobVisibleToTenant(job, TenantIDFromContext(r.Context())) {
+		writeCronJobError(w, tools.ErrCronJobNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
@@ -194,13 +218,57 @@ func (s *Server) handleCronResumeJob(w http.ResponseWriter, r *http.Request, id 
 		writeMethodNotAllowed(w, http.MethodPost)
 		return
 	}
+	if _, err := s.cronJobForTenant(r.Context(), id); err != nil {
+		writeCronJobError(w, err)
+		return
+	}
 	active := "active"
 	job, err := s.cronClient.UpdateJob(r.Context(), id, tools.CronUpdateJobRequest{
 		Status: &active,
 	})
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		writeCronJobError(w, err)
+		return
+	}
+	if !cronJobVisibleToTenant(job, TenantIDFromContext(r.Context())) {
+		writeCronJobError(w, tools.ErrCronJobNotFound)
 		return
 	}
 	writeJSON(w, http.StatusOK, job)
+}
+
+func (s *Server) cronJobForTenant(ctx context.Context, id string) (tools.CronJob, error) {
+	job, err := s.cronClient.GetJob(ctx, id)
+	if err != nil {
+		return tools.CronJob{}, err
+	}
+	if !cronJobVisibleToTenant(job, TenantIDFromContext(ctx)) {
+		return tools.CronJob{}, tools.ErrCronJobNotFound
+	}
+	return job, nil
+}
+
+func filterCronJobsByTenant(jobs []tools.CronJob, tenantID string) []tools.CronJob {
+	if tenantID == "" {
+		return jobs
+	}
+	filtered := make([]tools.CronJob, 0, len(jobs))
+	for _, job := range jobs {
+		if job.TenantID == tenantID {
+			filtered = append(filtered, job)
+		}
+	}
+	return filtered
+}
+
+func cronJobVisibleToTenant(job tools.CronJob, tenantID string) bool {
+	return tenantID == "" || job.TenantID == tenantID
+}
+
+func writeCronJobError(w http.ResponseWriter, err error) {
+	if errors.Is(err, tools.ErrCronJobNotFound) {
+		writeError(w, http.StatusNotFound, "not_found", "job not found")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 }

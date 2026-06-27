@@ -20,10 +20,10 @@ func TestHelpOverlay_ShowsCommands(t *testing.T) {
 
 	view := m.View()
 
-	// With 14 registered commands and a fixed dialog height, not all commands fit
+	// With the expanded command set and a fixed dialog height, not all commands fit
 	// on a single page. The dialog shows the first ~12 alphabetically.
 	// Check commands that are guaranteed to appear on the first visible page.
-	wantCommands := []string{"clear", "help", "context", "export", "history", "search"}
+	wantCommands := []string{"attach", "clear", "context", "doctor", "export", "history"}
 	for _, cmd := range wantCommands {
 		if !strings.Contains(view, cmd) {
 			t.Errorf("help overlay View() must contain command %q; got:\n%s", cmd, view)

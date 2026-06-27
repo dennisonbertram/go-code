@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -26,6 +28,29 @@ type runCreateRequest struct {
 
 type runCreateResponse struct {
 	RunID string `json:"run_id"`
+}
+
+type runContinueResponse struct {
+	RunID  string `json:"run_id"`
+	Status string `json:"status"`
+}
+
+type tuiRunRecord struct {
+	ID             string `json:"id"`
+	RunID          string `json:"run_id,omitempty"`
+	ConversationID string `json:"conversation_id,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Prompt         string `json:"prompt,omitempty"`
+	Output         string `json:"output,omitempty"`
+	Status         string `json:"status"`
+	Error          string `json:"error,omitempty"`
+}
+
+func (r tuiRunRecord) displayID() string {
+	if r.ID != "" {
+		return r.ID
+	}
+	return r.RunID
 }
 
 type RemoteSubagent struct {
@@ -71,6 +96,128 @@ func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffo
 		var created runCreateResponse
 		if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 			return RunFailedMsg{Error: fmt.Sprintf("decode run response: %s", err.Error())}
+		}
+		return RunStartedMsg{RunID: created.RunID}
+	}
+}
+
+func fetchRunsCmd(baseURL string) tea.Cmd {
+	return func() tea.Msg {
+		req, err := http.NewRequest(http.MethodGet, strings.TrimRight(baseURL, "/")+"/v1/runs", nil)
+		if err != nil {
+			return RunsFetchedMsg{Err: "build request: " + err.Error()}
+		}
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return RunsFetchedMsg{Err: "request failed: " + err.Error()}
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return RunsFetchedMsg{Err: "read response: " + err.Error()}
+		}
+		if resp.StatusCode >= 300 {
+			return RunsFetchedMsg{Err: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))}
+		}
+		var payload struct {
+			Runs []tuiRunRecord `json:"runs"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return RunsFetchedMsg{Err: "decode response: " + err.Error()}
+		}
+		return RunsFetchedMsg{Runs: payload.Runs}
+	}
+}
+
+func cancelRunCmd(baseURL, runID string) tea.Cmd {
+	return func() tea.Msg {
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/cancel"
+		req, err := http.NewRequest(http.MethodPost, endpoint, nil)
+		if err != nil {
+			return RunControlResultMsg{Kind: "cancel", RunID: runID, Err: "build request: " + err.Error()}
+		}
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return RunControlResultMsg{Kind: "cancel", RunID: runID, Err: "request failed: " + err.Error()}
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return RunControlResultMsg{Kind: "cancel", RunID: runID, Err: "read response: " + err.Error()}
+		}
+		if resp.StatusCode >= 300 {
+			return RunControlResultMsg{Kind: "cancel", RunID: runID, Err: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))}
+		}
+		return RunControlResultMsg{Kind: "cancel", RunID: runID}
+	}
+}
+
+func replayRunCmd(baseURL, target string) tea.Cmd {
+	return func() tea.Msg {
+		body, err := json.Marshal(map[string]any{
+			"rollout_path": target,
+			"mode":         "simulate",
+		})
+		if err != nil {
+			return RunControlResultMsg{Kind: "replay", RunID: target, Err: "encode request: " + err.Error()}
+		}
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/runs/replay"
+		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return RunControlResultMsg{Kind: "replay", RunID: target, Err: "build request: " + err.Error()}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+		if err != nil {
+			return RunControlResultMsg{Kind: "replay", RunID: target, Err: "request failed: " + err.Error()}
+		}
+		defer resp.Body.Close()
+		responseBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return RunControlResultMsg{Kind: "replay", RunID: target, Err: "read response: " + err.Error()}
+		}
+		if resp.StatusCode >= 300 {
+			return RunControlResultMsg{Kind: "replay", RunID: target, Err: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))}
+		}
+		var pretty bytes.Buffer
+		output := strings.TrimSpace(string(responseBody))
+		if err := json.Indent(&pretty, responseBody, "", "  "); err == nil {
+			output = strings.TrimSpace(pretty.String())
+		}
+		return RunControlResultMsg{Kind: "replay", RunID: target, Output: output}
+	}
+}
+
+func continueRunCmd(baseURL, runID, prompt string) tea.Cmd {
+	return func() tea.Msg {
+		body, err := json.Marshal(map[string]string{"prompt": prompt})
+		if err != nil {
+			return RunFailedMsg{RunID: runID, Error: "continue: encode request: " + err.Error()}
+		}
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/continue"
+		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return RunFailedMsg{RunID: runID, Error: "continue: build request: " + err.Error()}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+		if err != nil {
+			return RunFailedMsg{RunID: runID, Error: "continue: request failed: " + err.Error()}
+		}
+		defer resp.Body.Close()
+		responseBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return RunFailedMsg{RunID: runID, Error: "continue: read response: " + err.Error()}
+		}
+		if resp.StatusCode >= 300 {
+			return RunFailedMsg{RunID: runID, Error: fmt.Sprintf("continue: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))}
+		}
+		var created runContinueResponse
+		if err := json.Unmarshal(responseBody, &created); err != nil {
+			return RunFailedMsg{RunID: runID, Error: "continue: decode response: " + err.Error()}
+		}
+		if created.RunID == "" {
+			return RunFailedMsg{RunID: runID, Error: "continue: response missing run_id"}
 		}
 		return RunStartedMsg{RunID: created.RunID}
 	}

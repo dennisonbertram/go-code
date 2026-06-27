@@ -58,6 +58,57 @@ func TestMigrate_Idempotent(t *testing.T) {
 	}
 }
 
+func TestMigrate_AddsTenantIDToExistingCronJobs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy_cron.db")
+	store, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	ctx := context.Background()
+	if _, err := store.db.ExecContext(ctx, `
+CREATE TABLE cron_jobs (
+	job_id TEXT PRIMARY KEY,
+	name TEXT NOT NULL UNIQUE,
+	schedule TEXT NOT NULL,
+	execution_type TEXT NOT NULL,
+	execution_config TEXT NOT NULL DEFAULT '{}',
+	status TEXT NOT NULL DEFAULT 'active',
+	timeout_seconds INTEGER NOT NULL DEFAULT 30,
+	tags TEXT NOT NULL DEFAULT '',
+	next_run_at TIMESTAMP NOT NULL,
+	last_run_at TIMESTAMP,
+	created_at TIMESTAMP NOT NULL,
+	updated_at TIMESTAMP NOT NULL
+)`); err != nil {
+		t.Fatalf("create legacy cron_jobs: %v", err)
+	}
+	now := time.Now().UTC()
+	if _, err := store.db.ExecContext(ctx, `
+INSERT INTO cron_jobs (
+	job_id, name, schedule, execution_type, execution_config,
+	status, timeout_seconds, tags, next_run_at, last_run_at, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"legacy-job", "legacy", "* * * * *", ExecTypeShell, "{}", StatusActive, 30, "",
+		nowString(now), nil, nowString(now), nowString(now),
+	); err != nil {
+		t.Fatalf("insert legacy job: %v", err)
+	}
+
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	got, err := store.GetJob(ctx, "legacy-job")
+	if err != nil {
+		t.Fatalf("GetJob legacy: %v", err)
+	}
+	if got.TenantID != "" {
+		t.Fatalf("expected legacy tenant to backfill empty, got %q", got.TenantID)
+	}
+}
+
 func TestCreateJob_GetJob(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
@@ -86,6 +137,50 @@ func TestCreateJob_GetJob(t *testing.T) {
 	}
 	if got.Status != StatusActive {
 		t.Fatalf("expected status %s, got %s", StatusActive, got.Status)
+	}
+}
+
+func TestCreateJob_PreservesTenantID(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	job := testJob("tenant-owned")
+	job.TenantID = "tenant-alpha"
+
+	created, err := store.CreateJob(ctx, job)
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if created.TenantID != "tenant-alpha" {
+		t.Fatalf("expected created tenant tenant-alpha, got %q", created.TenantID)
+	}
+
+	got, err := store.GetJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.TenantID != "tenant-alpha" {
+		t.Fatalf("expected fetched tenant tenant-alpha, got %q", got.TenantID)
+	}
+
+	got.Tags = "updated"
+	got.UpdatedAt = time.Now().UTC()
+	if err := store.UpdateJob(ctx, got); err != nil {
+		t.Fatalf("UpdateJob: %v", err)
+	}
+	updated, err := store.GetJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetJob updated: %v", err)
+	}
+	if updated.TenantID != "tenant-alpha" {
+		t.Fatalf("expected updated tenant tenant-alpha, got %q", updated.TenantID)
+	}
+
+	jobs, err := store.ListJobs(ctx)
+	if err != nil {
+		t.Fatalf("ListJobs: %v", err)
+	}
+	if len(jobs) != 1 || jobs[0].TenantID != "tenant-alpha" {
+		t.Fatalf("expected listed tenant tenant-alpha, got %#v", jobs)
 	}
 }
 
@@ -199,6 +294,14 @@ func TestDeleteJob_SoftDelete(t *testing.T) {
 		if j.ID == job.ID {
 			t.Fatal("deleted job should not appear in ListJobs")
 		}
+	}
+}
+
+func TestDeleteJob_NotFound(t *testing.T) {
+	store := newTestStore(t)
+	err := store.DeleteJob(context.Background(), "missing")
+	if !IsJobNotFound(err) {
+		t.Fatalf("expected job not found, got %v", err)
 	}
 }
 

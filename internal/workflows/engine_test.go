@@ -162,6 +162,60 @@ func TestEngineExecutesRunStep(t *testing.T) {
 	}
 }
 
+func TestEngineDefinitionSubscribeAndFailurePaths(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 26, 12, 0, 0, 0, time.UTC)
+	engine := NewEngine(Options{
+		Definitions: []Definition{{
+			Name: "bad-flow",
+			Steps: []StepDefinition{{
+				ID:   "bad",
+				Type: StepType("unsupported"),
+			}},
+		}},
+		Store: NewMemoryStore(),
+		Now:   func() time.Time { return now },
+	})
+	def, ok := engine.GetDefinition("bad-flow")
+	if !ok || def.Name != "bad-flow" {
+		t.Fatalf("GetDefinition = (%+v, %v), want bad-flow true", def, ok)
+	}
+
+	run, err := engine.Start("bad-flow", nil)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	history, live, cancel, err := engine.Subscribe(run.ID)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer cancel()
+	if len(history) == 0 {
+		t.Fatal("expected workflow.started history")
+	}
+
+	finalRun, _, err := waitForWorkflowRun(engine, run.ID)
+	if err != nil {
+		t.Fatalf("waitForWorkflowRun: %v", err)
+	}
+	if finalRun.Status != RunStatusFailed {
+		t.Fatalf("status = %q, want failed", finalRun.Status)
+	}
+	if finalRun.Error == "" {
+		t.Fatal("expected failure error")
+	}
+
+	select {
+	case ev := <-live:
+		if ev.WorkflowRunID != run.ID {
+			t.Fatalf("live event run id = %q, want %q", ev.WorkflowRunID, run.ID)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for live workflow event")
+	}
+}
+
 type toolExecutorFunc func(ctx context.Context, name string, args json.RawMessage) (string, error)
 
 func (f toolExecutorFunc) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {

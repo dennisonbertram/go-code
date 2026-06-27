@@ -8,9 +8,27 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
 
 const defaultHarnessURL = "http://localhost:8080"
+
+var runGitCommand = func(ctx context.Context, args ...string) ([]byte, error) {
+	return exec.CommandContext(ctx, "git", args...).CombinedOutput()
+}
+
+var worktreeRepoLocks sync.Map
+
+func lockWorktreeRepo(repoPath string) func() {
+	key := repoPath
+	if abs, err := filepath.Abs(repoPath); err == nil {
+		key = abs
+	}
+	value, _ := worktreeRepoLocks.LoadOrStore(key, &sync.Mutex{})
+	mu := value.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
 
 // sanitizeBranchRe matches any character that is not alphanumeric, dot, underscore, or hyphen.
 var sanitizeBranchRe = regexp.MustCompile(`[^A-Za-z0-9._-]`)
@@ -120,8 +138,10 @@ func (w *WorktreeWorkspace) Provision(ctx context.Context, opts Options) error {
 	if w.baseRef != "" {
 		args = append(args, w.baseRef)
 	}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	unlockRepo := lockWorktreeRepo(w.repoPath)
+	out, err := runGitCommand(ctx, args...)
+	unlockRepo()
+	if err != nil {
 		// git worktree add can partially succeed: it may create the branch before
 		// failing to check out the working tree (e.g. if the target directory is
 		// read-only). Best-effort cleanup removes the orphaned branch so it does
@@ -173,10 +193,17 @@ func (w *WorktreeWorkspace) BaseRef() string {
 // If the workspace has not been provisioned (path is empty), Destroy is a no-op.
 // Errors from "not found" conditions (already removed worktrees/branches) are
 // silently ignored.
-func (w *WorktreeWorkspace) Destroy(ctx context.Context) error {
+func (w *WorktreeWorkspace) Destroy(ctx context.Context) (retErr error) {
 	if w.path == "" {
 		return nil
 	}
+	unlockRepo := lockWorktreeRepo(w.repoPath)
+	defer unlockRepo()
+	defer func() {
+		if pruneErr := runGitWorktreePruneLocked(ctx, w.repoPath); pruneErr != nil && retErr == nil {
+			retErr = pruneErr
+		}
+	}()
 
 	// Ensure the worktree directory is writable before attempting removal.
 	// Provisioning can fail mid-way (e.g. harness.toml write into a read-only
@@ -188,8 +215,7 @@ func (w *WorktreeWorkspace) Destroy(ctx context.Context) error {
 	}
 
 	// Remove the worktree directory.
-	rmCmd := exec.CommandContext(ctx, "git", "-C", w.repoPath, "worktree", "remove", "--force", w.path)
-	if out, err := rmCmd.CombinedOutput(); err != nil {
+	if out, err := runGitCommand(ctx, "-C", w.repoPath, "worktree", "remove", "--force", w.path); err != nil {
 		msg := strings.ToLower(strings.TrimSpace(string(out)))
 		// Ignore errors if the worktree is already gone.
 		if !strings.Contains(msg, "is not a working tree") &&
@@ -200,8 +226,7 @@ func (w *WorktreeWorkspace) Destroy(ctx context.Context) error {
 	}
 
 	// Delete the branch.
-	branchCmd := exec.CommandContext(ctx, "git", "-C", w.repoPath, "branch", "-D", w.branch)
-	if out, err := branchCmd.CombinedOutput(); err != nil {
+	if out, err := runGitCommand(ctx, "-C", w.repoPath, "branch", "-D", w.branch); err != nil {
 		msg := strings.ToLower(strings.TrimSpace(string(out)))
 		// Ignore errors if the branch is already gone.
 		if !strings.Contains(msg, "not found") &&
@@ -211,6 +236,25 @@ func (w *WorktreeWorkspace) Destroy(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func runGitWorktreePruneLocked(ctx context.Context, repoPath string) error {
+	if repoPath == "" {
+		return nil
+	}
+	if out, err := runGitCommand(ctx, "-C", repoPath, "worktree", "prune"); err != nil {
+		return fmt.Errorf("workspace: git worktree prune: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func pruneWorktreeRepo(ctx context.Context, repoPath string) error {
+	if repoPath == "" {
+		return nil
+	}
+	unlockRepo := lockWorktreeRepo(repoPath)
+	defer unlockRepo()
+	return runGitWorktreePruneLocked(ctx, repoPath)
 }
 
 func init() {

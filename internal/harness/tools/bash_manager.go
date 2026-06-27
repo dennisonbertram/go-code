@@ -23,6 +23,8 @@ var dangerousBashPatterns = []string{
 	`(?i):\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:`,
 }
 
+const defaultMaxStreamLineBytes = 1 << 20
+
 // SudoRegexp matches sudo invocations. The harness runs as root inside Docker
 // containers, so sudo is stripped rather than rejected.
 var SudoRegexp = regexp.MustCompile(`(?i)\bsudo\s+(?:-[A-Za-z0-9]+\s+)*`)
@@ -54,6 +56,8 @@ type JobManager struct {
 	nextID         uint64
 	mu             sync.RWMutex
 	jobs           map[string]*backgroundJob
+	closed         bool
+	wg             sync.WaitGroup
 	maxJobs        int
 	ttl            time.Duration
 	maxOutputBytes int
@@ -106,6 +110,8 @@ func (m *JobManager) runForeground(ctx context.Context, command string, timeoutS
 
 	stdout := newHeadTailBuffer(m.maxOutputBytes)
 	stderr := newHeadTailBuffer(m.maxOutputBytes)
+	var streamErr error
+	var streamTruncated bool
 
 	if hasStreamer {
 		pr, pw := io.Pipe()
@@ -116,10 +122,25 @@ func (m *JobManager) runForeground(ctx context.Context, command string, timeoutS
 		streamDone.Add(1)
 		go func() {
 			defer streamDone.Done()
-			scanner := bufio.NewScanner(pr)
-			scanner.Buffer(make([]byte, 1<<20), 1<<20)
-			for scanner.Scan() {
-				streamer(scanner.Text() + "\n")
+			reader := bufio.NewReader(pr)
+			for {
+				line, truncated, readErr := readStreamLine(reader, defaultMaxStreamLineBytes)
+				if line != "" {
+					streamer(line)
+				}
+				if truncated {
+					streamTruncated = true
+					if streamErr == nil {
+						streamErr = fmt.Errorf("stream line exceeded %d bytes", defaultMaxStreamLineBytes)
+					}
+				}
+				if readErr != nil {
+					if errors.Is(readErr, io.EOF) {
+						return
+					}
+					streamErr = readErr
+					return
+				}
 			}
 		}()
 
@@ -157,6 +178,13 @@ func (m *JobManager) runForeground(ctx context.Context, command string, timeoutS
 		result["truncation_strategy"] = "head_tail"
 		result["hint"] = "[output truncated — use grep/head/tail to narrow results]"
 	}
+	if streamTruncated {
+		result["stream_truncated"] = true
+		result["max_line_bytes"] = defaultMaxStreamLineBytes
+	}
+	if streamErr != nil {
+		result["stream_error"] = streamErr.Error()
+	}
 	return result, nil
 }
 
@@ -178,12 +206,16 @@ func (m *JobManager) runBackground(ctx context.Context, command string, timeoutS
 	m.cleanupExpired()
 
 	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("job manager is shut down")
+	}
 	if len(m.jobs) >= m.maxJobs {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("background job limit reached")
 	}
 	id := "job_" + strconv.FormatUint(atomic.AddUint64(&m.nextID, 1), 10)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	job := &backgroundJob{
 		id:         id,
 		command:    command,
@@ -195,6 +227,7 @@ func (m *JobManager) runBackground(ctx context.Context, command string, timeoutS
 		exitCode:   0,
 	}
 	m.jobs[id] = job
+	m.wg.Add(1)
 	m.mu.Unlock()
 
 	cmd := exec.CommandContext(ctx, "/bin/bash", "-lc", command)
@@ -206,10 +239,12 @@ func (m *JobManager) runBackground(ctx context.Context, command string, timeoutS
 		m.mu.Lock()
 		delete(m.jobs, id)
 		m.mu.Unlock()
+		m.wg.Done()
 		return nil, fmt.Errorf("start background command: %w", err)
 	}
 
 	go func() {
+		defer m.wg.Done()
 		err := cmd.Wait()
 		job.mu.Lock()
 		defer job.mu.Unlock()
@@ -232,6 +267,76 @@ func (m *JobManager) runBackground(ctx context.Context, command string, timeoutS
 		"command":     command,
 		"working_dir": NormalizeRelPath(m.root, workDir),
 	}, nil
+}
+
+func readStreamLine(reader *bufio.Reader, maxBytes int) (string, bool, error) {
+	if maxBytes <= 0 {
+		maxBytes = defaultMaxStreamLineBytes
+	}
+
+	var b strings.Builder
+	truncated := false
+	for {
+		fragment, err := reader.ReadString('\n')
+		if fragment != "" {
+			remaining := maxBytes - b.Len()
+			if remaining > 0 {
+				if len(fragment) > remaining {
+					b.WriteString(fragment[:remaining])
+					truncated = true
+				} else {
+					b.WriteString(fragment)
+				}
+			} else {
+				truncated = true
+			}
+		}
+
+		switch {
+		case err == nil:
+			return b.String(), truncated, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			continue
+		case errors.Is(err, io.EOF):
+			return b.String(), truncated, io.EOF
+		default:
+			return b.String(), truncated, err
+		}
+	}
+}
+
+// Shutdown cancels every tracked background job, waits for their Wait
+// goroutines to return, then clears the job map.
+func (m *JobManager) Shutdown(ctx context.Context) error {
+	m.mu.Lock()
+	m.closed = true
+	jobs := make([]*backgroundJob, 0, len(m.jobs))
+	for _, job := range m.jobs {
+		jobs = append(jobs, job)
+	}
+	m.mu.Unlock()
+
+	for _, job := range jobs {
+		job.cancel()
+	}
+
+	waitDone := make(chan struct{})
+	go func() {
+		m.wg.Wait()
+		close(waitDone)
+	}()
+
+	select {
+	case <-waitDone:
+		m.mu.Lock()
+		for id := range m.jobs {
+			delete(m.jobs, id)
+		}
+		m.mu.Unlock()
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (m *JobManager) output(shellID string, wait bool) (map[string]any, error) {

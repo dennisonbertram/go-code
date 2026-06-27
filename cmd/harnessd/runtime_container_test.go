@@ -87,6 +87,15 @@ func TestBuildHTTPRuntimeAssemblesRunnerSubagentsAndHTTPServer(t *testing.T) {
 	if runtime.httpServer.Handler == nil {
 		t.Fatal("expected http server handler")
 	}
+	if runtime.httpServer.ReadTimeout != 60*time.Second {
+		t.Fatalf("ReadTimeout: got %s want 60s", runtime.httpServer.ReadTimeout)
+	}
+	if runtime.httpServer.IdleTimeout != 120*time.Second {
+		t.Fatalf("IdleTimeout: got %s want 120s", runtime.httpServer.IdleTimeout)
+	}
+	if runtime.httpServer.MaxHeaderBytes != 1<<20 {
+		t.Fatalf("MaxHeaderBytes: got %d want %d", runtime.httpServer.MaxHeaderBytes, 1<<20)
+	}
 	if runtime.mcpServer == nil {
 		t.Fatal("expected mcp server to be initialized")
 	}

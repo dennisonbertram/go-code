@@ -1,6 +1,16 @@
 package cron
 
-import "time"
+import (
+	"database/sql"
+	"errors"
+	"time"
+)
+
+var ErrJobNotFound = errors.New("cron job not found")
+
+func IsJobNotFound(err error) bool {
+	return errors.Is(err, ErrJobNotFound) || errors.Is(err, sql.ErrNoRows)
+}
 
 // Job status constants
 const (
@@ -27,6 +37,7 @@ const (
 // Job represents a scheduled job.
 type Job struct {
 	ID         string    `json:"id"`
+	TenantID   string    `json:"tenant_id,omitempty"`
 	Name       string    `json:"name"`
 	Schedule   string    `json:"schedule"`
 	ExecType   string    `json:"execution_type"`
@@ -47,7 +58,7 @@ type Execution struct {
 	StartedAt     time.Time `json:"started_at"`
 	FinishedAt    time.Time `json:"finished_at,omitempty"`
 	Status        string    `json:"status"`
-	RunID         string    `json:"run_id,omitempty"`          // harness run ID
+	RunID         string    `json:"run_id,omitempty"` // harness run ID
 	OutputSummary string    `json:"output_summary,omitempty"`
 	Error         string    `json:"error,omitempty"`
 	DurationMs    int64     `json:"duration_ms"`
@@ -55,6 +66,7 @@ type Execution struct {
 
 // CreateJobRequest is the request payload for creating a job.
 type CreateJobRequest struct {
+	TenantID   string `json:"tenant_id,omitempty"`
 	Name       string `json:"name"`
 	Schedule   string `json:"schedule"`
 	ExecType   string `json:"execution_type"`

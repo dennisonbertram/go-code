@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -147,4 +148,16 @@ func TestEnsureWorkspaceRootUsable(t *testing.T) {
 			t.Fatalf("expected no error for usable workspace root, got: %v", err)
 		}
 	})
+}
+
+func TestIsEACCESIdentifiesPathPermissionError(t *testing.T) {
+	t.Parallel()
+
+	err := &os.PathError{Op: "open", Path: "/root/secret", Err: syscall.EACCES}
+	if !isEACCES(err) {
+		t.Fatal("expected EACCES path error to be detected")
+	}
+	if isEACCES(syscall.EACCES) {
+		t.Fatal("plain syscall errno without PathError should not match")
+	}
 }

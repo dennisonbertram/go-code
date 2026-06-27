@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS runs (
 	error            TEXT NOT NULL DEFAULT '',
 	usage_totals_json TEXT NOT NULL DEFAULT '',
 	cost_totals_json  TEXT NOT NULL DEFAULT '',
+	recap_json        TEXT NOT NULL DEFAULT '',
 	created_at       TEXT NOT NULL,
 	updated_at       TEXT NOT NULL
 );
@@ -107,7 +109,34 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("store: migrate: %w", err)
 	}
+	if !s.columnExists(ctx, "runs", "recap_json") {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE runs ADD COLUMN recap_json TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("store: migrate add recap_json: %w", err)
+		}
+	}
 	return nil
+}
+
+func (s *SQLiteStore) columnExists(ctx context.Context, table, column string) bool {
+	rows, err := s.db.QueryContext(ctx, "PRAGMA table_info("+table+")")
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue any
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return false
+		}
+		if name == column {
+			return true
+		}
+	}
+	return false
 }
 
 // Close releases the database connection.
@@ -125,8 +154,8 @@ func (s *SQLiteStore) CreateRun(ctx context.Context, run *Run) error {
 	}
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO runs (id, conversation_id, tenant_id, agent_id, model, provider_name, prompt,
-                  status, output, error, usage_totals_json, cost_totals_json, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  status, output, error, usage_totals_json, cost_totals_json, recap_json, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,
 		run.ID,
 		run.ConversationID,
@@ -140,6 +169,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		run.Error,
 		run.UsageTotalsJSON,
 		run.CostTotalsJSON,
+		workflowRecapJSON(run.Recap),
 		timeString(run.CreatedAt),
 		timeString(run.UpdatedAt),
 	)
@@ -170,6 +200,7 @@ SET conversation_id  = ?,
     error            = ?,
     usage_totals_json = ?,
     cost_totals_json  = ?,
+    recap_json       = ?,
     updated_at       = ?
 WHERE id = ?
 `,
@@ -184,6 +215,7 @@ WHERE id = ?
 		run.Error,
 		run.UsageTotalsJSON,
 		run.CostTotalsJSON,
+		workflowRecapJSON(run.Recap),
 		timeString(run.UpdatedAt),
 		run.ID,
 	)
@@ -197,7 +229,7 @@ WHERE id = ?
 func (s *SQLiteStore) GetRun(ctx context.Context, id string) (*Run, error) {
 	row := s.db.QueryRowContext(ctx, `
 SELECT id, conversation_id, tenant_id, agent_id, model, provider_name, prompt,
-       status, output, error, usage_totals_json, cost_totals_json, created_at, updated_at
+       status, output, error, usage_totals_json, cost_totals_json, recap_json, created_at, updated_at
 FROM runs
 WHERE id = ?
 `, id)
@@ -214,7 +246,7 @@ WHERE id = ?
 // ListRuns returns runs matching filter, ordered by created_at DESC.
 func (s *SQLiteStore) ListRuns(ctx context.Context, filter RunFilter) ([]*Run, error) {
 	query := `SELECT id, conversation_id, tenant_id, agent_id, model, provider_name, prompt,
-	                  status, output, error, usage_totals_json, cost_totals_json, created_at, updated_at
+	                  status, output, error, usage_totals_json, cost_totals_json, recap_json, created_at, updated_at
 	           FROM runs`
 	args := make([]any, 0, 3)
 	conditions := make([]string, 0, 3)
@@ -385,7 +417,7 @@ type rowScanner interface {
 
 func scanRun(row rowScanner) (*Run, error) {
 	run := &Run{}
-	var createdText, updatedText string
+	var createdText, updatedText, recapJSON string
 	err := row.Scan(
 		&run.ID,
 		&run.ConversationID,
@@ -399,6 +431,7 @@ func scanRun(row rowScanner) (*Run, error) {
 		&run.Error,
 		&run.UsageTotalsJSON,
 		&run.CostTotalsJSON,
+		&recapJSON,
 		&createdText,
 		&updatedText,
 	)
@@ -411,7 +444,30 @@ func scanRun(row rowScanner) (*Run, error) {
 	if t, err := time.Parse(time.RFC3339Nano, updatedText); err == nil {
 		run.UpdatedAt = t
 	}
+	run.Recap = workflowRecapFromJSON(recapJSON)
 	return run, nil
+}
+
+func workflowRecapJSON(recap *WorkflowRecap) string {
+	if recap == nil {
+		return ""
+	}
+	data, err := json.Marshal(recap)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func workflowRecapFromJSON(raw string) *WorkflowRecap {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	var recap WorkflowRecap
+	if err := json.Unmarshal([]byte(raw), &recap); err != nil {
+		return nil
+	}
+	return &recap
 }
 
 func timeString(t time.Time) string {

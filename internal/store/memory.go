@@ -180,6 +180,13 @@ func copyRun(r *Run) *Run {
 		return nil
 	}
 	cp := *r
+	if r.Recap != nil {
+		recap := *r.Recap
+		recap.ChangedFiles = append([]string(nil), r.Recap.ChangedFiles...)
+		recap.TestsRun = append([]string(nil), r.Recap.TestsRun...)
+		recap.UsefulCommands = append([]string(nil), r.Recap.UsefulCommands...)
+		cp.Recap = &recap
+	}
 	return &cp
 }
 

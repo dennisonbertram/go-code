@@ -618,8 +618,19 @@ func (se *stepEngine) run() {
 						"duration_ms": time.Since(stepStartTime).Milliseconds(),
 					})
 					emitCausalGraph(step)
+					// Empty-response retries are retry attempts for the current
+					// assistant turn, not progress through the user's step budget.
+					step--
 					continue
 				}
+				r.emit(runID, EventRunStepCompleted, map[string]any{
+					"step":        step,
+					"tool_calls":  0,
+					"duration_ms": time.Since(stepStartTime).Milliseconds(),
+				})
+				emitCausalGraph(step)
+				r.failRun(runID, fmt.Errorf("max_empty_responses: max consecutive empty responses reached"))
+				return
 			} else {
 				consecutiveEmptyResponses = 0
 			}

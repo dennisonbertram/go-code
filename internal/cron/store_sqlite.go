@@ -14,6 +14,7 @@ import (
 const sqliteSchema = `
 CREATE TABLE IF NOT EXISTS cron_jobs (
 	job_id TEXT PRIMARY KEY,
+	tenant_id TEXT NOT NULL DEFAULT '',
 	name TEXT NOT NULL UNIQUE,
 	schedule TEXT NOT NULL,
 	execution_type TEXT NOT NULL,
@@ -86,6 +87,47 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("sqlite migrate: %w", err)
 	}
+	if err := s.ensureCronJobsTenantColumn(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *SQLiteStore) ensureCronJobsTenantColumn(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(cron_jobs)`)
+	if err != nil {
+		return fmt.Errorf("inspect cron_jobs schema: %w", err)
+	}
+
+	hasTenantID := false
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var defaultValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &defaultValue, &pk); err != nil {
+			return fmt.Errorf("scan cron_jobs schema: %w", err)
+		}
+		if name == "tenant_id" {
+			hasTenantID = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("inspect cron_jobs schema rows: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("close cron_jobs schema rows: %w", err)
+	}
+	if !hasTenantID {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE cron_jobs ADD COLUMN tenant_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("add cron_jobs tenant_id: %w", err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS idx_cron_jobs_tenant_id ON cron_jobs(tenant_id)`); err != nil {
+		return fmt.Errorf("index cron_jobs tenant_id: %w", err)
+	}
 	return nil
 }
 
@@ -93,13 +135,14 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 func (s *SQLiteStore) CreateJob(ctx context.Context, job Job) (Job, error) {
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO cron_jobs (
-	job_id, name, schedule, execution_type, execution_config,
+	job_id, tenant_id, name, schedule, execution_type, execution_config,
 	status, timeout_seconds, tags, next_run_at, last_run_at,
 	created_at, updated_at
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `,
 		job.ID,
+		job.TenantID,
 		job.Name,
 		job.Schedule,
 		job.ExecType,
@@ -121,7 +164,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 // GetJob retrieves a job by ID.
 func (s *SQLiteStore) GetJob(ctx context.Context, id string) (Job, error) {
 	return s.scanJob(s.db.QueryRowContext(ctx, `
-SELECT job_id, name, schedule, execution_type, execution_config,
+SELECT job_id, tenant_id, name, schedule, execution_type, execution_config,
 	status, timeout_seconds, tags, next_run_at, last_run_at,
 	created_at, updated_at
 FROM cron_jobs
@@ -132,7 +175,7 @@ WHERE job_id = ? AND status != ?
 // GetJobByName retrieves a job by name.
 func (s *SQLiteStore) GetJobByName(ctx context.Context, name string) (Job, error) {
 	return s.scanJob(s.db.QueryRowContext(ctx, `
-SELECT job_id, name, schedule, execution_type, execution_config,
+SELECT job_id, tenant_id, name, schedule, execution_type, execution_config,
 	status, timeout_seconds, tags, next_run_at, last_run_at,
 	created_at, updated_at
 FROM cron_jobs
@@ -143,7 +186,7 @@ WHERE name = ? AND status != ?
 // ListJobs returns all non-deleted jobs.
 func (s *SQLiteStore) ListJobs(ctx context.Context) ([]Job, error) {
 	rows, err := s.db.QueryContext(ctx, `
-SELECT job_id, name, schedule, execution_type, execution_config,
+SELECT job_id, tenant_id, name, schedule, execution_type, execution_config,
 	status, timeout_seconds, tags, next_run_at, last_run_at,
 	created_at, updated_at
 FROM cron_jobs
@@ -170,11 +213,12 @@ ORDER BY created_at DESC
 func (s *SQLiteStore) UpdateJob(ctx context.Context, job Job) error {
 	_, err := s.db.ExecContext(ctx, `
 UPDATE cron_jobs
-SET name = ?, schedule = ?, execution_type = ?, execution_config = ?,
+SET tenant_id = ?, name = ?, schedule = ?, execution_type = ?, execution_config = ?,
 	status = ?, timeout_seconds = ?, tags = ?, next_run_at = ?,
 	last_run_at = ?, updated_at = ?
 WHERE job_id = ?
 `,
+		job.TenantID,
 		job.Name,
 		job.Schedule,
 		job.ExecType,
@@ -199,11 +243,18 @@ WHERE job_id = ?
 func (s *SQLiteStore) DeleteJob(ctx context.Context, id string) error {
 	now := time.Now().UTC()
 	suffix := fmt.Sprintf("_deleted_%d", now.UnixNano())
-	_, err := s.db.ExecContext(ctx, `
+	res, err := s.db.ExecContext(ctx, `
 UPDATE cron_jobs SET status = ?, name = name || ?, updated_at = ? WHERE job_id = ?
 `, StatusDeleted, suffix, nowString(now), id)
 	if err != nil {
 		return fmt.Errorf("delete job: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("delete job rows affected: %w", err)
+	}
+	if rows == 0 {
+		return ErrJobNotFound
 	}
 	return nil
 }
@@ -299,7 +350,7 @@ func (s *SQLiteStore) scanJob(row *sql.Row) (Job, error) {
 	var nextRunText, createdText, updatedText string
 	var lastRunText sql.NullString
 	if err := row.Scan(
-		&job.ID, &job.Name, &job.Schedule, &job.ExecType, &job.ExecConfig,
+		&job.ID, &job.TenantID, &job.Name, &job.Schedule, &job.ExecType, &job.ExecConfig,
 		&job.Status, &job.TimeoutSec, &job.Tags, &nextRunText, &lastRunText,
 		&createdText, &updatedText,
 	); err != nil {
@@ -320,7 +371,7 @@ func (s *SQLiteStore) scanJobRow(rows *sql.Rows) (Job, error) {
 	var nextRunText, createdText, updatedText string
 	var lastRunText sql.NullString
 	if err := rows.Scan(
-		&job.ID, &job.Name, &job.Schedule, &job.ExecType, &job.ExecConfig,
+		&job.ID, &job.TenantID, &job.Name, &job.Schedule, &job.ExecType, &job.ExecConfig,
 		&job.Status, &job.TimeoutSec, &job.Tags, &nextRunText, &lastRunText,
 		&createdText, &updatedText,
 	); err != nil {

@@ -115,6 +115,7 @@ Assert via a stub store that emits a per-call goroutine-blocking condition varia
 
 ### T03 — Fail the run when empty-response retries are exhausted; don't burn step budget on retries
 
+**Status:** implemented locally 2026-06-26; full merge gates still pending.
 **Type:** bugfix
 **Allowed files (test):** `internal/harness/runner_empty_response_test.go` (extend)
 **Allowed files (impl):** `internal/harness/runner_step_engine.go`
