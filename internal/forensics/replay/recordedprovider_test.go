@@ -243,6 +243,17 @@ func TestRecordedProvider_NoUsageLeavesCostStatusUnset(t *testing.T) {
 func TestReplayToolDispatch_ReturnsRecordedOutput(t *testing.T) {
 	events := multiStepRollout()
 
+	dispatch, err := NewReplayToolDispatch(events)
+	if err != nil {
+		t.Fatalf("NewReplayToolDispatch: %v", err)
+	}
+	if out, ok := dispatch.Output("call_1"); !ok || out != "file contents here" {
+		t.Fatalf("Output(call_1) = %q, %v; want recorded output", out, ok)
+	}
+	if out, ok := dispatch.Output("missing"); ok || out != "" {
+		t.Fatalf("Output(missing) = %q, %v; want empty false", out, ok)
+	}
+
 	handler, err := NewReplayToolHandler(events)
 	if err != nil {
 		t.Fatalf("NewReplayToolHandler: %v", err)

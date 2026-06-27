@@ -1,5 +1,28 @@
 # Engineering Log
 
+## 2026-06-26 (Issue #649 Completed Run Retention)
+
+- Implemented reliability slice T01 from `docs/plans/2026-06-24-harness-reliability-plan.md` for issue `#649`.
+- Added bounded in-memory retention for terminal run states:
+  - `RunnerConfig.MaxCompletedRetention` defaults to 32.
+  - completed, failed, and cancelled runs are eligible for pruning only when a durable run `Store` is configured, after terminal handling, and when no subscribers remain attached.
+  - subscriber cancellation re-runs pruning so terminal runs held for streaming clients can be released after the stream detaches.
+- Added bounded in-memory conversation mirror retention:
+  - `RunnerConfig.MaxConversationRetention` defaults to 256.
+  - `r.conversations`, `r.conversationOwners`, and conversation recency metadata evict together.
+  - persistent `ConversationStore` history remains the fallback for pruned conversation mirrors.
+- Added regressions in `internal/harness/runner_prune_test.go` covering completed-run pruning, active-subscriber retention, and persistent-store fallback for evicted conversation mirrors.
+- Red phase:
+  - `go test ./internal/harness -run TestRunner_Prune -count=1` failed to build because the retention config fields did not exist.
+- Verification:
+  - `go test ./internal/harness -run TestRunner_Prune -count=1`
+  - `go test ./internal/harness -count=1`
+  - `go test ./internal/server -run TestWorkerPoolLoad -count=1`
+  - `go test ./internal/harness/... -race -count=1`
+- Regression status:
+  - `./scripts/test-regression.sh` passed the `go test ./...` and `go test ./... -race` phases.
+  - `./scripts/test-regression.sh` failed at the coverage-gate phase because existing functions outside this slice still report `0.0%` coverage; total statement coverage was `83.9%`.
+
 ## 2026-05-05 (GitHub Pages User Repositioning)
 
 - Recentered the go-code GitHub Pages copy around the developer visitor.
@@ -1115,3 +1138,29 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
   - `TMPDIR=$PWD/.tmp/tmp GOCACHE=$PWD/.tmp/go-build go test ./cmd/harnesscli/tui/... -count=1`
   - `TMPDIR=$PWD/.tmp/tmp GOCACHE=$PWD/.tmp/go-build go test ./internal/... ./cmd/... -count=1`
   - `git diff --check`
+
+## 2026-06-26 (Issue #649 T01 Retention and Coveragegate Restoration)
+
+- Added store-gated pruning for completed harness run state and conversation mirrors.
+  - Completed runs remain available in memory when no durable run store is configured to preserve `GET /v1/runs/{id}` compatibility.
+  - Active subscribers keep terminal run state resident until they are cancelled.
+  - Conversation mirror pruning leaves persistent `ConversationStore` history untouched.
+- Restored the repo coveragegate by adding focused tests for the reported zero-coverage functions instead of weakening the gate.
+  - Covered MCP runner adapter run/list/status/steer/input/conversation paths in `cmd/harnessd`.
+  - Covered checkpoint service/store lifecycle, SQLite checkpoint round trips, goal tools, callback scheduling, approval denial, workflow/network definitions, workflow SQLite persistence, working-memory delete, replay dispatch output, path permission detection, and scheduler simulation fallback behavior.
+- Red evidence:
+  - `./scripts/test-regression.sh` previously passed `go test ./...` and `go test ./... -race`, then failed coveragegate with `45` zero-coverage functions and total statement coverage `83.9%`.
+- Green evidence:
+  - `go test ./internal/harness -run TestRunner_Prune -count=1`
+  - `go test ./internal/server -run TestWorkerPoolLoad -count=1`
+  - `go test ./internal/harness/... -race -count=1`
+  - `go test ./cmd/harnessd -run 'TestMCPRunnerAdapter' -count=1`
+  - `go test ./internal/checkpoints -count=1`
+  - `go test ./internal/harness/tools/deferred -run 'TestGoalTools' -count=1`
+  - `go test ./internal/cloudscheduler ./internal/forensics/replay ./internal/harness/tools ./internal/networks ./internal/workflow ./internal/workflows ./internal/workingmemory -count=1`
+  - `go test ./internal/harness -run 'TestRunnerNewCallbackManagerEmitsScheduledEvent|TestCheckpointApprovalBrokerDenyRejectsPendingApproval|TestRunner_Prune' -count=1`
+  - `go test ./internal/harness -count=1`
+  - `go test ./internal/harness -race -run TestRunnerNewCallbackManagerEmitsScheduledEvent -count=1 -timeout=30s`
+  - `go test ./internal/harness -race -count=1 -timeout=90s`
+  - coveragegate recheck: `coveragegate: PASS (total=84.7%, min=80.0%, zero-functions=0)`
+  - `./scripts/test-regression.sh`: `[regression] PASS`

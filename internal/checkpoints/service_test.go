@@ -2,7 +2,9 @@ package checkpoints
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,5 +129,182 @@ func TestServiceResumeWakesWaiterAndPersistsPayload(t *testing.T) {
 	}
 	if loaded.ResumePayload == "" {
 		t.Fatal("expected persisted resume payload")
+	}
+}
+
+func TestServiceStoreDenyExpireAndWaitCancellation(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+	store := NewMemoryStore()
+	if err := store.Close(); err != nil {
+		t.Fatalf("MemoryStore Close: %v", err)
+	}
+	svc := NewService(store, func() time.Time { return now })
+	if svc.Store() != store {
+		t.Fatal("Store did not return configured store")
+	}
+
+	denied, err := svc.Create(context.Background(), CreateRequest{
+		Kind:       KindApproval,
+		RunID:      "run-deny",
+		DeadlineAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Create denied record: %v", err)
+	}
+	if err := svc.Deny(context.Background(), denied.ID); err != nil {
+		t.Fatalf("Deny: %v", err)
+	}
+	result, err := svc.Wait(context.Background(), denied.ID)
+	if err != nil {
+		t.Fatalf("Wait denied: %v", err)
+	}
+	if result.Status != StatusDenied {
+		t.Fatalf("Wait denied status = %q, want %q", result.Status, StatusDenied)
+	}
+
+	expired, err := svc.Create(context.Background(), CreateRequest{
+		Kind:       KindExternalResume,
+		RunID:      "run-expire",
+		DeadlineAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Create expired record: %v", err)
+	}
+	if err := svc.Expire(context.Background(), expired.ID); err != nil {
+		t.Fatalf("Expire: %v", err)
+	}
+	result, err = svc.Wait(context.Background(), expired.ID)
+	if err != nil {
+		t.Fatalf("Wait expired: %v", err)
+	}
+	if result.Status != StatusExpired {
+		t.Fatalf("Wait expired status = %q, want %q", result.Status, StatusExpired)
+	}
+
+	cancelled, err := svc.Create(context.Background(), CreateRequest{
+		Kind:       KindUserInput,
+		RunID:      "run-cancel-wait",
+		DeadlineAt: now.Add(time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Create cancellation record: %v", err)
+	}
+	waitCtx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := svc.Wait(waitCtx, cancelled.ID)
+		errCh <- err
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		svc.mu.Lock()
+		waiterCount := len(svc.waiters[cancelled.ID])
+		svc.mu.Unlock()
+		if waiterCount == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for service waiter registration")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	cancel()
+	if err := <-errCh; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Wait cancellation error = %v, want context.Canceled", err)
+	}
+	svc.mu.Lock()
+	_, stillRegistered := svc.waiters[cancelled.ID]
+	svc.mu.Unlock()
+	if stillRegistered {
+		t.Fatal("cancelled waiter was not unregistered")
+	}
+}
+
+func TestSQLiteStoreUpdatePendingByWorkflowRunAndNotFound(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "checkpoints.db")
+	store, err := NewSQLiteStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	if err := store.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	defer store.Close()
+
+	now := time.Date(2026, 4, 5, 12, 0, 0, 123, time.UTC)
+	older := &Record{
+		ID:            "checkpoint-old",
+		Kind:          KindExternalResume,
+		Status:        StatusPending,
+		WorkflowRunID: "workflow-1",
+		CreatedAt:     now,
+		UpdatedAt:     now,
+	}
+	newer := &Record{
+		ID:            "checkpoint-new",
+		Kind:          KindExternalResume,
+		Status:        StatusPending,
+		WorkflowRunID: "workflow-1",
+		CreatedAt:     now,
+		UpdatedAt:     now.Add(time.Minute),
+	}
+	if err := store.Create(context.Background(), older); err != nil {
+		t.Fatalf("Create older: %v", err)
+	}
+	if err := store.Create(context.Background(), newer); err != nil {
+		t.Fatalf("Create newer: %v", err)
+	}
+
+	pending, err := store.PendingByWorkflowRun(context.Background(), "workflow-1")
+	if err != nil {
+		t.Fatalf("PendingByWorkflowRun: %v", err)
+	}
+	if pending == nil || pending.ID != newer.ID {
+		t.Fatalf("pending workflow checkpoint = %+v, want %s", pending, newer.ID)
+	}
+
+	newer.Status = StatusResumed
+	newer.ResumePayload = `{"approved":true}`
+	newer.UpdatedAt = now.Add(2 * time.Minute)
+	if err := store.Update(context.Background(), newer); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	loaded, err := store.Get(context.Background(), newer.ID)
+	if err != nil {
+		t.Fatalf("Get updated: %v", err)
+	}
+	if loaded.Status != StatusResumed {
+		t.Fatalf("updated status = %q, want %q", loaded.Status, StatusResumed)
+	}
+	if loaded.ResumePayload != newer.ResumePayload {
+		t.Fatalf("resume payload = %q, want %q", loaded.ResumePayload, newer.ResumePayload)
+	}
+	if !loaded.UpdatedAt.Equal(newer.UpdatedAt) {
+		t.Fatalf("updated_at = %s, want %s", loaded.UpdatedAt, newer.UpdatedAt)
+	}
+
+	pending, err = store.PendingByWorkflowRun(context.Background(), "workflow-1")
+	if err != nil {
+		t.Fatalf("PendingByWorkflowRun after update: %v", err)
+	}
+	if pending == nil || pending.ID != older.ID {
+		t.Fatalf("pending workflow checkpoint after update = %+v, want %s", pending, older.ID)
+	}
+
+	_, err = store.Get(context.Background(), "missing")
+	if !IsNotFound(err) {
+		t.Fatalf("Get missing error = %v, want NotFoundError", err)
+	}
+	if !strings.Contains(err.Error(), "checkpoint not found: missing") {
+		t.Fatalf("NotFoundError text = %q", err.Error())
+	}
+	if IsNotFound(context.Canceled) {
+		t.Fatal("IsNotFound returned true for unrelated error")
 	}
 }
