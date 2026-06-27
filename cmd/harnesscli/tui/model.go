@@ -1455,7 +1455,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusBar.SetModel(m.statusBarModelLabel())
 		m.statusBar.SetCost(m.cumulativeCostUSD)
 		m.interruptBanner.Width = msg.Width
-		m.vp = viewport.New(msg.Width, m.layout.ViewportHeight)
+		// Preserve conversation history across window resizes (#664). On the
+		// first WindowSizeMsg the viewport has no content yet, so create it; on
+		// subsequent resizes, resize the existing viewport in place instead of
+		// replacing it with an empty one (which discarded all messages/cards).
+		if alreadyReady {
+			m.vp.SetSize(msg.Width, m.layout.ViewportHeight)
+		} else {
+			m.vp = viewport.New(msg.Width, m.layout.ViewportHeight)
+		}
 		// Preserve current history across window resizes: on subsequent resizes
 		// (alreadyReady == true), sync historyStore from the live input state so
 		// any commands typed since startup are preserved. On the first WindowSizeMsg
