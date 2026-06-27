@@ -19,6 +19,7 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/contextgrid"
 	"go-agent-harness/cmd/harnesscli/tui/components/helpdialog"
 	"go-agent-harness/cmd/harnesscli/tui/components/inputarea"
+	"go-agent-harness/cmd/harnesscli/tui/components/interruptui"
 	"go-agent-harness/cmd/harnesscli/tui/components/layout"
 	"go-agent-harness/cmd/harnesscli/tui/components/messagebubble"
 	"go-agent-harness/cmd/harnesscli/tui/components/modelswitcher"
@@ -156,6 +157,10 @@ type Model struct {
 
 	// thinkingBar renders the visible thinking indicator above the input area.
 	thinkingBar thinkingbar.Model
+
+	// interruptBanner renders the two-stage interrupt confirmation banner above
+	// the input area when the user presses Ctrl+C during an active run.
+	interruptBanner interruptui.Model
 
 	// transcript accumulates entries for the current session (used by /export).
 	transcript []transcriptexport.TranscriptEntry
@@ -296,14 +301,15 @@ type Model struct {
 // New creates a new root Model.
 func New(cfg TUIConfig) Model {
 	m := Model{
-		config:        cfg,
-		keys:          DefaultKeyMap(),
-		theme:         DefaultTheme(),
-		contextGrid:   contextgrid.New(),
-		statsPanel:    statspanel.New(nil),
-		thinkingBar:   thinkingbar.New(),
-		planOverlay:   planoverlay.New(),
-		selectedModel: cfg.Model,
+		config:          cfg,
+		keys:            DefaultKeyMap(),
+		theme:           DefaultTheme(),
+		contextGrid:     contextgrid.New(),
+		statsPanel:      statspanel.New(nil),
+		thinkingBar:     thinkingbar.New(),
+		interruptBanner: interruptui.New(),
+		planOverlay:     planoverlay.New(),
+		selectedModel:   cfg.Model,
 	}
 	m.modelSwitcher = modelswitcher.New(cfg.Model)
 	// Initialize history store with defaults.
@@ -393,7 +399,7 @@ func buildHelpDialog(reg *CommandRegistry, keys KeyMap) helpdialog.Model {
 		{Keys: "ctrl+e", Description: keys.EditMode.Help().Desc},
 		{Keys: "esc", Description: keys.Interrupt.Help().Desc},
 		{Keys: "ctrl+s", Description: keys.Copy.Help().Desc},
-		{Keys: "ctrl+c", Description: keys.Quit.Help().Desc},
+		{Keys: "ctrl+c", Description: "interrupt run (twice) / quit when idle"},
 	}
 
 	about := []string{
@@ -607,6 +613,17 @@ func (m Model) AskUserActive() bool {
 // PlanMode returns true when plan mode is toggled on (for testing).
 func (m Model) PlanMode() bool {
 	return m.planMode
+}
+
+// InterruptBannerVisible returns true when the interrupt confirmation banner is
+// currently visible (State != Hidden). Used by tests to assert two-stage behavior.
+func (m Model) InterruptBannerVisible() bool {
+	return m.interruptBanner.IsVisible()
+}
+
+// InterruptBannerState returns the current state of the interrupt banner (for testing).
+func (m Model) InterruptBannerState() interruptui.State {
+	return m.interruptBanner.CurrentState()
 }
 
 // PlanOverlayVisible returns true when the plan overlay is currently visible (for testing).
@@ -1437,6 +1454,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusBar = statusbar.New(msg.Width)
 		m.statusBar.SetModel(m.statusBarModelLabel())
 		m.statusBar.SetCost(m.cumulativeCostUSD)
+		m.interruptBanner.Width = msg.Width
 		m.vp = viewport.New(msg.Width, m.layout.ViewportHeight)
 		// Preserve current history across window resizes: on subsequent resizes
 		// (alreadyReady == true), sync historyStore from the live input state so
@@ -1487,16 +1505,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		switch {
 		case key.Matches(msg, m.keys.Quit):
-			// If a run is active, Ctrl+C cancels the run instead of quitting.
-			if m.runActive && m.cancelRun != nil {
-				m.cancelRun()
+			// Two-stage Ctrl+C interrupt when a run is active.
+			if m.runActive {
+				if !m.interruptBanner.IsVisible() {
+					// First Ctrl+C: show the confirmation banner, do NOT cancel yet.
+					m.interruptBanner = m.interruptBanner.Show()
+					m.interruptBanner.Width = m.width
+					cmds = append(cmds, m.setStatusMsg("Press ctrl+c again to interrupt"))
+					return m, tea.Batch(cmds...)
+				}
+				// Second Ctrl+C (banner already showing): confirm the interrupt.
+				m.interruptBanner = m.interruptBanner.Hide()
+				if m.cancelRun != nil {
+					m.cancelRun()
+					m.cancelRun = nil
+				}
 				m.runActive = false
-				m.cancelRun = nil
 				cmds = append(cmds, m.setStatusMsg("Interrupted"))
-				// Do NOT quit — return without tea.Quit
 				return m, tea.Batch(cmds...)
 			}
-			// No active run: fall through to default quit behavior.
+			// No active run: hide banner if somehow visible, then quit.
+			m.interruptBanner = m.interruptBanner.Hide()
 			return m, tea.Quit
 		case key.Matches(msg, m.keys.Copy):
 			ok := CopyToClipboard(m.lastAssistantText)
@@ -1506,6 +1535,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.setStatusMsg("Copy unavailable"))
 			}
 		case key.Matches(msg, m.keys.Interrupt):
+			// If the interrupt banner is visible, Escape dismisses it without
+			// cancelling the run (user changed their mind).
+			if m.interruptBanner.IsVisible() {
+				m.interruptBanner = m.interruptBanner.Hide()
+				cmds = append(cmds, m.setStatusMsg("Interrupt cancelled"))
+				return m, tea.Batch(cmds...)
+			}
 			// Highest priority: if the slash-complete dropdown is open, Escape
 			// closes ONLY the dropdown and retains the typed input. A second
 			// Escape then falls through to the priority chain below (clear input).
@@ -2862,10 +2898,11 @@ func (m Model) View() string {
 		}
 	}
 
-	// Stack: main content / separator / autocomplete dropdown / input / separator / status bar
+	// Stack: main content / separator / thinking / interrupt banner / autocomplete dropdown / input / separator / status bar
 	inputView := m.input.View()
 	dropdownView := m.slashComplete.View(m.width)
 	thinkingView := m.thinkingBar.View()
+	bannerView := m.interruptBanner.View()
 
 	sections := []string{
 		mainContent,
@@ -2873,6 +2910,9 @@ func (m Model) View() string {
 	}
 	if thinkingView != "" {
 		sections = append(sections, thinkingView)
+	}
+	if bannerView != "" {
+		sections = append(sections, bannerView)
 	}
 	if dropdownView != "" {
 		sections = append(sections, dropdownView)
