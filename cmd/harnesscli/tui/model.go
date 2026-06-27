@@ -122,6 +122,17 @@ type Model struct {
 	// rendered block for a tool call when that block is currently at the tail.
 	toolLineCounts map[string]int
 
+	// toolLineStarts records the absolute start offset (in viewport lines) of
+	// each tool card at the time it was first appended. This allows in-place
+	// updates even when the card is no longer at the viewport tail (e.g. after
+	// an assistant delta has been appended since the card was started).
+	toolLineStarts map[string]int
+
+	// toolLineOrder records the insertion order of call IDs so that when a
+	// card's line count changes (delta), the start offsets of all later cards
+	// can be shifted accordingly.
+	toolLineOrder []string
+
 	// renderedToolCallID is the tool call currently occupying the viewport tail.
 	// It allows lifecycle updates to replace the last rendered tool block
 	// instead of appending duplicate start/completed rows.
@@ -698,14 +709,58 @@ func (m *Model) appendToolUseView(view tooluse.Model) {
 	if len(lines) == 0 {
 		return
 	}
-	if prevCount := m.toolLineCounts[view.CallID]; prevCount > 0 && m.renderedToolCallID == view.CallID {
-		m.vp.ReplaceTailLines(prevCount, lines)
+
+	callID := view.CallID
+	prevCount, known := m.toolLineCounts[callID]
+
+	if known && prevCount > 0 {
+		// Card already placed in the viewport. Try fast-path first: if it's
+		// still at the tail, use ReplaceTailLines. Otherwise use ReplaceLineRange
+		// to update in-place even though other content was appended after it.
+		if m.renderedToolCallID == callID {
+			// Fast path: card is at the tail.
+			m.vp.ReplaceTailLines(prevCount, lines)
+		} else {
+			// In-place update: replace the card at its recorded start offset.
+			start, hasStart := m.toolLineStarts[callID]
+			if hasStart {
+				lineDelta := len(lines) - prevCount
+				m.vp.ReplaceLineRange(start, prevCount, lines)
+				// Shift stored start offsets of all cards that were appended
+				// after this one (they are now at a different position).
+				if lineDelta != 0 {
+					found := false
+					for _, id := range m.toolLineOrder {
+						if found {
+							if s, ok := m.toolLineStarts[id]; ok {
+								m.toolLineStarts[id] = s + lineDelta
+							}
+						}
+						if id == callID {
+							found = true
+						}
+					}
+				}
+			} else {
+				// No recorded start — fall back to append (first time we see
+				// a callID that arrived before we started tracking).
+				start := m.vp.LineCount()
+				m.toolLineStarts[callID] = start
+				m.toolLineOrder = append(m.toolLineOrder, callID)
+				m.vp.AppendLines(lines)
+			}
+		}
 	} else {
+		// New card: record its start offset and append.
+		start := m.vp.LineCount()
+		m.toolLineStarts[callID] = start
+		m.toolLineOrder = append(m.toolLineOrder, callID)
 		m.vp.AppendLines(lines)
 	}
-	m.toolViews[view.CallID] = view
-	m.toolLineCounts[view.CallID] = len(lines)
-	m.renderedToolCallID = view.CallID
+
+	m.toolViews[callID] = view
+	m.toolLineCounts[callID] = len(lines)
+	m.renderedToolCallID = callID
 }
 
 func compactJSON(raw json.RawMessage) string {
@@ -717,6 +772,109 @@ func compactJSON(raw json.RawMessage) string {
 		return strings.TrimSpace(string(raw))
 	}
 	return compact.String()
+}
+
+// summarizeToolArgs returns a concise, human-readable summary of the tool arguments
+// suitable for display in a collapsed card. It never includes raw file content.
+//
+//   - write/edit/create/str_replace tools: "<path> (N lines)" using the content field.
+//   - read/view tools: "<path>" using the path/file_path/filename field.
+//   - bash/shell tools: the command string, single-line, capped to 60 chars.
+//   - fallback: a compact JSON snippet capped to ~60 chars with an ellipsis.
+func summarizeToolArgs(toolName string, input json.RawMessage) string {
+	if len(input) == 0 {
+		return ""
+	}
+
+	lowerName := strings.ToLower(toolName)
+
+	// Bash/shell: show the command, not the full JSON.
+	if strings.EqualFold(toolName, "bash") || lowerName == "shell" || lowerName == "run_shell_cmd" {
+		var params map[string]any
+		if err := json.Unmarshal(input, &params); err == nil {
+			for _, key := range []string{"command", "cmd"} {
+				if v, ok := params[key].(string); ok && v != "" {
+					// Single-line, capped.
+					cmd := strings.SplitN(strings.TrimSpace(v), "\n", 2)[0]
+					if len([]rune(cmd)) > 60 {
+						cmd = string([]rune(cmd)[:57]) + "…"
+					}
+					return cmd
+				}
+			}
+		}
+		// Try plain string input.
+		var s string
+		if err := json.Unmarshal(input, &s); err == nil && s != "" {
+			cmd := strings.SplitN(strings.TrimSpace(s), "\n", 2)[0]
+			if len([]rune(cmd)) > 60 {
+				cmd = string([]rune(cmd)[:57]) + "…"
+			}
+			return cmd
+		}
+	}
+
+	// Write/edit/create/str_replace tools: path + line count of content.
+	isWriteLike := lowerName == "write_file" || lowerName == "write" ||
+		lowerName == "edit_file" || lowerName == "edit" ||
+		lowerName == "create_file" || lowerName == "create" ||
+		lowerName == "str_replace_based_edit_tool" || lowerName == "str_replace_editor" ||
+		strings.HasPrefix(lowerName, "write_") || strings.HasPrefix(lowerName, "edit_") ||
+		strings.HasPrefix(lowerName, "create_")
+	if isWriteLike {
+		var params map[string]any
+		if err := json.Unmarshal(input, &params); err == nil {
+			path := extractStringField(params, "path", "file_path", "filename", "file")
+			content := extractStringField(params, "content", "new_content", "new_str")
+			if path != "" {
+				if content != "" {
+					lineCount := strings.Count(content, "\n")
+					if lineCount == 0 && content != "" {
+						lineCount = 1
+					}
+					return fmt.Sprintf("%s (%d lines)", path, lineCount)
+				}
+				return path
+			}
+		}
+	}
+
+	// Read/view tools: just the path.
+	isReadLike := lowerName == "read_file" || lowerName == "read" ||
+		lowerName == "view_file" || lowerName == "view" ||
+		lowerName == "cat_file" || lowerName == "cat" ||
+		strings.HasPrefix(lowerName, "read_") || strings.HasPrefix(lowerName, "view_")
+	if isReadLike {
+		var params map[string]any
+		if err := json.Unmarshal(input, &params); err == nil {
+			if path := extractStringField(params, "path", "file_path", "filename", "file"); path != "" {
+				return path
+			}
+		}
+		// Try plain string input (path as string).
+		var s string
+		if err := json.Unmarshal(input, &s); err == nil && s != "" {
+			return s
+		}
+	}
+
+	// Fallback: compact JSON snippet capped at 60 chars.
+	compact := compactJSON(input)
+	if len([]rune(compact)) > 60 {
+		compact = string([]rune(compact)[:57]) + "…"
+	}
+	return compact
+}
+
+// extractStringField returns the first non-empty string value found for any of
+// the given keys in params.
+func extractStringField(params map[string]any, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := params[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func formatToolParamValue(v any) string {
@@ -791,6 +949,9 @@ func (m *Model) ensureToolStateMaps() {
 	if m.toolLineCounts == nil {
 		m.toolLineCounts = make(map[string]int)
 	}
+	if m.toolLineStarts == nil {
+		m.toolLineStarts = make(map[string]int)
+	}
 }
 
 func normalizeThinkingLabel(text string) string {
@@ -830,11 +991,41 @@ func (m *Model) rerenderActiveToolView() {
 	m.appendToolUseView(view)
 }
 
+// unwrapToolInput normalizes tool-call arguments that arrive double-encoded.
+// The harness emits tool arguments as a JSON string whose contents are
+// themselves JSON (e.g. "{\"command\":\"ls -l\"}"). Left as-is, the argument
+// summarizers see a string instead of an object and fall back to dumping the
+// raw inner JSON. When the input is a JSON string that itself contains a JSON
+// object/array, return that inner JSON; otherwise return the input unchanged.
+func unwrapToolInput(raw json.RawMessage) json.RawMessage {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '"' {
+		return raw
+	}
+	var s string
+	if err := json.Unmarshal(trimmed, &s); err != nil {
+		return raw
+	}
+	inner := strings.TrimSpace(s)
+	if len(inner) > 0 && (inner[0] == '{' || inner[0] == '[') && json.Valid([]byte(inner)) {
+		return json.RawMessage(inner)
+	}
+	return raw
+}
+
 func (m *Model) handleToolStart(callID, name string, input json.RawMessage) {
 	m.ensureToolStateMaps()
 	m.clearThinkingBar()
+	// Tool arguments may arrive double-encoded (a JSON string of JSON); unwrap
+	// once so the summarizer, params, and command extraction all see the object.
+	input = unwrapToolInput(input)
+	// Use a concise summary for the collapsed Args line so that large content
+	// fields (e.g. file bodies) never appear in the collapsed card. The full
+	// parameters are still available in Params for the expanded view.
 	args := callID
-	if compact := compactJSON(input); compact != "" {
+	if summary := summarizeToolArgs(name, input); summary != "" {
+		args = summary
+	} else if compact := compactJSON(input); compact != "" {
 		args = compact
 	}
 	timer := tooluse.NewTimer().Start()
@@ -976,6 +1167,8 @@ func executeClearCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.lastAssistantText = ""
 	m.responseStarted = false
 	m.activeAssistantLineCount = 0
+	m.toolLineStarts = make(map[string]int)
+	m.toolLineOrder = nil
 	m.clearThinkingBar()
 	return []tea.Cmd{m.setStatusMsg("Conversation cleared")}, false
 }
@@ -2084,6 +2277,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ClearMsg:
 		m.vp = viewport.New(m.width, m.layout.ViewportHeight)
 		m.transcript = nil
+		m.toolLineStarts = make(map[string]int)
+		m.toolLineOrder = nil
 		m.clearThinkingBar()
 
 	case ExportTranscriptMsg:
