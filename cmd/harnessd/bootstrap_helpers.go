@@ -24,6 +24,7 @@ import (
 	istore "go-agent-harness/internal/store"
 	"go-agent-harness/internal/subagents"
 	"go-agent-harness/internal/trigger"
+	scriptworkflow "go-agent-harness/internal/workflow"
 	"go-agent-harness/internal/workflows"
 )
 
@@ -344,6 +345,7 @@ type serverBootstrapOptions struct {
 	subagentManager  subagents.Manager
 	checkpoints      *checkpoints.Service
 	workflows        *workflows.Engine
+	scriptWorkflows  scriptworkflow.SourceService
 	networks         *networks.Engine
 	providerRegistry *catalog.ProviderRegistry
 	runStore         istore.Store
@@ -362,6 +364,7 @@ func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
 		SubagentManager:  opts.subagentManager,
 		Checkpoints:      opts.checkpoints,
 		Workflows:        opts.workflows,
+		ScriptWorkflows:  opts.scriptWorkflows,
 		Networks:         opts.networks,
 		ProviderRegistry: opts.providerRegistry,
 		Store:            opts.runStore,

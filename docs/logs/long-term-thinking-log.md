@@ -1,5 +1,27 @@
 # Long-Term Thinking Log
 
+## 2026-06-27 (Go-Authored Custom Workflows)
+
+- Command intent: Implement custom workflows that agents can create, save, run, and monitor as Go source without restarting `harnessd`.
+- User intent: Bring go-code closer to Claude-style custom workflows while keeping workflows transferable through skills and usable by parent agents through feedback.
+- Success definition:
+  - Agents can create validated Go workflow bundles through `create_workflow`.
+  - Agents can run workflows through `run_workflow` and receive structured feedback events.
+  - Workflow bundles are discovered from global, workspace, and skill directories.
+  - Watched workflow and skill directories can reload discovered bundles without a `harnessd` restart.
+  - `/v1/script-workflows` is backed by a real runtime in `harnessd`.
+  - Focused tests cover creation, discovery, feedback, question events, child-process failure handling, subagent RPC forwarding, SSE history, and wiring.
+- Non-goals:
+  - Replacing the existing YAML `/v1/workflows` runtime.
+  - Full Claude plugin parity for commands, hooks, agents, and MCP manifests in this slice.
+- Guardrails/constraints:
+  - Treat Go workflow code as trusted local automation, similar to script tools.
+  - Keep generated workflow execution in a child process so `harnessd` stays alive.
+- Solved struggle: Go plugins looked tempting for dynamic loading, but child-process binaries are safer for hot reload, cancellation, and repeated agent-generated code.
+- Solved struggle: The embedded description regression failed because new markdown tool descriptions must be added to both explicit inventories in `embed_test.go`; the fix was to register `create_workflow` and `run_workflow` in both lists.
+- Solved struggle: Directory discovery alone did not satisfy no-restart hot loading for manually saved bundles; the fix was to route the existing watcher through `scriptWorkflowServiceRef.Reload` for workflow dirs and skill dirs.
+- Solved struggle: The full regression later failed the no-zero-coverage rule even though total coverage was above threshold; the fix was to add behavior tests for the new harnessd adapters, nested workflow/stderr/resume paths, and uncovered TUI editor helpers instead of weakening coveragegate.
+
 ## 2026-05-03 (Repository Rename and Public README Cleanup)
 
 - Command intent: Rename the repository to `go-code` and make the public project presentation clear for first-time visitors.

@@ -15,6 +15,7 @@ import (
 	om "go-agent-harness/internal/observationalmemory"
 	"go-agent-harness/internal/provider/catalog"
 	"go-agent-harness/internal/skills/packs"
+	"go-agent-harness/internal/workflow"
 	"go-agent-harness/internal/workingmemory"
 )
 
@@ -41,6 +42,7 @@ type DefaultRegistryOptions struct {
 	PromptExtensionDirs htools.PromptExtensionDirs // directories for create_prompt_extension tool
 	PackRegistry        *packs.PackRegistry        // optional skill pack registry
 	ScriptToolsDir      string                     // optional: directory containing user script tools
+	WorkflowService     workflow.SourceService     // optional: enables create_workflow and run_workflow
 	ConversationStore   ConversationStore          // optional: enables list_conversations and search_conversations
 	MessageSummarizer   htools.MessageSummarizer   // optional: enables summarize/hybrid modes in compact_history
 	// SubagentManager enables the run_agent tool for profile-based subagent delegation.
@@ -324,6 +326,13 @@ func NewDefaultRegistryWithOptions(workspaceRoot string, opts DefaultRegistryOpt
 			log.Printf("loaded %d script tool(s) from %s", len(scriptTools), opts.ScriptToolsDir)
 			deferredTools = append(deferredTools, scriptTools...)
 		}
+	}
+
+	if opts.WorkflowService != nil {
+		deferredTools = append(deferredTools,
+			deferred.CreateWorkflowTool(opts.WorkflowService),
+			deferred.RunWorkflowTool(opts.WorkflowService),
+		)
 	}
 
 	// create_skill tool: available whenever a skills directory is configured.

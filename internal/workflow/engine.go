@@ -29,6 +29,11 @@ type EngineOptions struct {
 	// is used. The store persists workflow runs and events.
 	Store Store
 
+	// QuestionResponder handles workflow questions that need a parent/user
+	// answer. When nil, Context.Question returns an error after emitting the
+	// question event.
+	QuestionResponder QuestionResponder
+
 	// Now overrides the time source for deterministic testing.
 	Now func() time.Time
 }
@@ -45,6 +50,7 @@ type Engine struct {
 	maxConcurrency int
 	defaultBudget  int
 	store          Store
+	questions      QuestionResponder
 	now            func() time.Time
 
 	mu        sync.Mutex
@@ -79,6 +85,7 @@ func NewEngine(opts EngineOptions) *Engine {
 		maxConcurrency: concurrency,
 		defaultBudget:  opts.DefaultBudget,
 		store:          opts.Store,
+		questions:      opts.QuestionResponder,
 		now:            opts.Now,
 		subs:           make(map[string]map[chan Event]struct{}),
 		eventSeqs:      make(map[string]int64),
@@ -93,10 +100,18 @@ func NewEngine(opts EngineOptions) *Engine {
 // The name is used as the workflow's Meta.Name for event emission,
 // progress display, and nested workflow identification.
 func (e *Engine) Register(name string, script Script) {
+	e.RegisterWithMeta(Meta{Name: name}, script)
+}
+
+// RegisterWithMeta adds a workflow script with explicit discovery metadata.
+func (e *Engine) RegisterWithMeta(meta Meta, script Script) {
+	if meta.Name == "" {
+		return
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	e.scripts[name] = registeredScript{
-		Meta:   Meta{Name: name},
+	e.scripts[meta.Name] = registeredScript{
+		Meta:   meta,
 		Script: script,
 	}
 }
