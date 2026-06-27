@@ -6,7 +6,7 @@
 │   Google                                                               (2) │
 │   Groq                                                                 (2) │
 │   Kimi                                                                 (1) │
-│ > OpenAI  ← current  (2)                                                   │
+│ > OpenAI  ← current                                                    (2) │
 │   Qwen                                                                 (2) │
 │   xAI                                                                  (2) │
 │                                                                            │

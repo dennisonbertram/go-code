@@ -59,29 +59,41 @@ func TestMemoryStoreCRUDAndScopeIsolation(t *testing.T) {
 	}
 }
 
-func TestSQLiteStoreDeleteRemovesEntry(t *testing.T) {
+func TestSQLiteStoreDeleteRemovesScopedEntry(t *testing.T) {
 	t.Parallel()
 
-	ctx := context.Background()
 	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "working-memory.db"))
 	if err != nil {
 		t.Fatalf("NewSQLiteStore: %v", err)
 	}
-	t.Cleanup(func() { _ = store.Close() })
-	if err := store.Migrate(ctx); err != nil {
+	if err := store.Migrate(context.Background()); err != nil {
 		t.Fatalf("Migrate: %v", err)
 	}
+	defer store.Close()
 
-	scope := om.ScopeKey{TenantID: "tenant", ConversationID: "conversation", AgentID: "agent"}
-	if err := store.Set(ctx, scope, "plan", map[string]any{"step": "collect"}); err != nil {
+	scope := om.ScopeKey{TenantID: "tenant", ConversationID: "conv", AgentID: "agent"}
+	if err := store.Set(context.Background(), scope, "plan", map[string]any{"step": "collect"}); err != nil {
 		t.Fatalf("Set: %v", err)
 	}
-	if err := store.Delete(ctx, scope, "plan"); err != nil {
+	if _, ok, err := store.Get(context.Background(), scope, "plan"); err != nil {
+		t.Fatalf("Get before delete: %v", err)
+	} else if !ok {
+		t.Fatal("expected entry before delete")
+	}
+
+	if err := store.Delete(context.Background(), scope, "plan"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, ok, err := store.Get(ctx, scope, "plan"); err != nil {
-		t.Fatalf("Get: %v", err)
+	if _, ok, err := store.Get(context.Background(), scope, "plan"); err != nil {
+		t.Fatalf("Get after delete: %v", err)
 	} else if ok {
-		t.Fatal("expected deleted entry to be absent")
+		t.Fatal("entry still exists after delete")
+	}
+	entries, err := store.List(context.Background(), scope)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("entries after delete = %#v", entries)
 	}
 }

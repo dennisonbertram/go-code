@@ -20,14 +20,20 @@ func TestHelpOverlay_ShowsCommands(t *testing.T) {
 
 	view := m.View()
 
-	// With 14 registered commands and a fixed dialog height, not all commands fit
-	// on a single page. The dialog shows the first ~12 alphabetically.
-	// Check commands that are guaranteed to appear on the first visible page.
-	wantCommands := []string{"clear", "help", "context", "export", "history", "search"}
+	// With many registered commands and a fixed dialog height (80x24), not all
+	// commands fit on the first visible page — overflow pagination clips the list.
+	// Check commands that are guaranteed to appear on the first visible page
+	// (alphabetically first batch). Commands past the page boundary (e.g. "search",
+	// "sessions") are only visible after scrolling and are intentionally omitted here.
+	wantCommands := []string{"clear", "help", "context", "export", "history"}
 	for _, cmd := range wantCommands {
 		if !strings.Contains(view, cmd) {
 			t.Errorf("help overlay View() must contain command %q; got:\n%s", cmd, view)
 		}
+	}
+	// Verify the overflow indicator is visible when content is clipped.
+	if !strings.Contains(view, "▼") {
+		t.Errorf("help overlay should show '▼' overflow indicator when commands exceed visible height; got:\n%s", view)
 	}
 }
 

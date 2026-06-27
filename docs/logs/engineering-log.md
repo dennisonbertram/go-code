@@ -43,6 +43,29 @@
     - Secret check: the accepted artifact directory has zero files matching raw OpenAI key patterns.
   - Promoted `benchmarks/terminal_bench/baseline.json` from the accepted real-provider campaign. Cost is explicit but unpriced: `total_cost_usd=0.0`, `cost_status=unpriced_model`, because `catalog/pricing.json` does not yet include `gpt-5-mini`.
 
+## 2026-06-26 (Issue #649 Completed Run Retention)
+
+- Implemented reliability slice T01 from `docs/plans/2026-06-24-harness-reliability-plan.md` for issue `#649`.
+- Added bounded in-memory retention for terminal run states:
+  - `RunnerConfig.MaxCompletedRetention` defaults to 32.
+  - completed, failed, and cancelled runs are eligible for pruning only when a durable run `Store` is configured, after terminal handling, and when no subscribers remain attached.
+  - subscriber cancellation re-runs pruning so terminal runs held for streaming clients can be released after the stream detaches.
+- Added bounded in-memory conversation mirror retention:
+  - `RunnerConfig.MaxConversationRetention` defaults to 256.
+  - `r.conversations`, `r.conversationOwners`, and conversation recency metadata evict together.
+  - persistent `ConversationStore` history remains the fallback for pruned conversation mirrors.
+- Added regressions in `internal/harness/runner_prune_test.go` covering completed-run pruning, active-subscriber retention, and persistent-store fallback for evicted conversation mirrors.
+- Red phase:
+  - `go test ./internal/harness -run TestRunner_Prune -count=1` failed to build because the retention config fields did not exist.
+- Verification:
+  - `go test ./internal/harness -run TestRunner_Prune -count=1`
+  - `go test ./internal/harness -count=1`
+  - `go test ./internal/server -run TestWorkerPoolLoad -count=1`
+  - `go test ./internal/harness/... -race -count=1`
+- Regression status:
+  - `./scripts/test-regression.sh` passed the `go test ./...` and `go test ./... -race` phases.
+  - `./scripts/test-regression.sh` failed at the coverage-gate phase because existing functions outside this slice still report `0.0%` coverage; total statement coverage was `83.9%`.
+
 ## 2026-05-05 (GitHub Pages User Repositioning)
 
 - Recentered the go-code GitHub Pages copy around the developer visitor.

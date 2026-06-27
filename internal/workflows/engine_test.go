@@ -3,6 +3,7 @@ package workflows
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -162,6 +163,67 @@ func TestEngineExecutesRunStep(t *testing.T) {
 	}
 }
 
+func TestEngineDefinitionSubscribeAndFailureEvents(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+	engine := NewEngine(Options{
+		Definitions: []Definition{{
+			Name: "failing-flow",
+			Steps: []StepDefinition{{
+				ID:   "needs-tool",
+				Type: StepTypeTool,
+				Tool: "missing_executor",
+			}},
+		}},
+		Store: NewMemoryStore(),
+		Now:   func() time.Time { return now },
+	})
+
+	def, ok := engine.GetDefinition("failing-flow")
+	if !ok {
+		t.Fatal("expected failing-flow definition")
+	}
+	if len(def.Steps) != 1 || def.Steps[0].ID != "needs-tool" {
+		t.Fatalf("definition steps = %+v", def.Steps)
+	}
+	if _, ok := engine.GetDefinition("missing"); ok {
+		t.Fatal("missing definition returned ok=true")
+	}
+
+	run, err := engine.Start("failing-flow", nil)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	history, live, cancel, err := engine.Subscribe(run.ID)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer cancel()
+
+	finalRun, _, err := waitForWorkflowRun(engine, run.ID)
+	if err != nil {
+		t.Fatalf("waitForWorkflowRun: %v", err)
+	}
+	if finalRun.Status != RunStatusFailed {
+		t.Fatalf("status = %q, want %q", finalRun.Status, RunStatusFailed)
+	}
+	if !strings.Contains(finalRun.Error, "tool executor is not configured") {
+		t.Fatalf("error = %q", finalRun.Error)
+	}
+
+	events := append([]Event(nil), history...)
+	deadline := time.After(2 * time.Second)
+	for !hasWorkflowEvent(events, "workflow.failed") {
+		select {
+		case event := <-live:
+			events = append(events, event)
+		case <-deadline:
+			t.Fatalf("timed out waiting for workflow.failed event; events=%+v", events)
+		}
+	}
+}
+
 type toolExecutorFunc func(ctx context.Context, name string, args json.RawMessage) (string, error)
 
 func (f toolExecutorFunc) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
@@ -204,4 +266,13 @@ func waitForWorkflowRun(engine *Engine, runID string) (Run, []StepState, error) 
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+}
+
+func hasWorkflowEvent(events []Event, eventType string) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
 }

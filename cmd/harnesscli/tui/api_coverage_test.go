@@ -35,6 +35,34 @@ func TestStartRunCmdIncludesWorkspacePath(t *testing.T) {
 	}
 }
 
+func TestStartRunCmdSendsCapabilityProfileAsProfileField(t *testing.T) {
+	t.Parallel()
+
+	var rawBody map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&rawBody); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(runCreateResponse{RunID: "run-profile"})
+	}))
+	defer ts.Close()
+
+	// A capability profile selected via /profiles (e.g. "researcher") must be
+	// sent in the "profile" field (harness.RunRequest.ProfileName), NOT in
+	// "prompt_profile" — the server rejects unknown prompt profiles with HTTP 400.
+	msg := startRunCmd(ts.URL, "hello", "", "gpt-test", "openai", "", "researcher", "/tmp/x")()
+	if _, ok := msg.(RunStartedMsg); !ok {
+		t.Fatalf("expected RunStartedMsg, got %T: %+v", msg, msg)
+	}
+	if got, ok := rawBody["profile"]; !ok || got != "researcher" {
+		t.Errorf(`request must include "profile":"researcher"; got profile=%v (present=%v)`, got, ok)
+	}
+	if _, ok := rawBody["prompt_profile"]; ok {
+		t.Errorf(`capability profile must NOT be sent as "prompt_profile"; body=%v`, rawBody)
+	}
+}
+
 func TestLoadSubagentsCmdReturnsDecodedSubagents(t *testing.T) {
 	t.Parallel()
 
@@ -109,6 +137,33 @@ func TestFlattenJSONRendersNestedMapsAndSkipsNil(t *testing.T) {
 	}
 	if strings.Contains(joined, "skip") {
 		t.Fatalf("expected nil field to be skipped, got %q", joined)
+	}
+}
+
+func TestStartRunCmdSetsAllowFallback(t *testing.T) {
+	t.Parallel()
+
+	var got runCreateRequest
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/runs" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(runCreateResponse{RunID: "run-fallback"}); err != nil {
+			t.Fatalf("encode response: %v", err)
+		}
+	}))
+	defer ts.Close()
+
+	msg := startRunCmd(ts.URL, "hello", "", "gpt-test", "openai", "low", "default", "")()
+	if _, ok := msg.(RunStartedMsg); !ok {
+		t.Fatalf("expected RunStartedMsg, got %T: %+v", msg, msg)
+	}
+	if !got.AllowFallback {
+		t.Fatalf("expected allow_fallback=true in POST body, got false")
 	}
 }
 

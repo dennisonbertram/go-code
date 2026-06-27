@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -90,17 +89,6 @@ func TestResolveWorkspacePath(t *testing.T) {
 	}
 }
 
-func TestIsEACCESRecognizesPathPermissionError(t *testing.T) {
-	t.Parallel()
-
-	if !isEACCES(&os.PathError{Op: "open", Path: "secret", Err: syscall.EACCES}) {
-		t.Fatal("expected EACCES path error")
-	}
-	if isEACCES(fmt.Errorf("permission denied")) {
-		t.Fatal("plain errors must not be treated as syscall EACCES")
-	}
-}
-
 func TestEnsureWorkspaceRootUsable(t *testing.T) {
 	t.Run("missing root", func(t *testing.T) {
 		dir := t.TempDir()
@@ -160,4 +148,18 @@ func TestEnsureWorkspaceRootUsable(t *testing.T) {
 			t.Fatalf("expected no error for usable workspace root, got: %v", err)
 		}
 	})
+}
+
+func TestIsEACCESRecognizesPathPermissionError(t *testing.T) {
+	t.Parallel()
+
+	if !isEACCES(&os.PathError{Op: "open", Path: "secret", Err: syscall.EACCES}) {
+		t.Fatal("expected EACCES path error to be recognized")
+	}
+	if isEACCES(&os.PathError{Op: "open", Path: "missing", Err: syscall.ENOENT}) {
+		t.Fatal("did not expect ENOENT to be recognized as EACCES")
+	}
+	if isEACCES(syscall.EACCES) {
+		t.Fatal("bare syscall error should not match PathError-specific helper")
+	}
 }
