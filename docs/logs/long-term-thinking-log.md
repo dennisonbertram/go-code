@@ -995,3 +995,24 @@ Decision rule: when uncertain, default to `command intent` and `user intent` bel
 - Open questions:
   - Whether the `spawn_agent` system prompt should continue duplicating the task text while the typed handoff block becomes the canonical parent-context contract.
 - Next verification step: add failing handoff tests in tools/subagents/harness packages, implement the shared handoff helpers and propagation fields, then rerun focused suites and broader relevant tests.
+
+## 2026-06-26 (Issue #649 Harness Retention and Coveragegate Restoration)
+
+- Command intent: Complete the current T01 reliability slice and restore the full repository regression gate, including coveragegate.
+- User intent: Keep the harness reliability work reviewable while proving the repo can pass its actual pre-merge gate without weakening coverage rules.
+- Success definition:
+  - Completed harness run state and conversation mirrors are pruned with bounded retention.
+  - Durable-store compatibility is preserved for completed run lookup.
+  - Existing T01 pruning regressions remain green.
+  - Coveragegate reports zero uncovered functions without reducing `MIN_TOTAL_COVERAGE`, removing the zero-function rule, or excluding code just to pass.
+  - `./scripts/test-regression.sh` exits 0 and prints `[regression] PASS`.
+- Non-goals:
+  - Broad reliability epic implementation outside T01.
+  - Refactoring unrelated runtime, workflow, or tool packages.
+- Guardrails/constraints:
+  - Add focused behavior tests for uncovered functions instead of superficial call-only coverage.
+  - Preserve existing local work and branch name.
+  - Update engineering evidence and local tracker state after verification.
+- Open questions:
+  - None for T01 completion.
+- Next verification step: review the scoped diff and, if accepted, promote through the repo's normal verify-and-merge flow.

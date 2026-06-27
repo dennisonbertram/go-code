@@ -468,8 +468,16 @@ type RunnerConfig struct {
 	// slots free up. When 0 (the default), there is no cap — all runs start
 	// immediately (the legacy unbounded behaviour).
 	WorkerPoolSize int
-	AskUserTimeout time.Duration
-	AskUserBroker  htools.AskUserQuestionBroker
+	// MaxCompletedRetention caps completed/failed/cancelled run states retained
+	// in memory after terminal events are persisted and subscribers drain.
+	// 0 uses the default retention window.
+	MaxCompletedRetention int
+	// MaxConversationRetention caps the in-memory conversation transcript mirror.
+	// Persistent ConversationStore history, when configured, is left untouched.
+	// 0 uses the default retention window.
+	MaxConversationRetention int
+	AskUserTimeout           time.Duration
+	AskUserBroker            htools.AskUserQuestionBroker
 	// ApprovalBroker is the broker used to pause/resume tool calls that require
 	// operator approval. When nil, no approval pausing occurs even if
 	// PermissionConfig.Approval is set to ApprovalPolicyDestructive or

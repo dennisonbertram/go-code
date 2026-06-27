@@ -73,6 +73,59 @@ func TestCheckpointApprovalBrokerPersistsPendingApproval(t *testing.T) {
 	}
 }
 
+func TestCheckpointApprovalBrokerDenyRejectsPendingApproval(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+	checkpointSvc := checkpoints.NewService(checkpoints.NewMemoryStore(), func() time.Time { return now })
+	broker := NewCheckpointApprovalBroker(checkpointSvc)
+
+	resultCh := make(chan bool, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		approved, err := broker.Ask(context.Background(), ApprovalRequest{
+			RunID:   "run-denied",
+			CallID:  "call-denied",
+			Tool:    "write",
+			Args:    `{"path":"blocked.txt"}`,
+			Timeout: time.Minute,
+		})
+		if err != nil {
+			errCh <- err
+			return
+		}
+		resultCh <- approved
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := broker.Pending("run-denied"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for pending approval")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	if err := broker.Deny("run-denied"); err != nil {
+		t.Fatalf("Deny: %v", err)
+	}
+	select {
+	case err := <-errCh:
+		t.Fatalf("Ask returned error: %v", err)
+	case approved := <-resultCh:
+		if approved {
+			t.Fatal("denied approval returned approved=true")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for denied approval result")
+	}
+	if err := broker.Deny("run-denied"); err != ErrNoPendingApproval {
+		t.Fatalf("Deny after resolution = %v, want ErrNoPendingApproval", err)
+	}
+}
+
 func TestCheckpointAskUserBrokerPersistsQuestionsAndAnswers(t *testing.T) {
 	t.Parallel()
 
