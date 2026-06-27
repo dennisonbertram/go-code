@@ -3,6 +3,8 @@ package server
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -14,6 +16,9 @@ import (
 
 	"go-agent-harness/internal/harness"
 	"go-agent-harness/internal/harness/tools"
+	"go-agent-harness/internal/store"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // mockCronClient is a simple in-memory mock for CronClient.
@@ -44,6 +49,7 @@ func (m *mockCronClient) CreateJob(_ context.Context, req tools.CronCreateJobReq
 	now := time.Now().UTC()
 	job := tools.CronJob{
 		ID:         m.nextID(),
+		TenantID:   req.TenantID,
 		Name:       req.Name,
 		Schedule:   req.Schedule,
 		ExecType:   req.ExecType,
@@ -79,7 +85,7 @@ func (m *mockCronClient) GetJob(_ context.Context, id string) (tools.CronJob, er
 	}
 	j, ok := m.jobs[id]
 	if !ok {
-		return tools.CronJob{}, fmt.Errorf("not found")
+		return tools.CronJob{}, tools.ErrCronJobNotFound
 	}
 	return j, nil
 }
@@ -92,7 +98,7 @@ func (m *mockCronClient) UpdateJob(_ context.Context, id string, req tools.CronU
 	}
 	j, ok := m.jobs[id]
 	if !ok {
-		return tools.CronJob{}, fmt.Errorf("not found")
+		return tools.CronJob{}, tools.ErrCronJobNotFound
 	}
 	if req.Status != nil {
 		j.Status = *req.Status
@@ -121,7 +127,7 @@ func (m *mockCronClient) DeleteJob(_ context.Context, id string) error {
 		return fmt.Errorf("mock error")
 	}
 	if _, ok := m.jobs[id]; !ok {
-		return fmt.Errorf("not found")
+		return tools.ErrCronJobNotFound
 	}
 	delete(m.jobs, id)
 	return nil
@@ -161,6 +167,118 @@ func cronTestServer(t *testing.T, client CronClient) *httptest.Server {
 	ts := httptest.NewServer(s.Handler())
 	t.Cleanup(ts.Close)
 	return ts
+}
+
+func cronTenantTestServer(t *testing.T, client CronClient) (*httptest.Server, string, string, string, string) {
+	t.Helper()
+
+	ms := store.NewMemoryStore()
+	tenantA := "tenant-cron-alpha"
+	tokenA, keyA := cronTestAPIKey(t, tenantA, "cron A", []string{store.ScopeRunsRead, store.ScopeRunsWrite})
+	if err := ms.CreateAPIKey(context.Background(), keyA); err != nil {
+		t.Fatalf("CreateAPIKey A: %v", err)
+	}
+	tenantB := "tenant-cron-bravo"
+	tokenB, keyB := cronTestAPIKey(t, tenantB, "cron B", []string{store.ScopeRunsRead, store.ScopeRunsWrite})
+	if err := ms.CreateAPIKey(context.Background(), keyB); err != nil {
+		t.Fatalf("CreateAPIKey B: %v", err)
+	}
+
+	h := NewWithOptions(ServerOptions{
+		Store:      ms,
+		Runner:     testRunnerForCron(t),
+		CronClient: client,
+	})
+	ts := httptest.NewServer(h)
+	t.Cleanup(ts.Close)
+	return ts, tokenA, tenantA, tokenB, tenantB
+}
+
+func cronTestAPIKey(t *testing.T, tenantID, name string, scopes []string) (string, store.APIKey) {
+	t.Helper()
+
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		t.Fatalf("rand.Read raw: %v", err)
+	}
+	suffix := base64.RawURLEncoding.EncodeToString(raw)
+	rawToken := "harness_sk_" + suffix
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(rawToken), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt.GenerateFromPassword: %v", err)
+	}
+
+	id := make([]byte, 12)
+	if _, err := rand.Read(id); err != nil {
+		t.Fatalf("rand.Read id: %v", err)
+	}
+
+	prefix := suffix
+	if len(prefix) > 8 {
+		prefix = prefix[:8]
+	}
+
+	return rawToken, store.APIKey{
+		ID:        base64.RawURLEncoding.EncodeToString(id),
+		KeyHash:   string(hash),
+		KeyPrefix: prefix,
+		TenantID:  tenantID,
+		Name:      name,
+		Scopes:    append([]string(nil), scopes...),
+		CreatedAt: time.Now().UTC(),
+	}
+}
+
+func doCronJSON(t *testing.T, method, url, token, body string) (*http.Response, []byte) {
+	t.Helper()
+	var bodyReader io.Reader
+	if body != "" {
+		bodyReader = bytes.NewBufferString(body)
+	}
+	req, err := http.NewRequest(method, url, bodyReader)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != "" {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, url, err)
+	}
+	data, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	return res, data
+}
+
+func requireCronStatus(t *testing.T, res *http.Response, body []byte, want int) {
+	t.Helper()
+	if res.StatusCode != want {
+		t.Fatalf("expected status %d, got %d: %s", want, res.StatusCode, string(body))
+	}
+}
+
+func requireOnlyCronJob(t *testing.T, body []byte, wantID, wantTenant string) {
+	t.Helper()
+	var resp struct {
+		Jobs []tools.CronJob `json:"jobs"`
+	}
+	if err := json.Unmarshal(body, &resp); err != nil {
+		t.Fatalf("decode jobs: %v", err)
+	}
+	if len(resp.Jobs) != 1 {
+		t.Fatalf("expected 1 job, got %d: %s", len(resp.Jobs), string(body))
+	}
+	if resp.Jobs[0].ID != wantID {
+		t.Fatalf("expected job %q, got %q", wantID, resp.Jobs[0].ID)
+	}
+	if resp.Jobs[0].TenantID != wantTenant {
+		t.Fatalf("expected tenant %q, got %q", wantTenant, resp.Jobs[0].TenantID)
+	}
 }
 
 // TestCronListJobs_Returns200WithList verifies GET /v1/cron/jobs returns a list.
@@ -302,6 +420,72 @@ func TestCronGetJob_Returns404ForUnknown(t *testing.T) {
 	if res.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", res.StatusCode)
 	}
+}
+
+func TestCronGetJob_Returns500ForBackendError(t *testing.T) {
+	t.Parallel()
+
+	mock := newMockCronClient()
+	mock.fail = true
+	ts := cronTestServer(t, mock)
+
+	res, err := http.Get(ts.URL + "/v1/cron/jobs/job-1")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusInternalServerError {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected 500, got %d: %s", res.StatusCode, body)
+	}
+}
+
+func TestCronJobs_AreTenantIsolated(t *testing.T) {
+	t.Parallel()
+
+	mock := newMockCronClient()
+	ts, tokenA, tenantA, tokenB, tenantB := cronTenantTestServer(t, mock)
+
+	res, body := doCronJSON(t, http.MethodPost, ts.URL+"/v1/cron/jobs", tokenA, `{"name":"tenant-a","schedule":"* * * * *","execution_type":"shell"}`)
+	requireCronStatus(t, res, body, http.StatusCreated)
+	var jobA tools.CronJob
+	if err := json.Unmarshal(body, &jobA); err != nil {
+		t.Fatalf("decode tenant A job: %v", err)
+	}
+	if jobA.TenantID != tenantA {
+		t.Fatalf("expected tenant A job to be stamped %q, got %q", tenantA, jobA.TenantID)
+	}
+
+	res, body = doCronJSON(t, http.MethodPost, ts.URL+"/v1/cron/jobs", tokenB, `{"name":"tenant-b","schedule":"0 * * * *","execution_type":"shell"}`)
+	requireCronStatus(t, res, body, http.StatusCreated)
+	var jobB tools.CronJob
+	if err := json.Unmarshal(body, &jobB); err != nil {
+		t.Fatalf("decode tenant B job: %v", err)
+	}
+	if jobB.TenantID != tenantB {
+		t.Fatalf("expected tenant B job to be stamped %q, got %q", tenantB, jobB.TenantID)
+	}
+
+	res, body = doCronJSON(t, http.MethodGet, ts.URL+"/v1/cron/jobs", tokenA, "")
+	requireCronStatus(t, res, body, http.StatusOK)
+	requireOnlyCronJob(t, body, jobA.ID, tenantA)
+
+	res, body = doCronJSON(t, http.MethodGet, ts.URL+"/v1/cron/jobs", tokenB, "")
+	requireCronStatus(t, res, body, http.StatusOK)
+	requireOnlyCronJob(t, body, jobB.ID, tenantB)
+
+	res, body = doCronJSON(t, http.MethodGet, ts.URL+"/v1/cron/jobs/"+jobA.ID, tokenB, "")
+	requireCronStatus(t, res, body, http.StatusNotFound)
+
+	res, body = doCronJSON(t, http.MethodDelete, ts.URL+"/v1/cron/jobs/"+jobA.ID, tokenB, "")
+	requireCronStatus(t, res, body, http.StatusNotFound)
+
+	res, body = doCronJSON(t, http.MethodGet, ts.URL+"/v1/cron/jobs/"+jobA.ID, tokenA, "")
+	requireCronStatus(t, res, body, http.StatusOK)
+
+	res, body = doCronJSON(t, http.MethodDelete, ts.URL+"/v1/cron/jobs/"+jobA.ID, tokenA, "")
+	requireCronStatus(t, res, body, http.StatusNoContent)
 }
 
 // TestCronUpdateJob_Returns200 verifies PATCH /v1/cron/jobs/{id} updates job.

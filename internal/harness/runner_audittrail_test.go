@@ -174,6 +174,45 @@ func TestAuditTrail_RunCompleted_Written(t *testing.T) {
 	}
 }
 
+func TestAuditTrail_ActiveRunsShareDateBucketWriter(t *testing.T) {
+	dir := t.TempDir()
+	provider := newHangingProvider()
+	runner := NewRunner(provider, NewRegistry(), RunnerConfig{
+		DefaultModel:      "test-model",
+		RolloutDir:        dir,
+		AuditTrailEnabled: true,
+	})
+
+	run1, err := runner.StartRun(RunRequest{Prompt: "first"})
+	if err != nil {
+		t.Fatalf("StartRun first: %v", err)
+	}
+	run2, err := runner.StartRun(RunRequest{Prompt: "second"})
+	if err != nil {
+		t.Fatalf("StartRun second: %v", err)
+	}
+	waitForStatus(t, runner, run1.ID, RunStatusRunning)
+	waitForStatus(t, runner, run2.ID, RunStatusRunning)
+
+	runner.mu.RLock()
+	writer1 := runner.runs[run1.ID].auditWriter
+	writer2 := runner.runs[run2.ID].auditWriter
+	runner.mu.RUnlock()
+	if writer1 == nil || writer2 == nil {
+		t.Fatalf("expected both runs to have audit writers, got writer1=%v writer2=%v", writer1, writer2)
+	}
+	if writer1 != writer2 {
+		t.Fatalf("same-day active runs should share one audit writer, got %p and %p", writer1, writer2)
+	}
+
+	provider.Release()
+	waitForStatus(t, runner, run1.ID, RunStatusCompleted, RunStatusFailed)
+	waitForStatus(t, runner, run2.ID, RunStatusCompleted, RunStatusFailed)
+	if err := runner.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
 // TestAuditTrail_HashChainValid verifies hash chain integrity across entries.
 func TestAuditTrail_HashChainValid(t *testing.T) {
 	t.Parallel()

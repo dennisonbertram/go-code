@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -657,6 +658,8 @@ func SandboxScopeFromContext(ctx context.Context) (SandboxScope, bool) {
 }
 
 // CronClient provides access to the cron scheduler daemon.
+var ErrCronJobNotFound = errors.New("cron job not found")
+
 type CronClient interface {
 	CreateJob(ctx context.Context, req CronCreateJobRequest) (CronJob, error)
 	ListJobs(ctx context.Context) ([]CronJob, error)
@@ -670,6 +673,7 @@ type CronClient interface {
 // CronJob represents a scheduled cron job.
 type CronJob struct {
 	ID         string    `json:"id"`
+	TenantID   string    `json:"tenant_id,omitempty"`
 	Name       string    `json:"name"`
 	Schedule   string    `json:"schedule"`
 	ExecType   string    `json:"execution_type"`
@@ -698,6 +702,7 @@ type CronExecution struct {
 
 // CronCreateJobRequest is the request for creating a cron job.
 type CronCreateJobRequest struct {
+	TenantID   string `json:"tenant_id,omitempty"`
 	Name       string `json:"name"`
 	Schedule   string `json:"schedule"`
 	ExecType   string `json:"execution_type"`

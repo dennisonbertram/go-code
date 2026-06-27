@@ -1,0 +1,6 @@
+"$schema" = "https://conductor.build/schemas/settings.repo.schema.json"
+
+[scripts]
+setup = "go mod download && mkdir -p .tmp/bin && go build -o .tmp/bin/harnessd ./cmd/harnessd && go build -o .tmp/bin/harnesscli ./cmd/harnesscli"
+run = "HARNESS_ADDR=:$CONDUCTOR_PORT HARNESS_AUTH_DISABLED=true ./.tmp/bin/harnessd"
+run_mode = "concurrent"

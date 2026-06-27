@@ -603,17 +603,16 @@ func TestBuildCommandRegistry_SlashCompleteShowsCommands(t *testing.T) {
 
 	// The dropdown shows a scroll window of maxVisible=8.  When there are more
 	// than 8 commands, one slot is reserved for the "▼ more below" indicator,
-	// so the first visible window shows the 7 alphabetically-earliest commands:
-	// clear, context, export, help, history, keys, model.
-	// "new" is the 8th command and is accessible by scrolling down.
+	// so the first visible window shows the 7 alphabetically-earliest commands
+	// in the merged command set.
 	wantVisible := []string{
+		"attach",
+		"cancel",
 		"clear",
 		"context",
+		"doctor",
 		"export",
 		"help",
-		"history",
-		"keys",
-		"model",
 	}
 	for _, cmd := range wantVisible {
 		if !strings.Contains(v, cmd) {

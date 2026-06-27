@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestJobManagerRunForegroundStreaming(t *testing.T) {
@@ -92,6 +93,36 @@ func TestJobManagerRunForegroundStreamingCapturesFull(t *testing.T) {
 	defer mu.Unlock()
 	if len(chunks) < 3 {
 		t.Fatalf("expected at least 3 chunks for 3 lines, got %d", len(chunks))
+	}
+}
+
+func TestJobManagerRunForegroundStreamingOverlongLineReturnsPromptly(t *testing.T) {
+	mgr := NewJobManager(t.TempDir(), nil)
+	var streamed int
+	streamer := func(chunk string) {
+		streamed += len(chunk)
+	}
+	ctx := context.WithValue(context.Background(), ContextKeyOutputStreamer, streamer)
+
+	start := time.Now()
+	result, err := mgr.runForeground(ctx, "head -c 4194304 /dev/zero | tr '\\000' A; printf '\\nEOF\\n'", 5, "")
+	if err != nil {
+		t.Fatalf("runForeground: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("streaming overlong line took %s, want prompt return", elapsed)
+	}
+	if timedOut, _ := result["timed_out"].(bool); timedOut {
+		t.Fatalf("overlong streaming line timed out: %#v", result)
+	}
+	if truncated, _ := result["stream_truncated"].(bool); !truncated {
+		t.Fatalf("expected stream_truncated metadata, got %#v", result)
+	}
+	if _, ok := result["stream_error"].(string); !ok {
+		t.Fatalf("expected stream_error metadata, got %#v", result)
+	}
+	if streamed == 0 {
+		t.Fatal("expected streamer to receive truncated output")
 	}
 }
 
@@ -237,4 +268,76 @@ func TestOutputStreamerFromContext(t *testing.T) {
 	if !called {
 		t.Fatal("streamer was not called")
 	}
+}
+
+func TestRunBackgroundCancelsWithRunContext(t *testing.T) {
+	mgr := NewJobManager(t.TempDir(), nil)
+	ctx, cancel := context.WithCancel(context.Background())
+
+	result, err := mgr.runBackground(ctx, "sleep 60", 60, "")
+	if err != nil {
+		t.Fatalf("runBackground: %v", err)
+	}
+	shellID, _ := result["shell_id"].(string)
+	if shellID == "" {
+		t.Fatalf("missing shell_id in result: %#v", result)
+	}
+	defer mgr.kill(shellID)
+
+	cancel()
+	waitForBackgroundJobDone(t, mgr, shellID, time.Second)
+
+	output, err := mgr.output(shellID, false)
+	if err != nil {
+		t.Fatalf("output: %v", err)
+	}
+	if running, _ := output["running"].(bool); running {
+		t.Fatalf("background job %s still running after context cancellation: %#v", shellID, output)
+	}
+}
+
+func TestJobManagerShutdownCancelsAndClearsJobs(t *testing.T) {
+	mgr := NewJobManager(t.TempDir(), nil)
+
+	first, err := mgr.runBackground(context.Background(), "sleep 60", 60, "")
+	if err != nil {
+		t.Fatalf("runBackground first: %v", err)
+	}
+	second, err := mgr.runBackground(context.Background(), "sleep 60", 60, "")
+	if err != nil {
+		t.Fatalf("runBackground second: %v", err)
+	}
+	defer mgr.kill(first["shell_id"].(string))
+	defer mgr.kill(second["shell_id"].(string))
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := mgr.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	mgr.mu.RLock()
+	defer mgr.mu.RUnlock()
+	if len(mgr.jobs) != 0 {
+		t.Fatalf("expected jobs map to be cleared after shutdown, got %d jobs", len(mgr.jobs))
+	}
+}
+
+func waitForBackgroundJobDone(t *testing.T, mgr *JobManager, shellID string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		job := mgr.get(shellID)
+		if job == nil {
+			return
+		}
+		job.mu.Lock()
+		done := job.done
+		job.mu.Unlock()
+		if done {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for background job %s to finish", shellID)
 }

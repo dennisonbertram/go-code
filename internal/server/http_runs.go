@@ -43,7 +43,7 @@ func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePostRun(w http.ResponseWriter, r *http.Request) {
 	var req harness.RunRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		writeJSONDecodeError(w, err)
 		return
 	}
 
@@ -898,6 +898,7 @@ func storeRunToHarness(r *store.Run) map[string]any {
 		"status":          r.Status,
 		"output":          r.Output,
 		"error":           r.Error,
+		"recap":           r.Recap,
 		"created_at":      r.CreatedAt,
 		"updated_at":      r.UpdatedAt,
 	}

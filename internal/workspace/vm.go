@@ -8,10 +8,11 @@ import (
 
 // VMWorkspace implements Workspace using a cloud VM per workspace.
 type VMWorkspace struct {
-	harnessURL    string
-	workspacePath string
-	vmID          string
-	provider      VMProvider
+	harnessURL     string
+	workspacePath  string
+	vmID           string
+	provider       VMProvider
+	postCreateHook func() error
 }
 
 // NewVM creates a VMWorkspace with the given VMProvider.
@@ -39,8 +40,16 @@ func (w *VMWorkspace) Provision(ctx context.Context, opts Options) error {
 	if err != nil {
 		return fmt.Errorf("workspace: vm create: %w", err)
 	}
+	if vm == nil {
+		return fmt.Errorf("workspace: vm create returned nil VM")
+	}
 
 	w.vmID = vm.ID
+	if w.postCreateHook != nil {
+		if err := w.postCreateHook(); err != nil {
+			return fmt.Errorf("workspace: vm post-create: %w", err)
+		}
+	}
 	w.harnessURL = "http://" + vm.PublicIP + ":8080"
 	w.workspacePath = "/workspace"
 	return nil

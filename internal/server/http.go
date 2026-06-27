@@ -3,10 +3,12 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,15 @@ import (
 	"go-agent-harness/internal/subagents"
 	"go-agent-harness/internal/trigger"
 )
+
+const (
+	defaultMaxRequestBodyBytes = int64(1 << 20)
+	replayMaxRequestBodyBytes  = int64(4 << 20)
+	defaultHandlerTimeout      = 30 * time.Second
+	defaultReplayDriftSlots    = 2
+)
+
+type replayDriftRunnerFactory func(harness.Provider, *harness.Registry, harness.RunnerConfig) *harness.Runner
 
 // CronClient is the interface the HTTP server uses to manage cron jobs.
 // It mirrors tools.CronClient to allow easy wiring without import complexity.
@@ -117,6 +128,15 @@ type ServerOptions struct {
 	//     to a per-tenant subdirectory.
 	// When empty (or auth disabled), replay path handling is unrestricted (legacy).
 	RolloutDir string
+	// MaxRequestBodyBytes caps non-replay request bodies. Values <= 0 use the default.
+	MaxRequestBodyBytes int64
+	// ReplayMaxRequestBodyBytes caps POST /v1/runs/replay bodies. Values <= 0 use the default.
+	ReplayMaxRequestBodyBytes int64
+	// HandlerTimeout bounds non-streaming HTTP handlers. Values <= 0 use the default.
+	HandlerTimeout time.Duration
+	// ReplayDriftConcurrency caps concurrent detect_drift replay simulations.
+	// Values <= 0 use the default.
+	ReplayDriftConcurrency int
 }
 
 // NewWithOptions creates an HTTP handler with the full set of optional dependencies.
@@ -153,6 +173,10 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		slackAdapter:      opts.SlackAdapter,
 		linearAdapter:     opts.LinearAdapter,
 		rolloutDir:        opts.RolloutDir,
+		maxBodyBytes:      opts.MaxRequestBodyBytes,
+		replayBodyBytes:   opts.ReplayMaxRequestBodyBytes,
+		handlerTimeout:    opts.HandlerTimeout,
+		replayDriftSlots:  opts.ReplayDriftConcurrency,
 	}
 	// If runner config has an approval broker, use it as default when none
 	// is explicitly supplied in ServerOptions.
@@ -179,7 +203,7 @@ func (s *Server) Handler() http.Handler {
 	return s.buildMux()
 }
 
-func (s *Server) buildMux() *http.ServeMux {
+func (s *Server) buildMux() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealth)
 
@@ -258,7 +282,7 @@ func (s *Server) buildMux() *http.ServeMux {
 	// so this route also bypasses Bearer auth.
 	mux.HandleFunc("/v1/webhooks/linear", s.handleLinearWebhook)
 
-	return mux
+	return s.hardenHandler(mux)
 }
 
 type Server struct {
@@ -332,6 +356,62 @@ type Server struct {
 	// evaluation) and content-based tenant ownership verification (owning
 	// tenant_id in the rollout must match the caller's authenticated tenant).
 	rolloutDir string
+
+	maxBodyBytes    int64
+	replayBodyBytes int64
+	handlerTimeout  time.Duration
+
+	replayDriftSlots   int
+	replayDriftOnce    sync.Once
+	replayDriftSem     chan struct{}
+	driftRunnerFactory replayDriftRunnerFactory
+}
+
+func (s *Server) hardenHandler(next http.Handler) http.Handler {
+	s.applyHardeningDefaults()
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil && r.Body != http.NoBody {
+			r.Body = http.MaxBytesReader(w, r.Body, s.maxBodyBytesFor(r))
+		}
+		if isStreamingRequest(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		http.TimeoutHandler(next, s.handlerTimeout, `{"error":{"code":"timeout","message":"request timed out"}}`+"\n").ServeHTTP(w, r)
+	})
+}
+
+func (s *Server) applyHardeningDefaults() {
+	if s.maxBodyBytes <= 0 {
+		s.maxBodyBytes = defaultMaxRequestBodyBytes
+	}
+	if s.replayBodyBytes <= 0 {
+		s.replayBodyBytes = replayMaxRequestBodyBytes
+	}
+	if s.handlerTimeout <= 0 {
+		s.handlerTimeout = defaultHandlerTimeout
+	}
+}
+
+func (s *Server) maxBodyBytesFor(r *http.Request) int64 {
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/runs/replay" {
+		return s.replayBodyBytes
+	}
+	return s.maxBodyBytes
+}
+
+func isStreamingRequest(r *http.Request) bool {
+	path := r.URL.Path
+	idx := strings.LastIndex(path, "/")
+	if idx >= 0 {
+		path = path[idx+1:]
+	}
+	switch strings.ToLower(path) {
+	case "events", "stream", "wait":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -403,6 +483,15 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 			"message": message,
 		},
 	})
+}
+
+func writeJSONDecodeError(w http.ResponseWriter, err error) {
+	var maxBytesErr *http.MaxBytesError
+	if errors.As(err, &maxBytesErr) {
+		writeError(w, http.StatusRequestEntityTooLarge, "request_too_large", fmt.Sprintf("request body exceeds %d bytes", maxBytesErr.Limit))
+		return
+	}
+	writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

@@ -1,5 +1,45 @@
 # Long-Term Thinking Log
 
+## 2026-06-27 (TUI-First Harness Completion Slice)
+
+- Command intent: Continue the dirty workspace implementation of the TUI-first personal `go-code` harness plan after the first daily-command and reliability slice landed locally.
+- User intent: Make `go-code` trustworthy as a daily terminal coding harness before adding broad web, cloud, or team surfaces.
+- Success definition:
+  - Finish the #644 reliability hardening slices and keep the regression gate green.
+  - Replace guidance-only daily TUI run-control commands with useful list/cancel/replay/resume behavior.
+  - Persist a searchable workflow recap for completed runs: goal, changed files, tests run, failure cause, fix pattern, useful commands, and next continuation prompt.
+  - Expose a first-class self-improvement command that plans or runs the existing autoresearch/test loop and can score the repo with native checks.
+  - Preserve `go-code`, single-shot prompts, daemon mode, and `harnesscli -prompt`.
+- Non-goals:
+  - Runtime rewrite, web UI, cloud/team features, or product onboarding polish.
+  - Weakening the coverage gate to pass around missing tests.
+- Guardrails/constraints:
+  - Work with the dirty workspace without reverting existing changes.
+  - Strict TDD for behavior changes and meaningful tests for coverage gaps.
+  - Keep docs/logs/indexes current and do not commit unless explicitly asked.
+- Next verification step: run `go test ./...`, `go test ./... -race`, and `./scripts/test-regression.sh` after the final documentation pass.
+
+## 2026-06-26 (TUI-First Personal Harness Implementation)
+
+- Command intent: Implement the TUI-first personal `go-code` harness plan by improving daily terminal ergonomics while beginning the reliability work that must make the baseline trustworthy.
+- User intent: Turn `go-code` into a dependable personal coding harness that can be launched from any repository, controlled from the terminal, resumed/replayed/searched without doc spelunking, and hardened against long-session failure modes before broader product surfaces grow.
+- Success definition:
+  - Preserve existing `go-code`, `go-code "prompt"`, `go-code --server`, and `harnesscli -prompt` behavior.
+  - Expose first-pass daily run-control commands through the installed wrapper and `harnesscli`: runs/list, show/status, cancel, continue, replay, and search.
+  - Register expected daily TUI slash-command entry points and keep snapshot coverage current.
+  - Add Conductor repository settings so workspaces can build and run the daemon consistently.
+  - Start P0 reliability hardening with a failing-first regression for a concrete #644 child slice.
+  - Keep changes narrow; do not rewrite the runtime or add broad cloud/team surfaces.
+- Non-goals:
+  - Completing all 15 reliability slices in one workspace change.
+  - Replacing the existing TUI/session architecture.
+  - Shipping web UI, public onboarding polish, or cloud/team control-plane features.
+- Guardrails/constraints:
+  - Strict TDD for behavior changes.
+  - Keep public docs limited to implemented behavior.
+  - Treat full-suite/race/regression gates as pending until the broader P0 merge path is executed.
+- Next verification step: finish the remaining #644 slices in order, then run `go test ./...`, `go test ./... -race`, and `./scripts/test-regression.sh` before promoting the reliability epic.
+
 ## 2026-06-26 (Adapter-First Eval Harness)
 
 - Command intent: Implement the adapter-first eval harness plan by making Terminal-Bench runs reproducible, schema-validated, explainable, and regression-reportable before introducing any native `go-code eval` surface.

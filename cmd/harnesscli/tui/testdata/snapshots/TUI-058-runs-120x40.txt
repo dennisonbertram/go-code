@@ -1,0 +1,38 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+Runs
+ID                        STATUS              MODEL                PROMPT
+run_daily_1               completed           gpt-4.1              fix terminal workflow and replay search
+run_daily_2               running             claude-sonnet-4      continue trusted harness loop
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+Loaded 2 run(s)

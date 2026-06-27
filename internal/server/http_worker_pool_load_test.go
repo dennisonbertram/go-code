@@ -45,9 +45,10 @@ func TestWorkerPoolLoad(t *testing.T) {
 	)
 
 	runner := harness.NewRunner(prov, harness.NewRegistry(), harness.RunnerConfig{
-		WorkerPoolSize: poolSize,
-		DefaultModel:   "test-model",
-		MaxSteps:       1,
+		WorkerPoolSize:        poolSize,
+		DefaultModel:          "test-model",
+		MaxSteps:              1,
+		MaxCompletedRetention: totalRuns,
 	})
 
 	handler := New(runner)

@@ -25,7 +25,7 @@ func TestHelpOverlay_ShowsCommands(t *testing.T) {
 	// Check commands that are guaranteed to appear on the first visible page
 	// (alphabetically first batch). Commands past the page boundary (e.g. "search",
 	// "sessions") are only visible after scrolling and are intentionally omitted here.
-	wantCommands := []string{"clear", "help", "context", "export", "history"}
+	wantCommands := []string{"attach", "cancel", "clear", "context", "doctor", "export"}
 	for _, cmd := range wantCommands {
 		if !strings.Contains(view, cmd) {
 			t.Errorf("help overlay View() must contain command %q; got:\n%s", cmd, view)

@@ -80,6 +80,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	now := s.clock.Now()
 	job := Job{
 		ID:         uuid.New().String(),
+		TenantID:   req.TenantID,
 		Name:       req.Name,
 		Schedule:   req.Schedule,
 		ExecType:   req.ExecType,
@@ -156,9 +157,17 @@ func (s *Server) handleJobByID(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request, id string) {
 	job, err := s.store.GetJob(r.Context(), id)
 	if err != nil {
+		if !IsJobNotFound(err) {
+			writeError(w, http.StatusInternalServerError, "store_error", err.Error())
+			return
+		}
 		// Try by name.
 		job, err = s.store.GetJobByName(r.Context(), id)
 		if err != nil {
+			if !IsJobNotFound(err) {
+				writeError(w, http.StatusInternalServerError, "store_error", err.Error())
+				return
+			}
 			writeError(w, http.StatusNotFound, "not_found", "job not found")
 			return
 		}
@@ -169,6 +178,10 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request, id string)
 func (s *Server) handleUpdateJob(w http.ResponseWriter, r *http.Request, id string) {
 	job, err := s.store.GetJob(r.Context(), id)
 	if err != nil {
+		if !IsJobNotFound(err) {
+			writeError(w, http.StatusInternalServerError, "store_error", err.Error())
+			return
+		}
 		writeError(w, http.StatusNotFound, "not_found", "job not found")
 		return
 	}
@@ -241,6 +254,10 @@ func (s *Server) handleUpdateJob(w http.ResponseWriter, r *http.Request, id stri
 
 func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request, id string) {
 	if err := s.store.DeleteJob(r.Context(), id); err != nil {
+		if IsJobNotFound(err) {
+			writeError(w, http.StatusNotFound, "not_found", "job not found")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "store_error", err.Error())
 		return
 	}

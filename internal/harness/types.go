@@ -291,6 +291,7 @@ type Run struct {
 	ParentContextHandoff *htools.ParentContextHandoff `json:"parent_context_handoff,omitempty"`
 	UsageTotals          *RunUsageTotals              `json:"usage_totals,omitempty"`
 	CostTotals           *RunCostTotals               `json:"cost_totals,omitempty"`
+	Recap                *store.WorkflowRecap         `json:"recap,omitempty"`
 	TenantID             string                       `json:"tenant_id,omitempty"`
 	ConversationID       string                       `json:"conversation_id,omitempty"`
 	AgentID              string                       `json:"agent_id,omitempty"`

@@ -1325,6 +1325,74 @@ func executeHistoryCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	return nil, false
 }
 
+func executeAttachCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	return []tea.Cmd{m.setStatusMsg("Attach files by typing @path in your prompt")}, false
+}
+
+func executeRunsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	return []tea.Cmd{
+		m.setStatusMsg("Loading runs..."),
+		fetchRunsCmd(m.config.BaseURL),
+	}, false
+}
+
+func executeCancelCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
+	runID := ""
+	if len(cmd.Args) > 0 {
+		runID = cmd.Args[0]
+	} else if m.runActive && m.RunID != "" {
+		runID = m.RunID
+	}
+	if strings.TrimSpace(runID) == "" {
+		return []tea.Cmd{m.setStatusMsg("Usage: /cancel <run-id>")}, false
+	}
+	return []tea.Cmd{
+		m.setStatusMsg("Cancelling " + runID + "..."),
+		cancelRunCmd(m.config.BaseURL, runID),
+	}, false
+}
+
+func executeReplayCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
+	if len(cmd.Args) == 0 || strings.TrimSpace(cmd.Args[0]) == "" {
+		return []tea.Cmd{m.setStatusMsg("Usage: /replay <run-id-or-rollout-path>")}, false
+	}
+	target := cmd.Args[0]
+	return []tea.Cmd{
+		m.setStatusMsg("Replaying " + target + "..."),
+		replayRunCmd(m.config.BaseURL, target),
+	}, false
+}
+
+func executeResumeCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
+	if len(cmd.Args) < 2 {
+		return []tea.Cmd{m.setStatusMsg("Usage: /resume <run-id> <prompt>")}, false
+	}
+	runID := strings.TrimSpace(cmd.Args[0])
+	prompt := strings.TrimSpace(strings.Join(cmd.Args[1:], " "))
+	if runID == "" || prompt == "" {
+		return []tea.Cmd{m.setStatusMsg("Usage: /resume <run-id> <prompt>")}, false
+	}
+	expandedPrompt, err := ExpandAtPaths(prompt)
+	if err != nil {
+		return []tea.Cmd{m.setStatusMsg(fmt.Sprintf("file expand error: %s", err))}, false
+	}
+	m.pendingLastMsg = truncateStr(prompt, 60)
+	m.transcript = append(m.transcript, transcriptexport.TranscriptEntry{
+		Role:      "user",
+		Content:   prompt,
+		Timestamp: time.Now(),
+	})
+	m.appendMessageBubble(messagebubble.RoleUser, prompt)
+	return []tea.Cmd{
+		m.setStatusMsg("Continuing " + runID + "..."),
+		continueRunCmd(m.config.BaseURL, runID, expandedPrompt),
+	}, false
+}
+
+func executeDoctorCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	return []tea.Cmd{m.setStatusMsg("Run: go test ./cmd/harnesscli && bash -n scripts/go-code.sh")}, false
+}
+
 func executePermissionsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	// Open the panel with an empty rule set — there is no /v1/permissions server
 	// route, so this is a client-local panel. The truthful empty state is shown
@@ -2425,6 +2493,42 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case SubagentsLoadFailedMsg:
 		cmds = append(cmds, m.setStatusMsg("Load subagents failed: "+msg.Err))
 
+	case RunsFetchedMsg:
+		if msg.Err != "" {
+			cmds = append(cmds, m.setStatusMsg("Load runs failed: "+msg.Err))
+			return m, tea.Batch(cmds...)
+		}
+		for _, line := range formatTUIRunLines(msg.Runs) {
+			m.vp.AppendLine(line)
+		}
+		m.vp.AppendLine("")
+		cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Loaded %d run(s)", len(msg.Runs))))
+
+	case RunControlResultMsg:
+		if msg.Err != "" {
+			cmds = append(cmds, m.setStatusMsg(msg.Kind+" failed: "+msg.Err))
+			return m, tea.Batch(cmds...)
+		}
+		switch msg.Kind {
+		case "cancel":
+			cmds = append(cmds, m.setStatusMsg("Run "+msg.RunID+" cancelling"))
+		case "replay":
+			m.vp.AppendLine("Replay result")
+			for _, line := range strings.Split(msg.Output, "\n") {
+				if strings.TrimSpace(line) != "" {
+					m.vp.AppendLine(line)
+				}
+			}
+			m.vp.AppendLine("")
+			cmds = append(cmds, m.setStatusMsg("Replay finished for "+msg.RunID))
+		default:
+			if msg.Output != "" {
+				m.vp.AppendLine(msg.Output)
+				m.vp.AppendLine("")
+			}
+			cmds = append(cmds, m.setStatusMsg("Run command finished"))
+		}
+
 	case SSEEventMsg:
 		// Route event to viewport based on type.
 		switch msg.EventType {
@@ -2962,6 +3066,27 @@ func upsertTodayDataPoint(pts []statspanel.DataPoint, count int, cost float64) [
 		Count: count,
 		Cost:  cost,
 	})
+}
+
+func formatTUIRunLines(runs []tuiRunRecord) []string {
+	if len(runs) == 0 {
+		return []string{"Runs", "No runs found."}
+	}
+	lines := []string{"Runs", "ID                        STATUS              MODEL                PROMPT"}
+	for _, run := range runs {
+		id := run.displayID()
+		model := run.Model
+		if model == "" {
+			model = "(default)"
+		}
+		prompt := run.Prompt
+		if len([]rune(prompt)) > 40 {
+			runes := []rune(prompt)
+			prompt = string(runes[:37]) + "..."
+		}
+		lines = append(lines, fmt.Sprintf("%-24s  %-18s  %-20s %s", id, run.Status, model, prompt))
+	}
+	return lines
 }
 
 func formatSubagentsLines(items []RemoteSubagent) []string {
