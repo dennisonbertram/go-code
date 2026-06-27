@@ -162,6 +162,27 @@ func TestTUI049_TwoPressesClosesThenClears(t *testing.T) {
 	}
 }
 
+// TestEscapeWithAutocompleteOpenRetainsInput verifies that pressing Escape while
+// the slash-command autocomplete dropdown is open closes ONLY the dropdown and
+// leaves the typed text intact (a second Escape would then clear the input).
+func TestEscapeWithAutocompleteOpenRetainsInput(t *testing.T) {
+	m := initModel(t, 80, 24)
+	// Typing "/mo" opens the slash autocomplete dropdown.
+	m = typeIntoModel(m, "/mo")
+	if !strings.Contains(m.View(), "/model") {
+		t.Fatalf("precondition: typing /mo should open the autocomplete dropdown showing /model; view=%q", m.View())
+	}
+
+	m, _ = sendEscape(m)
+
+	if got := m.Input(); got != "/mo" {
+		t.Errorf("Escape with autocomplete open must retain input; want %q, got %q", "/mo", got)
+	}
+	if m.StatusMsg() == "Input cleared" {
+		t.Errorf("Escape that only closes the autocomplete dropdown must not clear the input")
+	}
+}
+
 // TestTUI049_ConcurrentEscape verifies 10 goroutines each with their own copy have no race.
 func TestTUI049_ConcurrentEscape(t *testing.T) {
 	base := initModel(t, 80, 24)

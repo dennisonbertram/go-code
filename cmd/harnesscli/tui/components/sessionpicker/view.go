@@ -90,17 +90,36 @@ func (m Model) View(width int) string {
 			}
 
 			if isSelected {
-				// Render full row with reverse-video highlight.
+				// Prepend a visible text selection marker so selection is clear without color.
+				const marker = "> "
+				markerLen := len([]rune(marker))
+				// Trim rowContent to leave room for marker within innerWidth.
+				maxRowWidth := innerWidth - markerLen
+				if maxRowWidth < 0 {
+					maxRowWidth = 0
+				}
+				rr := []rune(rowContent)
+				if len(rr) > maxRowWidth {
+					rr = rr[:maxRowWidth]
+					rowContent = string(rr)
+				}
+				markedContent := marker + rowContent
 				// Pad to innerWidth for consistent highlight width.
-				padded := rowContent + strings.Repeat(" ", innerWidth-len([]rune(rowContent)))
+				padded := markedContent + strings.Repeat(" ", innerWidth-len([]rune(markedContent)))
 				sb.WriteString(highlightStyle.Render(padded))
 			} else {
 				// Dim the metadata portion, normal color for last message.
-				metaRunes := []rune(metaPart)
-				if len(metaRunes) > innerWidth {
-					metaRunes = metaRunes[:innerWidth]
+				// Unselected rows use 2-space indent (matching marker width) for alignment.
+				const indent = "  "
+				metaRunes := []rune(indent + metaPart)
+				maxMeta := innerWidth
+				if len(metaRunes) > maxMeta {
+					metaRunes = metaRunes[:maxMeta]
 				}
 				remainWidth := innerWidth - len(metaRunes)
+				if remainWidth < 0 {
+					remainWidth = 0
+				}
 				msgRunes := []rune(lastMsg)
 				if len(msgRunes) > remainWidth {
 					msgRunes = msgRunes[:remainWidth]
@@ -119,6 +138,11 @@ func (m Model) View(width int) string {
 			sb.WriteByte('\n')
 		}
 	}
+
+	// Footer navigation hint.
+	sb.WriteByte('\n')
+	sb.WriteString(dimStyle.Render("  ↑/↓ navigate  enter select  esc cancel"))
+	sb.WriteByte('\n')
 
 	boxStyle := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
