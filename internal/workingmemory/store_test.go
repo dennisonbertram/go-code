@@ -2,6 +2,7 @@ package workingmemory
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 
 	om "go-agent-harness/internal/observationalmemory"
@@ -55,5 +56,32 @@ func TestMemoryStoreCRUDAndScopeIsolation(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Fatalf("entry count = %d, want 1", len(entries))
+	}
+}
+
+func TestSQLiteStoreDeleteRemovesEntry(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store, err := NewSQLiteStore(filepath.Join(t.TempDir(), "working-memory.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	scope := om.ScopeKey{TenantID: "tenant", ConversationID: "conversation", AgentID: "agent"}
+	if err := store.Set(ctx, scope, "plan", map[string]any{"step": "collect"}); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if err := store.Delete(ctx, scope, "plan"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+	if _, ok, err := store.Get(ctx, scope, "plan"); err != nil {
+		t.Fatalf("Get: %v", err)
+	} else if ok {
+		t.Fatal("expected deleted entry to be absent")
 	}
 }

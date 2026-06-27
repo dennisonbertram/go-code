@@ -19,3 +19,6 @@ jobs:
 
       - name: Run fast test suite
         run: go test ./internal/... ./cmd/...
+
+      - name: Run Terminal-Bench artifact smoke tests
+        run: python3 scripts/test_terminal_bench_artifacts.py

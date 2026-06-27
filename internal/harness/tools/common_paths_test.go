@@ -1,9 +1,11 @@
 package tools
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -85,6 +87,17 @@ func TestResolveWorkspacePath(t *testing.T) {
 				t.Fatalf("got %q, want %q", r, want)
 			}
 		})
+	}
+}
+
+func TestIsEACCESRecognizesPathPermissionError(t *testing.T) {
+	t.Parallel()
+
+	if !isEACCES(&os.PathError{Op: "open", Path: "secret", Err: syscall.EACCES}) {
+		t.Fatal("expected EACCES path error")
+	}
+	if isEACCES(fmt.Errorf("permission denied")) {
+		t.Fatal("plain errors must not be treated as syscall EACCES")
 	}
 }
 

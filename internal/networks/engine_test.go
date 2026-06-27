@@ -54,6 +54,25 @@ func TestEngineExecutesSequentialRolesViaWorkflows(t *testing.T) {
 	}
 }
 
+func TestEngineGetDefinition(t *testing.T) {
+	t.Parallel()
+
+	engine := NewEngine(Options{Definitions: []Definition{{
+		Name:        "planner-reviewer",
+		Description: "planner then reviewer",
+	}}})
+	def, ok := engine.GetDefinition("planner-reviewer")
+	if !ok {
+		t.Fatal("expected definition")
+	}
+	if def.Description != "planner then reviewer" {
+		t.Fatalf("description = %q, want planner then reviewer", def.Description)
+	}
+	if _, ok := engine.GetDefinition("missing"); ok {
+		t.Fatal("expected missing definition to be absent")
+	}
+}
+
 type stubRunEngine struct {
 	outputs []string
 	index   int

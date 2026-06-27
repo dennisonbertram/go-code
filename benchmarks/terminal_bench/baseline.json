@@ -1,68 +1,118 @@
 {
-  "_comment": "Baseline expectations for terminal bench tasks. Updated from full-final-20260308-005332 run.",
+  "_comment": "Real-provider Terminal-Bench smoke baseline promoted from .tmp/terminal-bench/real-smoke-20260627-002630/2026-06-27__00-26-42. Cost is recorded as unpriced_model because catalog/pricing.json does not yet include gpt-5-mini.",
+  "provenance": {
+    "artifact_dir": ".tmp/terminal-bench/real-smoke-20260627-002630/2026-06-27__00-26-42",
+    "git_sha": "89b5064fba6b17423029db4a41ac02fb8857d350",
+    "model": "gpt-5-mini",
+    "provider": "openai",
+    "terminal_bench_version": "0.2.18",
+    "dataset_hash": "31b29122bfa16205e6a66967fc444f5d46924a8ed9f39167cb27fc1e676d5457",
+    "dataset_path": "benchmarks/terminal_bench/tasks",
+    "n_concurrent": 1,
+    "n_attempts": 1,
+    "pass_at_k": {
+      "1": 1.0
+    },
+    "global_agent_timeout_sec": 1800,
+    "global_test_timeout_sec": 300,
+    "cleanup": "terminal-bench-default",
+    "accuracy": 1.0,
+    "n_resolved": 7,
+    "n_total": 7,
+    "total_steps": 98,
+    "total_tokens": 1083292,
+    "median_duration_ms": 28745,
+    "timeout_rate": 0.0,
+    "total_cost_usd": 0.0,
+    "cost_per_resolved_task": 0.0,
+    "cost_status": "unpriced_model",
+    "started_at": "2026-06-27T04:26:42.494084+00:00",
+    "ended_at": "2026-06-27T04:33:01.844179+00:00"
+  },
   "tasks": {
     "go-interface-migration": {
       "expected_pass": true,
       "difficulty": "medium",
       "category": "implementation",
       "avg_steps": 12,
-      "avg_tokens": 8000,
-      "avg_cost_usd": 0.05,
-      "avg_wall_time_sec": 130
+      "avg_tokens": 128995,
+      "avg_prompt_tokens": 126056,
+      "avg_completion_tokens": 2939,
+      "avg_cost_usd": 0.0,
+      "cost_status": "unpriced_model",
+      "avg_wall_time_sec": 29
     },
     "go-rename-refactor": {
       "expected_pass": true,
       "difficulty": "hard",
       "category": "refactor",
-      "avg_steps": 15,
-      "avg_tokens": 10000,
-      "avg_cost_usd": 0.06,
-      "avg_wall_time_sec": 182
+      "avg_steps": 33,
+      "avg_tokens": 456557,
+      "avg_prompt_tokens": 448698,
+      "avg_completion_tokens": 7859,
+      "avg_cost_usd": 0.0,
+      "cost_status": "unpriced_model",
+      "avg_wall_time_sec": 77
     },
     "go-race-condition-fix": {
       "expected_pass": true,
       "difficulty": "medium",
       "category": "debugging",
       "avg_steps": 10,
-      "avg_tokens": 6000,
-      "avg_cost_usd": 0.04,
-      "avg_wall_time_sec": 36
+      "avg_tokens": 92769,
+      "avg_prompt_tokens": 91447,
+      "avg_completion_tokens": 1322,
+      "avg_cost_usd": 0.0,
+      "cost_status": "unpriced_model",
+      "avg_wall_time_sec": 21
     },
     "go-retry-schedule-fix": {
-      "expected_pass": false,
+      "expected_pass": true,
       "difficulty": "hard",
       "category": "debugging",
-      "avg_steps": 12,
-      "avg_tokens": 8000,
-      "avg_cost_usd": 0.05,
-      "avg_wall_time_sec": 43
+      "avg_steps": 7,
+      "avg_tokens": 59474,
+      "avg_prompt_tokens": 58457,
+      "avg_completion_tokens": 1017,
+      "avg_cost_usd": 0.0,
+      "cost_status": "unpriced_model",
+      "avg_wall_time_sec": 13
     },
     "staging-deploy-docs": {
       "expected_pass": true,
       "difficulty": "easy",
       "category": "documentation",
-      "avg_steps": 10,
-      "avg_tokens": 7000,
-      "avg_cost_usd": 0.04,
-      "avg_wall_time_sec": 57
+      "avg_steps": 17,
+      "avg_tokens": 158996,
+      "avg_prompt_tokens": 156160,
+      "avg_completion_tokens": 2836,
+      "avg_cost_usd": 0.0,
+      "cost_status": "unpriced_model",
+      "avg_wall_time_sec": 29
     },
     "multi-report-pipeline": {
       "expected_pass": true,
       "difficulty": "hard",
       "category": "shell-scripting",
-      "avg_steps": 18,
-      "avg_tokens": 12000,
-      "avg_cost_usd": 0.08,
-      "avg_wall_time_sec": 95
+      "avg_steps": 11,
+      "avg_tokens": 117479,
+      "avg_prompt_tokens": 111509,
+      "avg_completion_tokens": 5970,
+      "avg_cost_usd": 0.0,
+      "cost_status": "unpriced_model",
+      "avg_wall_time_sec": 47
     },
     "incident-summary-shell": {
       "expected_pass": true,
       "difficulty": "medium",
       "category": "shell-scripting",
-      "avg_steps": 14,
-      "avg_tokens": 9000,
-      "avg_cost_usd": 0.06,
-      "avg_wall_time_sec": 97
+      "avg_steps": 8,
+      "avg_tokens": 69022,
+      "avg_prompt_tokens": 66744,
+      "avg_completion_tokens": 2278,
+      "avg_cost_usd": 0.0,
+      "cost_status": "unpriced_model",
+      "avg_wall_time_sec": 19
     }
   }
 }
