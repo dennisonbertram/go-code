@@ -17,6 +17,7 @@ import (
 	"go-agent-harness/internal/harness/tools/recipe"
 	linearadapter "go-agent-harness/internal/linear"
 	"go-agent-harness/internal/provider/catalog"
+	"go-agent-harness/internal/relay"
 	slackadapter "go-agent-harness/internal/slack"
 	"go-agent-harness/internal/store"
 	"go-agent-harness/internal/subagents"
@@ -106,6 +107,11 @@ type ServerOptions struct {
 	// LinearAdapter is an optional Linear webhook adapter for POST /v1/webhooks/linear.
 	// When nil, the endpoint returns 401 for all requests.
 	LinearAdapter *linearadapter.LinearAdapter
+
+	// RelayWorkerStore is an optional persistence layer for Go Relay worker
+	// registration and heartbeats. When provided, the /v1/relay/workers endpoints
+	// are enabled.
+	RelayWorkerStore relay.WorkerStore
 }
 
 // NewWithOptions creates an HTTP handler with the full set of optional dependencies.
@@ -141,6 +147,7 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		githubAdapter:     opts.GitHubAdapter,
 		slackAdapter:      opts.SlackAdapter,
 		linearAdapter:     opts.LinearAdapter,
+		relayWorkerStore:  opts.RelayWorkerStore,
 	}
 	// If runner config has an approval broker, use it as default when none
 	// is explicitly supplied in ServerOptions.
@@ -246,6 +253,11 @@ func (s *Server) buildMux() *http.ServeMux {
 	// so this route also bypasses Bearer auth.
 	mux.HandleFunc("/v1/webhooks/linear", s.handleLinearWebhook)
 
+	// /v1/relay/workers — Go Relay worker registration and heartbeat.
+	// GET requires runs:read; POST/PUT/DELETE require runs:write.
+	mux.Handle("/v1/relay/workers", auth(http.HandlerFunc(s.handleRelayWorkersRoot)))
+	mux.Handle("/v1/relay/workers/", auth(http.HandlerFunc(s.handleRelayWorkerByID)))
+
 	return mux
 }
 
@@ -313,6 +325,10 @@ type Server struct {
 	// linearAdapter converts Linear webhook requests into trigger envelopes (issue #413).
 	// When nil, POST /v1/webhooks/linear returns 401.
 	linearAdapter *linearadapter.LinearAdapter
+
+	// relayWorkerStore is an optional persistence layer for Go Relay worker
+	// registration and heartbeats.
+	relayWorkerStore relay.WorkerStore
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

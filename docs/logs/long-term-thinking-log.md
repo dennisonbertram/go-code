@@ -1,5 +1,41 @@
 # Long-Term Thinking Log
 
+## 2026-06-27 (Go Relay Multi-Location Control Plane — Epic #676 Implementation)
+
+- Command intent: Implement the Go Relay epic (#676) and all 11 subissues as the multi-location product/control-plane layer around `go-code`.
+- User intent: Route and compose coding work across registered local machines, worktrees, containers, cloud VMs, sandboxes, and connector-triggered workflows.
+- Success definition:
+  - Design document (#678) defines the Go Relay terminology, run contract schema, product boundary, and field ownership.
+  - Worker registration (#679) with stable IDs, heartbeats, stale detection, tenant isolation, and CRUD HTTP API (`/v1/relay/workers`).
+  - Capability inventory (#680) with tool, MCP server, memory, repo, secret, output surface, browser, and Docker types; capability-pack store; sanitization for display.
+  - Deterministic placement routing (#681) with hard constraints (tenant, trust tier, location type, workspace modes), soft scoring (local-first, clean workspace, cloud preference, load), explainable placement records, and tie-breaking.
+  - Run contract composition (#682) with trigger source, workspace target, capability pack, permissions, limits, output expectations, mobility class, metadata, and context hydration with truncation.
+  - Local worker transport (#683) with session management (register/remove/reconnect), run dispatch, event bus (pub/sub), command queue (cancel/steer/approve), and active run tracking.
+  - Cloud/sandbox worker pool (#684) with provider configuration, cloud placement validation, workspace-mode-to-location mapping, and cost/risk summaries.
+  - Event/artifact persistence (#685) with placement records, event log (append/query with seq), artifact CRUD, and SQLite-backed storage.
+  - Capability policy (#686) with tool gating by trust tier, secret reference leak detection, output surface source matching, MCP server secret gating, and filtered capability-pack generation.
+  - Checkpointed task handoff (#687) with mobility classes (pinned/resumable/cloneable/ephemeral), handoff packages, target validation, lineage tracking, and non-portable state identification.
+  - Operator UX (#688) with worker summaries, run summaries, placement explanations, sanitized capability views, artifact references, and duration formatting.
+  - All 80+ relay tests pass; full project builds; server tests pass with no regressions.
+  - New `internal/relay` package: 27 files, ~3,700 lines of production code + ~3,100 lines of test code.
+- Non-goals:
+  - Building a production hosted Relay service.
+  - Full tunnel/transport protocol implementation (WebSocket vs. long-poll deferred).
+  - Cloud VM provisioning automation.
+  - Polished SaaS dashboard (API-first surface delivered).
+- Guardrails/constraints:
+  - `go-code` remains the execution runtime; Go Relay owns orchestration.
+  - Local/private/dirty workspaces remain first-class; cloud is optional placement.
+  - Deterministic, explainable routing before model-driven placement.
+  - Current direct local `go-code` usage (TUI, single-shot, daemon mode) preserved.
+  - Secret values never stored in capability records; only references.
+- Next steps:
+  - Wire transport to actual WebSocket or long-poll HTTP endpoint.
+  - Implement cloud VM provisioning (Hetzner, sandbox) on placement.
+  - Add HTTP endpoints for operator UX summaries.
+  - Integration test: Slack-triggered task → compose → route → dispatch → event relay → artifact.
+  - Document operator setup flows.
+
 ## 2026-05-03 (Repository Rename and Public README Cleanup)
 
 - Command intent: Rename the repository to `go-code` and make the public project presentation clear for first-time visitors.
