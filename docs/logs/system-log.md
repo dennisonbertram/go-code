@@ -2,6 +2,31 @@
 
 Use this file to document systems, interfaces, and interactions as they are built.
 
+## 2026-06-26 (Terminal-Bench Artifact Boundary)
+
+- System/component: `benchmarks/terminal_bench/agent.py`, `scripts/run-terminal-bench.sh`, and `scripts/terminal_bench_artifacts.py`.
+- Responsibilities:
+  - The Terminal-Bench adapter owns harness execution and emits harness-grounded facts only: run record, run summary, telemetry, and logs.
+  - Terminal-Bench owns task oracle results: `is_resolved` and `parser_results`.
+  - The postprocessor owns the merge boundary, schema validation, failure classification, baseline comparison summary, and report generation.
+- Inputs/outputs:
+  - Input: Terminal-Bench `results.json` plus per-trial `benchmark_result.json`.
+  - Output: schema-validated `results.jsonl`, `summary.json`, `run-env.json`, and `report.md`.
+- Dependencies:
+  - `tb` or `uv tool run --python 3.12 terminal-bench` must be runnable.
+  - Docker and tmux must be available for real Terminal-Bench campaigns.
+  - Fake-provider smoke mode requires `HARNESS_PROVIDER=fake` and `HARNESS_FAKE_TURNS`.
+- Failure modes:
+  - Missing adapter artifacts become synthetic `infra_error` rows rather than silently disappearing.
+  - Harness/tool/provider/workspace failures are classified from run status and error messages but do not override Terminal-Bench oracle truth.
+- Operational notes:
+  - `is_resolved` must never be written by the adapter.
+  - `baseline.json` is authoritative for the smoke tier as of the accepted 2026-06-27 real-provider campaign at `.tmp/terminal-bench/real-smoke-20260627-002630/2026-06-27__00-26-42`.
+  - The accepted campaign preserved raw `results.json`, merged `results.jsonl`, `run-env.json`, `summary.json`, `report.md`, task `commands.txt`, task pane logs, per-task `benchmark_result.json`, per-task `harness_telemetry.json`, and per-task `agent-logs/harnessd.log`.
+  - Adapter credential propagation uses copied env files so Terminal-Bench command artifacts do not contain raw provider keys.
+  - Missing adapter artifacts still fail baseline promotion, because cost, steps, tool calls, final harness status, and replay data would be synthetic or unavailable.
+  - The current smoke baseline records `cost_status=unpriced_model`; cost-sensitive gates require a pricing-catalog update for `gpt-5-mini` or a rerun on a priced model.
+
 ## 2026-04-05 (Harnessd Runtime Composition Boundary)
 
 - System/component: `cmd/harnessd/main.go` and `cmd/harnessd/runtime_container.go`.

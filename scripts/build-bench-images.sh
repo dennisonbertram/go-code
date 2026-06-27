@@ -10,9 +10,10 @@ BENCH_DIR="${REPO_ROOT}/benchmarks/terminal_bench"
 DATASET_PATH="${BENCH_DIR}/tasks"
 
 BASE_IMAGE="go-agent-harness-tb-base:latest"
+DOCKER_BUILDKIT_VALUE="${DOCKER_BUILDKIT:-1}"
 
 echo "[build-bench-images] Building base image: ${BASE_IMAGE}"
-DOCKER_BUILDKIT=0 docker build \
+DOCKER_BUILDKIT="${DOCKER_BUILDKIT_VALUE}" docker build \
   --pull=false \
   -t "${BASE_IMAGE}" \
   -f "${BENCH_DIR}/Dockerfile.base" \
@@ -32,7 +33,7 @@ for entry in "${TASKS[@]}"; do
   task_dir="${entry%%:*}"
   image_name="${entry##*:}"
   echo "[build-bench-images] Building task image: ${image_name}:latest"
-  DOCKER_BUILDKIT=0 docker build \
+  DOCKER_BUILDKIT="${DOCKER_BUILDKIT_VALUE}" docker build \
     --pull=false \
     -t "${image_name}:latest" \
     "${DATASET_PATH}/${task_dir}"

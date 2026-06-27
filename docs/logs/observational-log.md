@@ -2,6 +2,15 @@
 
 Use this file for observations about system behavior without immediately prescribing code changes.
 
+## 2026-06-26
+
+- Eval observation: the useful boundary is adapter facts versus oracle facts. The harness can report run status, tokens, cost, tools, and logs, but Terminal-Bench must remain the only source for task pass/fail.
+- Baseline observation: the existing `baseline.json` still reads as sample data until a green real-provider campaign records full provenance; accepting it without a live run would make future regressions misleading.
+- CI observation: a fake-provider preflight and postprocessing smoke can cover most artifact contract regressions without requiring Docker or paid model calls in pull requests.
+- Real-provider smoke observation: the first 2026-06-27 smoke correctly identified an adapter/client stream parsing defect (`harnesscli` rejected SSE keepalive comments), and the accepted rerun proved the fix by producing per-task benchmark and telemetry artifacts for all seven tasks.
+- Artifact observation: command transcripts can become secret-bearing artifacts if provider credentials are placed inline in tmux commands; using copied env files keeps `commands.txt` useful without exposing key values.
+- Cost observation: the accepted baseline is operationally real but not priced for dollars yet because `gpt-5-mini` is absent from `catalog/pricing.json`; cost gates should treat `cost_status=unpriced_model` as an explicit caveat, not as free execution.
+
 ## 2026-04-05
 
 - Process observation: separating umbrella plans, stage specs, implementation logs, and public docs makes it much harder for “planned” orchestration routes or features to leak into operator-facing documentation by accident.

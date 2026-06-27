@@ -181,10 +181,18 @@ func normalizePayloadForJSON(t *testing.T, payload map[string]any) map[string]an
 func loadRecordedLedger(t *testing.T, rolloutDir, runID string) []recordedLedgerEntry {
 	t.Helper()
 
+	entries, err := readRecordedLedger(rolloutDir, runID)
+	if err != nil {
+		t.Fatalf("read rollout ledger: %v", err)
+	}
+	return entries
+}
+
+func readRecordedLedger(rolloutDir, runID string) ([]recordedLedgerEntry, error) {
 	path := filepath.Join(rolloutDir, time.Now().UTC().Format("2006-01-02"), runID+".jsonl")
 	f, err := os.Open(path)
 	if err != nil {
-		t.Fatalf("open rollout ledger: %v", err)
+		return nil, err
 	}
 	defer f.Close()
 
@@ -195,14 +203,14 @@ func loadRecordedLedger(t *testing.T, rolloutDir, runID string) []recordedLedger
 	for scanner.Scan() {
 		var entry recordedLedgerEntry
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
-			t.Fatalf("unmarshal rollout entry: %v", err)
+			return nil, err
 		}
 		entries = append(entries, entry)
 	}
 	if err := scanner.Err(); err != nil {
-		t.Fatalf("scan rollout ledger: %v", err)
+		return nil, err
 	}
-	return entries
+	return entries, nil
 }
 
 // TestEventLedgerInvariant_JSONLMatchesInMemoryHistory defends the recorder
@@ -256,7 +264,22 @@ func TestEventLedgerInvariant_JSONLMatchesInMemoryHistory(t *testing.T) {
 	waitForStatus(t, runner, run.ID, RunStatusCompleted, RunStatusFailed)
 
 	history := collectEvents(t, runner, run.ID)
-	entries := loadRecordedLedger(t, rolloutDir, run.ID)
+	var entries []recordedLedgerEntry
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var err error
+		entries, err = readRecordedLedger(rolloutDir, run.ID)
+		if err == nil && len(entries) >= len(history) {
+			break
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				t.Fatalf("read rollout ledger: %v", err)
+			}
+			t.Fatalf("rollout ledger length mismatch: got %d entries, want %d", len(entries), len(history))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	if len(entries) != len(history) {
 		t.Fatalf("rollout ledger length mismatch: got %d entries, want %d", len(entries), len(history))

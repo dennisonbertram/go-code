@@ -120,3 +120,33 @@ Created issues:
 - #12: `High priority: remove premature harnesscli timeout for streamed runs`
 - #13: `High priority: make apply_patch compatible with unified diff payloads`
 - #14: `High priority: harden structured file writes for JSON and machine-readable files`
+
+## 2026-06-27 real-provider recheck
+
+Accepted recheck artifact directory:
+`.tmp/terminal-bench/real-smoke-20260627-002630/2026-06-27__00-26-42`
+
+Campaign facts:
+- Provider/model: `openai` / `gpt-5-mini`
+- Terminal-Bench version: `0.2.18`
+- Dataset hash: `31b29122bfa16205e6a66967fc444f5d46924a8ed9f39167cb27fc1e676d5457`
+- Concurrency/attempts: `1` / `1`
+- Timeouts: agent `1800s`, test `300s`
+- Result: 7/7 passed
+
+Historical finding status:
+- `harnesscli` streaming no longer reproduces after teaching the CLI to ignore
+  SSE comment/keepalive blocks. The accepted run produced per-task
+  `benchmark_result.json` and `harness_telemetry.json` for all seven tasks.
+- The old `apply_patch path is required` failure did not reproduce in the
+  accepted run. Patch/edit behavior should remain covered by the smoke tasks,
+  but this specific historical action item should not be carried forward as
+  currently reproducing.
+- The structured JSON corruption symptom did not reproduce. `staging-deploy-docs`
+  passed in the accepted run, so the old structured-file action item should not
+  be kept as a current blocker.
+
+Baseline decision:
+- Promote `baseline.json` from the accepted green run. Cost is recorded with
+  `cost_status=unpriced_model` because the repo pricing catalog does not yet
+  include `gpt-5-mini`.
