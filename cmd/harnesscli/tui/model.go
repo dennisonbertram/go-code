@@ -21,6 +21,7 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/layout"
 	"go-agent-harness/cmd/harnesscli/tui/components/messagebubble"
 	"go-agent-harness/cmd/harnesscli/tui/components/modelswitcher"
+	"go-agent-harness/cmd/harnesscli/tui/components/permissionspanel"
 	"go-agent-harness/cmd/harnesscli/tui/components/profilepicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/sessionpicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/slashcomplete"
@@ -233,6 +234,9 @@ type Model struct {
 	sessionPicker sessionpicker.Model
 	sessionStore  *SessionStore
 
+	// permissionsPanel shows the client-local session permission rules.
+	permissionsPanel permissionspanel.Model
+
 	// pendingLastMsg holds the most-recently submitted user message (up to 60
 	// chars) so RunStartedMsg can record it on the session entry as LastMsg.
 	pendingLastMsg string
@@ -296,6 +300,8 @@ func New(cfg TUIConfig) Model {
 	m.sessionStore = NewSessionStore(defaultSessionConfigDir())
 	_ = m.sessionStore.Load() // errors are silently ignored at startup
 	m.sessionPicker = sessionpicker.New(sessionEntriesToPicker(m.sessionStore.List()))
+	// Initialize permissions panel (client-local, starts with no rules).
+	m.permissionsPanel = permissionspanel.New()
 	// Bootstrap: read known provider keys from the shell environment so models
 	// show as available immediately — without requiring the user to enter them
 	// via /keys. These keys are stored separately (envAPIKeys) and are NOT
@@ -1089,6 +1095,18 @@ func executeHistoryCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	return nil, false
 }
 
+func executePermissionsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	// Open the panel with an empty rule set — there is no /v1/permissions server
+	// route, so this is a client-local panel. The truthful empty state is shown
+	// when no rules have been accumulated locally (the normal case on startup).
+	m.permissionsPanel = m.permissionsPanel.Open(nil)
+	m.permissionsPanel.Width = m.width
+	m.permissionsPanel.Height = m.layout.ViewportHeight
+	m.overlayActive = true
+	m.activeOverlay = "permissions"
+	return nil, false
+}
+
 // searchPageSize is the maximum number of results shown at once in the overlay.
 const searchPageSize = 20
 
@@ -1314,6 +1332,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.activeOverlay == "profiles" {
 				m.profilePicker = m.profilePicker.Close()
+				m.overlayActive = false
+				m.activeOverlay = ""
+				return m, tea.Batch(cmds...)
+			}
+			if m.activeOverlay == "permissions" {
+				m.permissionsPanel = m.permissionsPanel.Close()
 				m.overlayActive = false
 				m.activeOverlay = ""
 				return m, tea.Batch(cmds...)
@@ -1680,6 +1704,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return raw
 				})
+			}
+			return m, tea.Batch(cmds...)
+		case m.overlayActive && m.activeOverlay == "permissions":
+			// Route Up/Down/k/j to SelectUp/SelectDown; t/Enter to Toggle; d to Remove.
+			switch {
+			case msg.Type == tea.KeyUp || msg.String() == "k":
+				m.permissionsPanel = m.permissionsPanel.SelectUp()
+			case msg.Type == tea.KeyDown || msg.String() == "j":
+				m.permissionsPanel = m.permissionsPanel.SelectDown()
+			case msg.String() == "t" || msg.Type == tea.KeyEnter || msg.String() == " ":
+				m.permissionsPanel = m.permissionsPanel.ToggleSelected()
+			case msg.String() == "d":
+				m.permissionsPanel = m.permissionsPanel.RemoveSelected()
 			}
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "search" && (msg.Type == tea.KeyUp || msg.Type == tea.KeyDown || msg.String() == "k" || msg.String() == "j"):
@@ -2435,6 +2472,11 @@ func (m Model) View() string {
 			}
 		case "search":
 			mainContent = m.viewSearchOverlay()
+		case "permissions":
+			m.permissionsPanel.Width = m.width
+			m.permissionsPanel.Height = m.layout.ViewportHeight
+			raw := m.permissionsPanel.View()
+			mainContent = boxOverlay(raw, m.width)
 		default:
 			// Unknown overlay kind — fall back to viewport.
 			mainContent = m.vp.View()
