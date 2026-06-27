@@ -121,6 +121,12 @@ type ExportTranscriptMsg struct{ FilePath string }
 
 // ─── Plan Mode Messages ───────────────────────────────────────────────────────
 
+// PlanProposedMsg is sent (by tests or by the SSE stub) to display a plan in
+// the plan overlay without requiring a live server event.
+type PlanProposedMsg struct {
+	Plan string // plan content (plain text / markdown)
+}
+
 // PlanApprovedMsg is emitted when the user approves the current plan.
 type PlanApprovedMsg struct{}
 

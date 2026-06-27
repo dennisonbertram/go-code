@@ -22,6 +22,7 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/messagebubble"
 	"go-agent-harness/cmd/harnesscli/tui/components/modelswitcher"
 	"go-agent-harness/cmd/harnesscli/tui/components/permissionspanel"
+	"go-agent-harness/cmd/harnesscli/tui/components/planoverlay"
 	"go-agent-harness/cmd/harnesscli/tui/components/profilepicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/sessionpicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/slashcomplete"
@@ -264,6 +265,13 @@ type Model struct {
 	// askUser.active is true when the overlay is shown.
 	askUser askUserState
 
+	// planOverlay is the plan mode overlay component (immutable value semantics).
+	// It is visible when planOverlay.IsVisible() returns true.
+	planOverlay planoverlay.Model
+
+	// planMode tracks whether plan mode is toggled on (ctrl+o when idle).
+	planMode bool
+
 	// pluginsDir is the directory from which custom slash-command plugins are loaded.
 	// Defaults to ~/.config/harnesscli/plugins when empty.
 	pluginsDir string
@@ -282,6 +290,7 @@ func New(cfg TUIConfig) Model {
 		contextGrid:   contextgrid.New(),
 		statsPanel:    statspanel.New(nil),
 		thinkingBar:   thinkingbar.New(),
+		planOverlay:   planoverlay.New(),
 		selectedModel: cfg.Model,
 	}
 	m.modelSwitcher = modelswitcher.New(cfg.Model)
@@ -581,6 +590,16 @@ func displayModelName(id string) string {
 // AskUserActive returns true when the AskUserQuestion overlay is active (for testing).
 func (m Model) AskUserActive() bool {
 	return m.askUser.active
+}
+
+// PlanMode returns true when plan mode is toggled on (for testing).
+func (m Model) PlanMode() bool {
+	return m.planMode
+}
+
+// PlanOverlayVisible returns true when the plan overlay is currently visible (for testing).
+func (m Model) PlanOverlayVisible() bool {
+	return m.planOverlay.IsVisible()
 }
 
 // AskUserQuestions returns the pending questions for the active AskUserQuestion overlay (for testing).
@@ -1250,6 +1269,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		}
+		// Plan overlay has second-highest key priority when visible.
+		if m.planOverlay.IsVisible() {
+			switch {
+			case msg.Type == tea.KeyRunes && string(msg.Runes) == "y":
+				m.planOverlay = m.planOverlay.Approve()
+				m.planOverlay = m.planOverlay.Hide()
+				m.overlayActive = false
+			case msg.Type == tea.KeyRunes && string(msg.Runes) == "n":
+				m.planOverlay = m.planOverlay.Reject()
+				m.planOverlay = m.planOverlay.Hide()
+				m.overlayActive = false
+			case msg.Type == tea.KeyEsc:
+				m.planOverlay = m.planOverlay.Hide()
+				m.overlayActive = false
+			case msg.Type == tea.KeyUp:
+				m.planOverlay = m.planOverlay.ScrollUp()
+			case msg.Type == tea.KeyDown:
+				lines := strings.Count(m.planOverlay.PlanText, "\n") + 1
+				m.planOverlay = m.planOverlay.ScrollDown(lines)
+			}
+			return m, tea.Batch(cmds...)
+		}
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			// If a run is active, Ctrl+C cancels the run instead of quitting.
@@ -1379,13 +1420,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// No-op.
 			return m, tea.Batch(cmds...)
 		case key.Matches(msg, m.keys.ExpandTool):
-			// Toggle expanded/collapsed state for the active tool call.
+			// Dual-purpose ctrl+o with precedence (highest first):
+			// 1. Active tool call present → expand/collapse it (UNCHANGED behavior).
+			// 2. Idle (no run, no active tool) → toggle plan mode.
+			// This ordering ensures a later tool-card expansion ticket can add
+			// completed-card expansion between (1) and (2) without conflict.
 			if m.activeToolCallID != "" {
+				// Highest priority: expand/collapse the active tool call.
 				if m.toolExpanded == nil {
 					m.toolExpanded = make(map[string]bool)
 				}
 				m.toolExpanded[m.activeToolCallID] = !m.toolExpanded[m.activeToolCallID]
 				m.rerenderActiveToolView()
+			} else if !m.runActive {
+				// Idle (no run active, no active tool): toggle plan mode.
+				m.planMode = !m.planMode
+				if m.planMode {
+					cmds = append(cmds, m.setStatusMsg("Plan mode: ON"))
+				} else {
+					cmds = append(cmds, m.setStatusMsg("Plan mode: OFF"))
+				}
 			}
 		case key.Matches(msg, m.keys.Submit):
 			// When the search overlay is active, Enter dismisses the overlay and
@@ -2135,6 +2189,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "run.resumed":
 			// Dismiss the ask-user overlay when the run resumes.
 			m.askUser = askUserState{}
+		case "plan.proposed":
+			// Forward-looking stub: if the server ever emits a plan.proposed event,
+			// show the plan overlay. The server does not emit this event yet; this
+			// case is harmless until it does (no live test drives it via SSE).
+			var p struct {
+				Plan    string `json:"plan"`
+				Content string `json:"content"`
+			}
+			if err := json.Unmarshal(msg.Raw, &p); err == nil {
+				planText := p.Plan
+				if planText == "" {
+					planText = p.Content
+				}
+				if planText != "" {
+					m.planOverlay = m.planOverlay.Show(planText)
+					m.overlayActive = true
+				}
+			}
 		}
 		// Continue polling the SSE channel.
 		if m.sseCh != nil {
@@ -2177,6 +2249,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sseCh != nil {
 			cmds = append(cmds, pollSSECmd(m.sseCh))
 		}
+
+	case PlanProposedMsg:
+		// Show the plan overlay. Driven by tests via PlanProposedMsg directly;
+		// the SSE "plan.proposed" case below is the forward-looking server stub.
+		m.planOverlay = m.planOverlay.Show(msg.Plan)
+		m.overlayActive = true
 
 	case AskUserPendingMsg:
 		// Pending questions fetched — populate the overlay and start deadline timer.
@@ -2429,6 +2507,17 @@ func (m Model) View() string {
 		overlayLines := m.renderAskUserOverlay()
 		if len(overlayLines) > 0 {
 			mainContent = m.vp.View() + "\n" + strings.Join(overlayLines, "\n")
+		} else {
+			mainContent = m.vp.View()
+		}
+	} else if m.planOverlay.IsVisible() {
+		// Plan overlay has second-highest priority — render on top of viewport.
+		po := m.planOverlay
+		po.Width = m.width
+		po.Height = m.layout.ViewportHeight
+		overlayView := po.View()
+		if overlayView != "" {
+			mainContent = m.vp.View() + "\n" + overlayView
 		} else {
 			mainContent = m.vp.View()
 		}
