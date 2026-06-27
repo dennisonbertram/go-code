@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -2043,6 +2044,70 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp.ScrollUp(m.vp.Height() / 2)
 		case key.Matches(msg, m.keys.PageDown):
 			m.vp.ScrollDown(m.vp.Height() / 2)
+
+		// #668 (1): ctrl+u clears the main input when no overlay is active.
+		// The apikeys and model-config overlay arms above already matched earlier
+		// in their own overlay-specific case branches, so this arm only fires
+		// when no overlay is open.
+		case msg.Type == tea.KeyCtrlU && !m.overlayActive:
+			m.input = m.input.Clear()
+			cmds = append(cmds, m.setStatusMsg("Input cleared"))
+			return m, tea.Batch(cmds...)
+
+		// #668 (2): "?" opens help when input is empty; falls through to input
+		// when input is non-empty.  ctrl+h (also bound to m.keys.Help) always
+		// opens help regardless of input content.
+		case key.Matches(msg, m.keys.Help) && !m.overlayActive:
+			// "?" with non-empty input: do NOT consume — let it type into the input.
+			if msg.Type == tea.KeyRunes && string(msg.Runes) == "?" && m.input.Value() != "" {
+				var cmd tea.Cmd
+				m.input, cmd = m.input.Update(msg)
+				if cmd != nil {
+					cmds = append(cmds, cmd)
+				}
+				m.slashComplete = syncSlashComplete(m.slashComplete, m.input.Value())
+				return m, tea.Batch(cmds...)
+			}
+			// ctrl+h, or "?" with empty input: open help overlay.
+			executeHelpCommand(&m, Command{})
+			return m, tea.Batch(cmds...)
+
+		// #668 (3): "@" inserts into the input when no overlay is active.
+		// The combined autocomplete provider (already wired) will offer file-path
+		// completions when the user subsequently presses Tab.
+		case key.Matches(msg, m.keys.AtMention) && !m.overlayActive:
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			// Sync the slash-complete dropdown (will be a no-op for "@").
+			m.slashComplete = syncSlashComplete(m.slashComplete, m.input.Value())
+			return m, tea.Batch(cmds...)
+
+		// #668 (4): ctrl+e launches $EDITOR when set; shows a status message when
+		// $EDITOR is unset so the key is never a silent no-op.
+		case msg.Type == tea.KeyCtrlE && !m.overlayActive:
+			editor := os.Getenv("EDITOR")
+			if editor == "" {
+				cmds = append(cmds, m.setStatusMsg("$EDITOR not set"))
+				return m, tea.Batch(cmds...)
+			}
+			// $EDITOR is set: write current input to a temp file and open it.
+			// Load the edited content back when the editor exits.
+			currentInput := m.input.Value()
+			tmpFile, tmpErr := writeTempEditorFile(currentInput)
+			if tmpErr != nil {
+				cmds = append(cmds, m.setStatusMsg("editor: could not create temp file"))
+				return m, tea.Batch(cmds...)
+			}
+			return m, tea.ExecProcess(
+				editorExecCommand(editor, tmpFile),
+				func(err error) tea.Msg {
+					return editorDoneMsg{tmpFile: tmpFile, err: err}
+				},
+			)
+
 		default:
 			// When model overlay is open (not config panel), intercept keys for navigation, search, and star.
 			if m.overlayActive && m.activeOverlay == "model" && !m.modelConfigMode {
@@ -2287,6 +2352,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			cmds = append(cmds, m.setStatusMsg("Export failed"))
 		}
+
+	case editorDoneMsg:
+		// #668 (4): editor process exited. Load the edited content back into the
+		// input if the editor succeeded and produced a non-empty result.
+		if msg.err != nil || msg.tmpFile == "" {
+			// Editor exited with an error — surface it but don't clobber input.
+			cmds = append(cmds, m.setStatusMsg("Editor exited with error"))
+			return m, tea.Batch(cmds...)
+		}
+		content, readErr := os.ReadFile(msg.tmpFile)
+		_ = os.Remove(msg.tmpFile) // best-effort cleanup
+		if readErr != nil {
+			cmds = append(cmds, m.setStatusMsg("editor: could not read temp file"))
+			return m, tea.Batch(cmds...)
+		}
+		// Trim trailing newline that most editors append.
+		edited := strings.TrimRight(string(content), "\n")
+		m.input = m.input.SetValue(edited)
 
 	case SubagentsLoadedMsg:
 		for _, line := range formatSubagentsLines(msg.Subagents) {
@@ -3206,3 +3289,33 @@ func boxOverlay(content string, width int) string {
 
 // StatsPanelActivePeriod returns the currently active period in the stats panel (for testing).
 func (m Model) StatsPanelActivePeriod() int { return int(m.statsPanel.ActivePeriod()) }
+
+// editorDoneMsg is sent when the external editor process launched by ctrl+e exits.
+type editorDoneMsg struct {
+	// tmpFile is the path of the temp file that was edited.
+	tmpFile string
+	// err is non-nil when the editor process itself failed.
+	err error
+}
+
+// writeTempEditorFile creates a temp file seeded with content and returns its path.
+func writeTempEditorFile(content string) (string, error) {
+	f, err := os.CreateTemp("", "harnesscli-edit-*.txt")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(content); err != nil {
+		return "", err
+	}
+	return f.Name(), nil
+}
+
+// editorExecCommand returns an *exec.Cmd that opens file in the given editor.
+func editorExecCommand(editor, file string) *exec.Cmd {
+	cmd := exec.Command(editor, file)
+	cmd.Stdin = os.Stdin
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	return cmd
+}
