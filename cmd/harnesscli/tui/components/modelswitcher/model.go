@@ -78,15 +78,15 @@ var reasoningModelIDs = map[string]bool{
 
 // providerLabels maps provider key to human-readable name.
 var providerLabels = map[string]string{
-	"openai":    "OpenAI",
-	"anthropic": "Anthropic",
-	"gemini":    "Google",
-	"deepseek":  "DeepSeek",
-	"xai":       "xAI",
-	"groq":      "Groq",
-	"qwen":      "Qwen",
-	"kimi":      "Kimi",
-	"together":  "Together",
+	"openai":     "OpenAI",
+	"anthropic":  "Anthropic",
+	"gemini":     "Google",
+	"deepseek":   "DeepSeek",
+	"xai":        "xAI",
+	"groq":       "Groq",
+	"qwen":       "Qwen",
+	"kimi":       "Kimi",
+	"together":   "Together",
 	"openrouter": "OpenRouter",
 }
 
@@ -125,7 +125,7 @@ type ProviderSummary struct {
 // when each goroutine holds its own copy).
 type Model struct {
 	Models   []ModelEntry
-	Selected int  // index into visibleModels()
+	Selected int // index into visibleModels()
 	IsOpen   bool
 	Width    int
 
@@ -808,23 +808,67 @@ func (m Model) StarredIDs() []string {
 }
 
 // ToggleStar toggles the star for the currently selected visible model.
+// After toggling, the cursor is re-anchored to the same model ID so that
+// a re-sort (starred models float to the top) does not cause the cursor to
+// jump to a different model.
 func (m Model) ToggleStar() Model {
 	visible := m.visibleModels()
 	if len(visible) == 0 || m.Selected >= len(visible) {
 		return m
 	}
-	id := visible[m.Selected].ID
+	// Capture the ID before toggling so we can re-anchor after re-sort.
+	starredID := visible[m.Selected].ID
+
 	result := m
 	result.starred = make(map[string]bool, len(m.starred)+1)
 	for k, v := range m.starred {
 		result.starred[k] = v
 	}
-	if result.starred[id] {
-		delete(result.starred, id)
+	if result.starred[starredID] {
+		delete(result.starred, starredID)
 	} else {
-		result.starred[id] = true
+		result.starred[starredID] = true
+	}
+
+	// Re-anchor cursor: find the new index of starredID in the re-sorted visible list.
+	newVisible := result.visibleModels()
+	for i, e := range newVisible {
+		if e.ID == starredID {
+			result.Selected = i
+			break
+		}
 	}
 	return result
+}
+
+// HandleSearchKey processes a single keystroke for the search input.
+// It appends printable characters to the search query, removes the last
+// character on "backspace", and IGNORES "/" (which opens search mode in
+// the parent model.go handler — it must never be appended to the query).
+// This keeps the "/" swallow inside the component so model.go is untouched.
+func (m Model) HandleSearchKey(key string) Model {
+	switch key {
+	case "/":
+		// '/' opens search mode in the parent — swallow it here so it never
+		// leaks into the query string.
+		return m
+	case "backspace", "ctrl+h":
+		q := []rune(m.searchQuery)
+		if len(q) > 0 {
+			q = q[:len(q)-1]
+		}
+		return m.SetSearch(string(q))
+	default:
+		// Only append single printable characters.
+		runes := []rune(key)
+		if len(runes) == 1 {
+			r := runes[0]
+			if r >= ' ' && r != 127 {
+				return m.SetSearch(m.searchQuery + key)
+			}
+		}
+		return m
+	}
 }
 
 // SetSearch sets the search query and resets Selected and scroll offset to 0.
