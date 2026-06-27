@@ -1798,7 +1798,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						return m, tea.Batch(cmds...)
 					}
 					// All other printable characters accumulate into search query.
-					m.modelSwitcher = m.modelSwitcher.SetSearch(m.modelSwitcher.SearchQuery() + msg.String())
+					// Route through HandleSearchKey so the component's "/" swallow
+					// is respected (fixes #667: "/" must not leak into search).
+					m.modelSwitcher = m.modelSwitcher.HandleSearchKey(msg.String())
 					return m, tea.Batch(cmds...)
 				}
 				return m, tea.Batch(cmds...)
