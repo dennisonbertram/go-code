@@ -58,7 +58,8 @@ var (
 		},
 	}
 
-	errInvalidSSEData = errors.New("invalid sse data")
+	errInvalidSSEData  = errors.New("invalid sse data")
+	errIgnoredSSEBlock = errors.New("ignored sse block")
 )
 
 type runCreateRequest struct {
@@ -300,6 +301,9 @@ func streamRunEvents(ctx context.Context, client *http.Client, baseURL, runID st
 func processSSEBlock(raw string, out io.Writer) (string, bool, error) {
 	envelope, err := parseSSEBlock(raw)
 	if err != nil {
+		if errors.Is(err, errIgnoredSSEBlock) {
+			return "", false, nil
+		}
 		return "", false, err
 	}
 
@@ -337,6 +341,9 @@ func parseSSEBlock(raw string) (sseEnvelope, error) {
 	}
 
 	envelope.Data = strings.Join(dataLines, "")
+	if envelope.Event == "" && envelope.Data == "" {
+		return sseEnvelope{}, errIgnoredSSEBlock
+	}
 	if envelope.Event == "" || envelope.Data == "" {
 		return sseEnvelope{}, fmt.Errorf("invalid sse block")
 	}

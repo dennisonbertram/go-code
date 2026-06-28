@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -48,6 +49,9 @@ func (s *Server) handleRunReplay(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request", "rollout_path is required")
 		return
 	}
+	if resolved, ok := s.resolveReplaySpecifier(req.RolloutPath); ok {
+		req.RolloutPath = resolved
+	}
 
 	// SECURITY (PFIX-4): two-part gate, active only when auth is enabled AND a
 	// rollout dir is configured (auth-disabled / no-dir deployments are unchanged).
@@ -79,6 +83,49 @@ func (s *Server) handleRunReplay(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_request",
 			fmt.Sprintf("mode must be \"simulate\" or \"fork\", got %q", req.Mode))
 	}
+}
+
+// resolveReplaySpecifier maps the personal CLI's replay shorthand
+// ("run_abc123") to the dated rollout file that RunnerConfig.RolloutDir writes
+// as <RolloutDir>/<YYYY-MM-DD>/<run_id>.jsonl. Explicit file paths keep their
+// existing behavior.
+func (s *Server) resolveReplaySpecifier(spec string) (string, bool) {
+	spec = strings.TrimSpace(spec)
+	if !isBareRunIDSpecifier(spec) || strings.TrimSpace(s.rolloutDir) == "" {
+		return spec, false
+	}
+	root := strings.TrimSpace(s.rolloutDir)
+	matches := make([]string, 0, 1)
+	targetName := spec + ".jsonl"
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if entry.Name() == targetName {
+			matches = append(matches, path)
+		}
+		return nil
+	}); err != nil {
+		return spec, false
+	}
+	if len(matches) == 0 {
+		return spec, false
+	}
+	sort.Strings(matches)
+	return matches[len(matches)-1], true
+}
+
+func isBareRunIDSpecifier(spec string) bool {
+	if spec == "" || filepath.IsAbs(spec) || strings.ContainsAny(spec, `/\`) {
+		return false
+	}
+	if strings.Contains(spec, ".") {
+		return false
+	}
+	return strings.HasPrefix(spec, "run_")
 }
 
 // replayTenantGateActive reports whether the per-tenant replay gate is active:
@@ -284,6 +331,12 @@ func (s *Server) handleReplaySimulate(w http.ResponseWriter, r *http.Request, re
 
 	// OPT-IN drift detection: keep the integrity result under "integrity" and
 	// add the drift result from a recorded-provider re-run.
+	release, ok := s.acquireReplayDriftSlot(r.Context())
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "replay_busy", "drift detection is already at capacity")
+		return
+	}
+	defer release()
 	drift, err := s.runDriftDetection(r.Context(), events)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "replay_error",
@@ -311,6 +364,32 @@ func (s *Server) handleReplaySimulate(w http.ResponseWriter, r *http.Request, re
 			"matched":              drift.Matched,
 		},
 	})
+}
+
+func (s *Server) replayDriftSemaphore() chan struct{} {
+	s.replayDriftOnce.Do(func() {
+		if s.replayDriftSem != nil {
+			return
+		}
+		slots := s.replayDriftSlots
+		if slots <= 0 {
+			slots = defaultReplayDriftSlots
+		}
+		s.replayDriftSem = make(chan struct{}, slots)
+	})
+	return s.replayDriftSem
+}
+
+func (s *Server) acquireReplayDriftSlot(ctx context.Context) (func(), bool) {
+	sem := s.replayDriftSemaphore()
+	select {
+	case sem <- struct{}{}:
+		return func() { <-sem }, true
+	case <-ctx.Done():
+		return nil, false
+	default:
+		return nil, false
+	}
 }
 
 // runDriftDetection executes the drift layer: it builds the recorded-response
@@ -355,7 +434,11 @@ func (s *Server) runDriftDetection(ctx context.Context, original []rollout.Rollo
 	}
 	defer os.RemoveAll(tempDir)
 
-	runner := harness.NewRunner(provider, registry, harness.RunnerConfig{
+	factory := s.driftRunnerFactory
+	if factory == nil {
+		factory = harness.NewRunner
+	}
+	runner := factory(provider, registry, harness.RunnerConfig{
 		DefaultModel:        recordedModel(original),
 		DefaultSystemPrompt: recordedSystemPrompt(original),
 		// Cap the re-run at one more step than the original took: a faithful

@@ -162,6 +162,35 @@ func TestRunnerShutdownDrainsBufferedQueue(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestRunnerShutdownInvokesToolRegistryShutdownAfterCancellingRuns(t *testing.T) {
+	hp := newHangingProvider()
+	registry := NewRegistry()
+	shutdownCalled := make(chan struct{})
+	registry.RegisterShutdownHook(func(context.Context) error {
+		close(shutdownCalled)
+		return nil
+	})
+	r := NewRunner(hp, registry, RunnerConfig{
+		WorkerPoolSize: 0,
+		DefaultModel:   "gpt-4.1-mini",
+	})
+
+	_, err := r.StartRun(RunRequest{Prompt: "hang"})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err = r.Shutdown(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+
+	select {
+	case <-shutdownCalled:
+	case <-time.After(time.Second):
+		t.Fatal("tool registry shutdown hook was not invoked")
+	}
+	hp.Release()
+}
+
 // TestRunnerShutdownContinueRunRevertsSourceState is a regression test for the
 // major bug where ContinueRunWithOptions set state.continued=true on the source
 // run BEFORE dispatching, and on dispatch failure never reverted it — leaving

@@ -209,6 +209,9 @@ func (c *Client) parseError(resp *http.Response) error {
 		} `json:"error"`
 	}
 	if err := json.Unmarshal(body, &errResp); err == nil && errResp.Error.Message != "" {
+		if resp.StatusCode == http.StatusNotFound && errResp.Error.Code == "not_found" {
+			return ErrJobNotFound
+		}
 		return fmt.Errorf("HTTP %d: %s: %s", resp.StatusCode, errResp.Error.Code, errResp.Error.Message)
 	}
 	return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))

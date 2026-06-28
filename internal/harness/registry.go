@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -18,6 +19,8 @@ type registeredTool struct {
 	tags         []string
 	parallelSafe bool
 	mutating     bool
+	inflight     *sync.WaitGroup
+	mcpServer    string
 }
 
 type ToolMetadata struct {
@@ -33,10 +36,11 @@ type RegisterOptions struct {
 }
 
 type Registry struct {
-	mu              sync.RWMutex
-	tools           map[string]registeredTool
-	mcpServers      map[string]struct{}   // tracks registered MCP server names to prevent duplicates
-	mcpServerTools  map[string][]string   // maps server name → tool names registered for that server
+	mu             sync.RWMutex
+	tools          map[string]registeredTool
+	mcpServers     map[string]struct{} // tracks registered MCP server names to prevent duplicates
+	mcpServerTools map[string][]string // maps server name → tool names registered for that server
+	shutdownHooks  []func(context.Context) error
 }
 
 func NewRegistry() *Registry {
@@ -45,6 +49,32 @@ func NewRegistry() *Registry {
 		mcpServers:     make(map[string]struct{}),
 		mcpServerTools: make(map[string][]string),
 	}
+}
+
+func (r *Registry) RegisterShutdownHook(hook func(context.Context) error) {
+	if hook == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.shutdownHooks = append(r.shutdownHooks, hook)
+}
+
+func (r *Registry) Shutdown(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	hooks := append([]func(context.Context) error(nil), r.shutdownHooks...)
+	r.mu.RUnlock()
+
+	var joined error
+	for _, hook := range hooks {
+		if err := hook(ctx); err != nil {
+			joined = errors.Join(joined, err)
+		}
+	}
+	return joined
 }
 
 func (r *Registry) Register(def ToolDefinition, handler ToolHandler) error {
@@ -67,6 +97,7 @@ func (r *Registry) Register(def ToolDefinition, handler ToolHandler) error {
 		tier:         htools.TierCore,
 		parallelSafe: def.ParallelSafe,
 		mutating:     def.Mutating,
+		inflight:     &sync.WaitGroup{},
 	}
 	return nil
 }
@@ -115,9 +146,15 @@ func (r *Registry) DefinitionsWithMetadata() []ToolMetadata {
 func (r *Registry) Execute(ctx context.Context, name string, args json.RawMessage) (string, error) {
 	r.mu.RLock()
 	tool, exists := r.tools[name]
+	if exists && tool.inflight != nil {
+		tool.inflight.Add(1)
+	}
 	r.mu.RUnlock()
 	if !exists {
 		return "", fmt.Errorf("unknown tool %q", name)
+	}
+	if tool.inflight != nil {
+		defer tool.inflight.Done()
 	}
 	return tool.handler(ctx, args)
 }
@@ -148,6 +185,8 @@ func (r *Registry) RegisterWithOptions(def ToolDefinition, handler ToolHandler, 
 		tags:         copyStrings(opts.Tags),
 		parallelSafe: def.ParallelSafe,
 		mutating:     def.Mutating,
+		inflight:     &sync.WaitGroup{},
+		mcpServer:    mcpServerFromTags(opts.Tags),
 	}
 	return nil
 }
@@ -260,10 +299,12 @@ func (r *Registry) RegisterMCPTools(serverName string, toolDefs []htools.MCPTool
 			return mcpReg.CallTool(ctx, regServer, origName, args)
 		})
 		r.tools[toolName] = registeredTool{
-			def:     def,
-			handler: handler,
-			tier:    htools.TierDeferred,
-			tags:    []string{"mcp", "integration", "external", "dynamic"},
+			def:       def,
+			handler:   handler,
+			tier:      htools.TierDeferred,
+			tags:      []string{"mcp", "integration", "external", "dynamic", "mcp_server:" + serverName},
+			inflight:  &sync.WaitGroup{},
+			mcpServer: serverName,
 		}
 		registered = append(registered, toolName)
 	}
@@ -336,14 +377,23 @@ func (r *Registry) ReplaceByTag(sourceTag string, newTools []htools.Tool) error 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Remove all currently registered tools that carry the source tag.
+	var retiring []*sync.WaitGroup
+	var removeNames []string
 	for name, rt := range r.tools {
-		for _, tag := range rt.tags {
-			if tag == sourceTag {
-				delete(r.tools, name)
-				break
+		if hasToolTag(rt.tags, sourceTag) {
+			if rt.inflight != nil {
+				retiring = append(retiring, rt.inflight)
 			}
+			removeNames = append(removeNames, name)
 		}
+	}
+	for _, wg := range retiring {
+		wg.Wait()
+	}
+
+	// Remove all currently registered tools that carry the source tag.
+	for _, name := range removeNames {
+		delete(r.tools, name)
 	}
 
 	// Register the new tools, tagging each with sourceTag.
@@ -369,14 +419,63 @@ func (r *Registry) ReplaceByTag(sourceTag string, newTools []htools.Tool) error 
 
 		r.tools[t.Definition.Name] = registeredTool{
 			def: ToolDefinition{
-				Name:        t.Definition.Name,
-				Description: t.Definition.Description,
-				Parameters:  t.Definition.Parameters,
+				Name:         t.Definition.Name,
+				Description:  t.Definition.Description,
+				Parameters:   t.Definition.Parameters,
+				ParallelSafe: t.Definition.ParallelSafe,
+				Mutating:     t.Definition.Mutating,
 			},
-			handler: ToolHandler(t.Handler),
-			tier:    tier,
-			tags:    tags,
+			handler:      ToolHandler(t.Handler),
+			tier:         tier,
+			tags:         tags,
+			parallelSafe: t.Definition.ParallelSafe,
+			mutating:     t.Definition.Mutating,
+			inflight:     &sync.WaitGroup{},
+			mcpServer:    mcpServerFromTags(tags),
 		}
 	}
+	r.rebuildMCPServerToolsLocked()
 	return nil
+}
+
+func hasToolTag(tags []string, want string) bool {
+	for _, tag := range tags {
+		if tag == want {
+			return true
+		}
+	}
+	return false
+}
+
+func mcpServerFromTags(tags []string) string {
+	for _, tag := range tags {
+		if strings.HasPrefix(tag, "mcp_server:") {
+			return strings.TrimSpace(strings.TrimPrefix(tag, "mcp_server:"))
+		}
+	}
+	return ""
+}
+
+func (r *Registry) rebuildMCPServerToolsLocked() {
+	rebuilt := make(map[string][]string, len(r.mcpServers))
+	for server := range r.mcpServers {
+		rebuilt[server] = nil
+	}
+	for name, rt := range r.tools {
+		server := rt.mcpServer
+		if server == "" {
+			server = mcpServerFromTags(rt.tags)
+		}
+		if server == "" {
+			continue
+		}
+		if _, known := r.mcpServers[server]; !known {
+			continue
+		}
+		rebuilt[server] = append(rebuilt[server], name)
+	}
+	for server := range rebuilt {
+		sort.Strings(rebuilt[server])
+	}
+	r.mcpServerTools = rebuilt
 }

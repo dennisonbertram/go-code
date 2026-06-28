@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 )
 
 // panicProvider is a Provider that panics on every call.
@@ -206,6 +207,62 @@ func TestRunnerAcceptsNewRunsAfterPanic(t *testing.T) {
 	}
 	if state2.Status != RunStatusCompleted {
 		t.Fatalf("expected run 2 to complete, got %q; events: %v", state2.Status, eventTypes(events2))
+	}
+}
+
+func TestPoolDispatcherRecoverKeepsDispatchAlive(t *testing.T) {
+	holdRelease := make(chan struct{})
+	provider := &promptGateProvider{
+		gates: map[string]<-chan struct{}{
+			"hold": holdRelease,
+		},
+	}
+	runner := NewRunner(provider, NewRegistry(), RunnerConfig{
+		DefaultModel:   "gpt-4.1-mini",
+		WorkerPoolSize: 1,
+	})
+	runner.poolDispatchHook = func(item queuedRun) {
+		if item.req.Prompt == "panic" {
+			panic("dispatcher hook panic")
+		}
+	}
+
+	holdRun, err := runner.StartRun(RunRequest{Prompt: "hold"})
+	if err != nil {
+		t.Fatalf("StartRun hold: %v", err)
+	}
+	waitForStatus(t, runner, holdRun.ID, RunStatusRunning)
+
+	panicRun, err := runner.StartRun(RunRequest{Prompt: "panic"})
+	if err != nil {
+		t.Fatalf("StartRun panic: %v", err)
+	}
+	afterOne, err := runner.StartRun(RunRequest{Prompt: "after-one"})
+	if err != nil {
+		t.Fatalf("StartRun after-one: %v", err)
+	}
+	afterTwo, err := runner.StartRun(RunRequest{Prompt: "after-two"})
+	if err != nil {
+		t.Fatalf("StartRun after-two: %v", err)
+	}
+
+	close(holdRelease)
+	waitForStatus(t, runner, holdRun.ID, RunStatusCompleted)
+	waitForStatus(t, runner, panicRun.ID, RunStatusFailed)
+	waitForStatus(t, runner, afterOne.ID, RunStatusCompleted)
+	waitForStatus(t, runner, afterTwo.ID, RunStatusCompleted)
+
+	shutdownDone := make(chan error, 1)
+	go func() {
+		shutdownDone <- runner.Shutdown(context.Background())
+	}()
+	select {
+	case err := <-shutdownDone:
+		if err != nil {
+			t.Fatalf("Shutdown: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Shutdown hung; dispatcher panic leaked an inflight count")
 	}
 }
 

@@ -47,7 +47,17 @@ Common modes:
 go-code                         # interactive TUI in the current project
 go-code "summarize this repo"    # single-shot prompt
 go-code --server                # persistent local daemon
+go-code runs                    # list known runs
+go-code show <run-id>            # inspect one run
+go-code continue <run-id> "..."  # continue and stream a completed run
+go-code replay <run-id>          # replay a recorded run when rollout capture is enabled
+go-code search <query>           # search run metadata
+go-code improve --dry-run        # plan the self-improvement test loop
 ```
+
+Completed runs also keep a searchable workflow recap when persistence is enabled:
+goal, changed files, tests run, failure cause, fix pattern, useful commands, and
+a continuation prompt. `go-code search <query>` matches those recap fields.
 
 ## API Keys
 

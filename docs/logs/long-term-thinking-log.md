@@ -22,6 +22,72 @@
 - Solved struggle: Directory discovery alone did not satisfy no-restart hot loading for manually saved bundles; the fix was to route the existing watcher through `scriptWorkflowServiceRef.Reload` for workflow dirs and skill dirs.
 - Solved struggle: The full regression later failed the no-zero-coverage rule even though total coverage was above threshold; the fix was to add behavior tests for the new harnessd adapters, nested workflow/stderr/resume paths, and uncovered TUI editor helpers instead of weakening coveragegate.
 
+## 2026-06-27 (TUI-First Harness Completion Slice)
+
+- Command intent: Continue the dirty workspace implementation of the TUI-first personal `go-code` harness plan after the first daily-command and reliability slice landed locally.
+- User intent: Make `go-code` trustworthy as a daily terminal coding harness before adding broad web, cloud, or team surfaces.
+- Success definition:
+  - Finish the #644 reliability hardening slices and keep the regression gate green.
+  - Replace guidance-only daily TUI run-control commands with useful list/cancel/replay/resume behavior.
+  - Persist a searchable workflow recap for completed runs: goal, changed files, tests run, failure cause, fix pattern, useful commands, and next continuation prompt.
+  - Expose a first-class self-improvement command that plans or runs the existing autoresearch/test loop and can score the repo with native checks.
+  - Preserve `go-code`, single-shot prompts, daemon mode, and `harnesscli -prompt`.
+- Non-goals:
+  - Runtime rewrite, web UI, cloud/team features, or product onboarding polish.
+  - Weakening the coverage gate to pass around missing tests.
+- Guardrails/constraints:
+  - Work with the dirty workspace without reverting existing changes.
+  - Strict TDD for behavior changes and meaningful tests for coverage gaps.
+  - Keep docs/logs/indexes current and do not commit unless explicitly asked.
+- Next verification step: run `go test ./...`, `go test ./... -race`, and `./scripts/test-regression.sh` after the final documentation pass.
+
+## 2026-06-26 (TUI-First Personal Harness Implementation)
+
+- Command intent: Implement the TUI-first personal `go-code` harness plan by improving daily terminal ergonomics while beginning the reliability work that must make the baseline trustworthy.
+- User intent: Turn `go-code` into a dependable personal coding harness that can be launched from any repository, controlled from the terminal, resumed/replayed/searched without doc spelunking, and hardened against long-session failure modes before broader product surfaces grow.
+- Success definition:
+  - Preserve existing `go-code`, `go-code "prompt"`, `go-code --server`, and `harnesscli -prompt` behavior.
+  - Expose first-pass daily run-control commands through the installed wrapper and `harnesscli`: runs/list, show/status, cancel, continue, replay, and search.
+  - Register expected daily TUI slash-command entry points and keep snapshot coverage current.
+  - Add Conductor repository settings so workspaces can build and run the daemon consistently.
+  - Start P0 reliability hardening with a failing-first regression for a concrete #644 child slice.
+  - Keep changes narrow; do not rewrite the runtime or add broad cloud/team surfaces.
+- Non-goals:
+  - Completing all 15 reliability slices in one workspace change.
+  - Replacing the existing TUI/session architecture.
+  - Shipping web UI, public onboarding polish, or cloud/team control-plane features.
+- Guardrails/constraints:
+  - Strict TDD for behavior changes.
+  - Keep public docs limited to implemented behavior.
+  - Treat full-suite/race/regression gates as pending until the broader P0 merge path is executed.
+- Next verification step: finish the remaining #644 slices in order, then run `go test ./...`, `go test ./... -race`, and `./scripts/test-regression.sh` before promoting the reliability epic.
+
+## 2026-06-26 (Adapter-First Eval Harness)
+
+- Command intent: Implement the adapter-first eval harness plan by making Terminal-Bench runs reproducible, schema-validated, explainable, and regression-reportable before introducing any native `go-code eval` surface.
+- User intent: Turn `go-code` into a serious coding harness for Terminal-Bench-style evaluations where pass/fail, cost, logs, and failures can be trusted and compared over time.
+- Success definition:
+  - `scripts/run-terminal-bench.sh` has deterministic preflight for Docker, tmux, Terminal-Bench, model/provider configuration, and fake-provider key-free smoke mode.
+  - The Terminal-Bench adapter writes per-trial harness facts (`benchmark_result.json`, telemetry, and logs) without inventing task pass/fail.
+  - Postprocessing merges Terminal-Bench oracle results into schema-validated `results.jsonl`, writes campaign provenance, classifies failures, and generates an actionable report.
+  - Fast CI covers the artifact merge/report/preflight contract without requiring Docker or paid model calls.
+  - No new baseline is accepted until a green real-provider smoke campaign records git SHA, model, provider, Terminal-Bench version, task-set hash, concurrency, attempts, timeouts, and cost.
+- Non-goals:
+  - Adding a public native `go-code eval` command in this slice.
+  - Expanding the task suite beyond the existing smoke tier in this slice.
+  - Replacing sample baselines with real baselines without running a verified real-provider campaign.
+- Guardrails/constraints:
+  - Keep `is_resolved` and parser results external to the harness adapter.
+  - Keep paid Terminal-Bench runs out of PR gates unless explicitly enabled.
+  - Preserve Terminal-Bench as the primary operator interface.
+- Verification update on 2026-06-27:
+  - `scripts/test-regression.sh` now passes with `coveragegate: PASS (total=84.6%, min=80.0%, zero-functions=0)`.
+  - Initial real-provider attempts exposed and fixed three adapter blockers: `harnesscli` treated SSE keepalive comments as fatal, task command logs exposed inline provider credentials, and adapter JSON fetches parsed tmux-wrapped output instead of raw container stdout.
+  - The final real-provider smoke campaign ran under `.tmp/terminal-bench/real-smoke-20260627-002630/2026-06-27__00-26-42` with `provider=openai`, `model=gpt-5-mini`, Terminal-Bench `0.2.18`, dataset hash `31b29122bfa16205e6a66967fc444f5d46924a8ed9f39167cb27fc1e676d5457`, concurrency `1`, attempts `1`, and timeouts `1800/300`.
+  - The final campaign passed 7/7 and produced raw `results.json`, merged `results.jsonl`, `run-env.json`, `summary.json`, per-task `benchmark_result.json`, per-task `harness_telemetry.json`, logs, and `report.md`.
+  - `baseline.json` was promoted from the green campaign. Cost is recorded as `0.0` with `cost_status=unpriced_model` because `catalog/pricing.json` does not yet include `gpt-5-mini`.
+- Next verification step: add catalog pricing for `gpt-5-mini` or run a priced model before making cost-sensitive gates stricter than the current explicit `unpriced_model` baseline.
+
 ## 2026-05-03 (Repository Rename and Public README Cleanup)
 
 - Command intent: Rename the repository to `go-code` and make the public project presentation clear for first-time visitors.

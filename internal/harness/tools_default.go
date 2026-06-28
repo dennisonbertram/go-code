@@ -411,6 +411,7 @@ func NewDefaultRegistryWithOptions(workspaceRoot string, opts DefaultRegistryOpt
 
 	// -- Register all tools in the registry --
 	registry = NewRegistry()
+	registry.RegisterShutdownHook(jobManager.Shutdown)
 
 	for _, t := range coreTools {
 		def := ToolDefinition{

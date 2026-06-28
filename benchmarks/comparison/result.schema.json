@@ -171,6 +171,26 @@
       "type": "boolean",
       "description": "EXTERNAL: task pass/fail as determined by the pytest oracle (terminal-bench or equivalent). This field is NOT produced by the harness adapter — it must be merged in by the benchmark runner from the oracle's results. Never fake this field."
     },
+    "parser_results": {
+      "type": "object",
+      "description": "EXTERNAL: raw per-test oracle results from Terminal-Bench. Populated only by post-processing Terminal-Bench output.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "failure_classification": {
+      "type": "string",
+      "enum": [
+        "oracle_fail",
+        "agent_timeout",
+        "harness_error",
+        "provider_error",
+        "tool_contract_error",
+        "workspace_error",
+        "infra_error"
+      ],
+      "description": "DERIVED/EXTERNAL: post-processing classification for failed Terminal-Bench tasks. Not produced by the adapter."
+    },
     "git_sha": {
       "type": "string",
       "description": "Optional: git SHA of this repo at the time of the run. Recorded for reproducibility by the adapter when available."

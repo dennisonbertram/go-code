@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"go-agent-harness/internal/harness"
@@ -28,6 +29,27 @@ func newTestReplayServer(t *testing.T) *httptest.Server {
 	handler := NewWithOptions(ServerOptions{
 		Runner:       runner,
 		AuthDisabled: true,
+	})
+	return httptest.NewServer(handler)
+}
+
+func newTestReplayServerWithRolloutDir(t *testing.T, rolloutDir string) *httptest.Server {
+	t.Helper()
+	registry := harness.NewRegistry()
+	runner := harness.NewRunner(
+		&staticProvider{result: harness.CompletionResult{Content: "forked output"}},
+		registry,
+		harness.RunnerConfig{
+			DefaultModel:        "gpt-4.1-mini",
+			DefaultSystemPrompt: "test",
+			MaxSteps:            2,
+			RolloutDir:          rolloutDir,
+		},
+	)
+	handler := NewWithOptions(ServerOptions{
+		Runner:       runner,
+		AuthDisabled: true,
+		RolloutDir:   rolloutDir,
 	})
 	return httptest.NewServer(handler)
 }
@@ -82,6 +104,85 @@ func TestHandleRunReplay_Simulate(t *testing.T) {
 	}
 	if result["matched"] != true {
 		t.Errorf("expected matched=true, got %v", result["matched"])
+	}
+}
+
+func TestHandleRunReplay_DetectDriftReturns503WhenSemaphoreFull(t *testing.T) {
+	t.Parallel()
+
+	var constructed int32
+	s := &Server{
+		authDisabled:   true,
+		replayDriftSem: make(chan struct{}, 2),
+		driftRunnerFactory: func(provider harness.Provider, registry *harness.Registry, cfg harness.RunnerConfig) *harness.Runner {
+			atomic.AddInt32(&constructed, 1)
+			return harness.NewRunner(provider, registry, cfg)
+		},
+	}
+	s.replayDriftSem <- struct{}{}
+	s.replayDriftSem <- struct{}{}
+
+	ts := httptest.NewServer(s.hardenHandler(http.HandlerFunc(s.handleRunReplay)))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	content := `{"ts":"2026-03-12T10:00:00Z","seq":1,"type":"run.started","data":{"step":0,"prompt":"hello"}}
+{"ts":"2026-03-12T10:00:01Z","seq":2,"type":"llm.turn.completed","data":{"step":1,"content":"hi"}}
+{"ts":"2026-03-12T10:00:02Z","seq":3,"type":"run.completed","data":{"step":2}}`
+	rolloutPath := writeTestRollout(t, dir, "busy.jsonl", content)
+
+	body, _ := json.Marshal(map[string]any{
+		"rollout_path": rolloutPath,
+		"mode":         "simulate",
+		"detect_drift": true,
+	})
+	resp, err := http.Post(ts.URL+"/v1/runs/replay", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", resp.StatusCode)
+	}
+	if got := atomic.LoadInt32(&constructed); got != 0 {
+		t.Fatalf("expected saturated drift gate to skip runner construction, got %d", got)
+	}
+}
+
+func TestHandleRunReplay_SimulateResolvesBareRunID(t *testing.T) {
+	t.Parallel()
+	rolloutDir := t.TempDir()
+	ts := newTestReplayServerWithRolloutDir(t, rolloutDir)
+	defer ts.Close()
+
+	content := `{"ts":"2026-03-12T10:00:00Z","seq":1,"type":"run.started","data":{"step":0,"prompt":"hello"}}
+{"ts":"2026-03-12T10:00:01Z","seq":2,"type":"run.completed","data":{"step":1}}`
+	datedDir := filepath.Join(rolloutDir, "2026-03-12")
+	if err := os.MkdirAll(datedDir, 0o755); err != nil {
+		t.Fatalf("mkdir rollout date dir: %v", err)
+	}
+	writeTestRollout(t, datedDir, "run_bare.jsonl", content)
+
+	body, _ := json.Marshal(map[string]any{
+		"rollout_path": "run_bare",
+		"mode":         "simulate",
+	})
+	resp, err := http.Post(ts.URL+"/v1/runs/replay", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var result map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("decode error: %v", err)
+	}
+	if result["events_replayed"] != float64(2) {
+		t.Fatalf("events_replayed = %v, want 2", result["events_replayed"])
 	}
 }
 

@@ -4402,7 +4402,8 @@ func TestRecorderGoroutine_NilWhenNoRolloutDir(t *testing.T) {
 func TestRecorderGoroutine_DoneClosedAfterRun(t *testing.T) {
 	t.Parallel()
 	rolloutDir := t.TempDir()
-	prov := &stubProvider{turns: []CompletionResult{{Content: "done"}}}
+	release := make(chan struct{})
+	prov := &blockingProvider{blocker: release}
 	runner := NewRunner(prov, NewRegistry(), RunnerConfig{
 		DefaultModel: "test-model",
 		MaxSteps:     2,
@@ -4432,6 +4433,8 @@ func TestRecorderGoroutine_DoneClosedAfterRun(t *testing.T) {
 	if recDone == nil {
 		t.Fatal("recorderDone should be non-nil when RolloutDir is set; never saw it")
 	}
+
+	close(release)
 
 	// Wait for run to complete.
 	if _, err = collectRunEvents(t, runner, run.ID); err != nil {

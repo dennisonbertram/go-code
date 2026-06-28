@@ -81,6 +81,29 @@ func TestVMWorkspace_Provision_ProviderError(t *testing.T) {
 	}
 }
 
+func TestVMWorkspace_ProvisionKeepsVMIDOnPostCreateError(t *testing.T) {
+	postCreateErr := errors.New("post-create failed")
+	mp := &mockVMProvider{}
+	w := NewVM(mp)
+	w.postCreateHook = func() error {
+		return postCreateErr
+	}
+
+	err := w.Provision(context.Background(), Options{ID: "test"})
+	if !errors.Is(err, postCreateErr) {
+		t.Fatalf("expected postCreateErr, got %v", err)
+	}
+	if w.vmID != "vm-123" {
+		t.Fatalf("vmID should be retained for caller cleanup, got %q", w.vmID)
+	}
+	if err := w.Destroy(context.Background()); err != nil {
+		t.Fatalf("Destroy after post-create error: %v", err)
+	}
+	if len(mp.deletedIDs) != 1 || mp.deletedIDs[0] != "vm-123" {
+		t.Fatalf("Destroy should delete retained VM ID, got %v", mp.deletedIDs)
+	}
+}
+
 func TestVMWorkspace_Destroy_NotProvisioned(t *testing.T) {
 	w := NewVM(&mockVMProvider{})
 	if err := w.Destroy(context.Background()); err != nil {

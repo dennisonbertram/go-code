@@ -10,6 +10,33 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/inputarea"
 )
 
+// TestTUI_DailyHarnessCommandsSetGuidance verifies the TUI-first harness
+// command entry points are executable through the normal slash-command path.
+func TestTUI_DailyHarnessCommandsSetGuidance(t *testing.T) {
+	cases := []struct {
+		command string
+		want    string
+	}{
+		{command: "/attach", want: "Attach files by typing @path"},
+		{command: "/runs", want: "Loading runs"},
+		{command: "/cancel", want: "Usage: /cancel <run-id>"},
+		{command: "/replay", want: "Usage: /replay <run-id-or-rollout-path>"},
+		{command: "/resume", want: "Usage: /resume <run-id> <prompt>"},
+		{command: "/continue", want: "Usage: /resume <run-id> <prompt>"},
+		{command: "/doctor", want: "go test ./cmd/harnesscli"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.command, func(t *testing.T) {
+			m := initModel(t, 80, 24)
+			m = sendSlashCommand(m, tc.command)
+			if got := m.StatusMsg(); !strings.Contains(got, tc.want) {
+				t.Fatalf("StatusMsg() = %q, want substring %q", got, tc.want)
+			}
+		})
+	}
+}
+
 // ─── /model command tests ─────────────────────────────────────────────────────
 
 // TestTUI137_ModelCommandOpensOverlay verifies /model opens the model overlay.
@@ -227,10 +254,10 @@ func TestTUI137_ModelOverlayEnterReasoningModelEntersLevel1(t *testing.T) {
 }
 
 // TestTUI137_ModelOverlayEnterAtConfigPanelClosesAndSetsModel verifies that:
-// - Navigating to deepseek-reasoner via the two-level hierarchy opens the config panel.
-// - Navigating to the Reasoning section and selecting "low" effort.
-// - Enter at the config panel closes the overlay and emits ModelSelectedMsg with
-//   ReasoningEffort set correctly.
+//   - Navigating to deepseek-reasoner via the two-level hierarchy opens the config panel.
+//   - Navigating to the Reasoning section and selecting "low" effort.
+//   - Enter at the config panel closes the overlay and emits ModelSelectedMsg with
+//     ReasoningEffort set correctly.
 func TestTUI137_ModelOverlayEnterAtConfigPanelClosesAndSetsModel(t *testing.T) {
 	m := initModel(t, 80, 24)
 	m = sendSlashCommand(m, "/model")

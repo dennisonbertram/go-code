@@ -7,6 +7,16 @@ set -euo pipefail
 #   go-code                  Launch the interactive TUI (default).
 #   go-code "prompt"         Run a single prompt, stream output, then exit.
 #   go-code --server         Start harnessd in the background and print its URL.
+#   go-code runs             List known runs.
+#   go-code show <run-id>    Show one run.
+#   go-code cancel <run-id>  Cancel one run.
+#   go-code continue <run-id> "prompt"
+#                            Continue a completed run and stream events.
+#   go-code replay <run-id-or-rollout-path>
+#                            Replay a recorded run.
+#   go-code search <query>   Search run metadata.
+#   go-code improve [--target seam]
+#                            Run or plan the self-improvement test loop.
 #
 # Environment:
 #   HARNESS_ADDR   Listen address (default :8080). The port is extracted and
@@ -25,6 +35,16 @@ Usage:
   go-code "your prompt"    Run a single prompt, stream output, then exit.
   go-code --server         Start harnessd in the background, print the URL,
                            and exit. The server keeps running until killed.
+  go-code runs             List known runs.
+  go-code show <run-id>    Show one run.
+  go-code cancel <run-id>  Cancel one run.
+  go-code continue <run-id> "prompt"
+                           Continue a completed run and stream events.
+  go-code replay <run-id-or-rollout-path>
+                           Replay a recorded run.
+  go-code search <query>   Search run metadata.
+  go-code improve [--target seam]
+                           Run or plan the self-improvement test loop.
 
 Environment:
   HARNESS_ADDR   Override the server address (default: :8080).
@@ -181,8 +201,10 @@ find_project_root() {
 # --- main --------------------------------------------------------------------
 
 main() {
-  local mode="tui"   # tui | prompt | server
+  local mode="tui"   # tui | prompt | server | cli
   local prompt=""
+  local cli_command=""
+  local -a cli_args=()
 
   # Parse arguments.
   case "${1:-}" in
@@ -195,6 +217,60 @@ main() {
     --help|-h|help)
       usage
       exit 0
+      ;;
+    runs)
+      mode="cli"
+      cli_command="list"
+      shift
+      cli_args=("$@")
+      ;;
+    list)
+      mode="cli"
+      cli_command="list"
+      shift
+      cli_args=("$@")
+      ;;
+    show)
+      mode="cli"
+      cli_command="status"
+      shift
+      cli_args=("$@")
+      ;;
+    status)
+      mode="cli"
+      cli_command="status"
+      shift
+      cli_args=("$@")
+      ;;
+    cancel)
+      mode="cli"
+      cli_command="cancel"
+      shift
+      cli_args=("$@")
+      ;;
+    continue)
+      mode="cli"
+      cli_command="continue"
+      shift
+      cli_args=("$@")
+      ;;
+    replay)
+      mode="cli"
+      cli_command="replay"
+      shift
+      cli_args=("$@")
+      ;;
+    search)
+      mode="cli"
+      cli_command="search"
+      shift
+      cli_args=("$@")
+      ;;
+    improve)
+      mode="cli"
+      cli_command="improve"
+      shift
+      cli_args=("$@")
       ;;
     "")
       mode="tui"
@@ -251,6 +327,12 @@ main() {
         trap stop_server EXIT
       fi
       harnesscli -base-url "$base_url" -workspace "$project_root" -prompt "$prompt"
+      ;;
+    cli)
+      if [[ "$STARTED_BY_US" -eq 1 ]]; then
+        trap stop_server EXIT
+      fi
+      harnesscli "$cli_command" -base-url "$base_url" ${cli_args[@]+"${cli_args[@]}"}
       ;;
   esac
 }

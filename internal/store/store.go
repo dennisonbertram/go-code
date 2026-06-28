@@ -19,6 +19,19 @@ const (
 	RunStatusFailed         RunStatus = "failed"
 )
 
+// WorkflowRecap is a searchable, deterministic summary of a completed personal
+// harness task. It is derived from run state and tool traffic, not from another
+// model call, so it works in offline/fake-provider workflows.
+type WorkflowRecap struct {
+	Goal                   string   `json:"goal,omitempty"`
+	ChangedFiles           []string `json:"changed_files,omitempty"`
+	TestsRun               []string `json:"tests_run,omitempty"`
+	FailureCause           string   `json:"failure_cause,omitempty"`
+	FixPattern             string   `json:"fix_pattern,omitempty"`
+	UsefulCommands         []string `json:"useful_commands,omitempty"`
+	NextContinuationPrompt string   `json:"next_continuation_prompt,omitempty"`
+}
+
 // Run holds persisted run state.
 type Run struct {
 	ID             string    `json:"id"`
@@ -34,22 +47,23 @@ type Run struct {
 	// UsageTotalsJSON is a JSON blob of RunUsageTotals.
 	UsageTotalsJSON string `json:"-"`
 	// CostTotalsJSON is a JSON blob of RunCostTotals.
-	CostTotalsJSON string    `json:"-"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	CostTotalsJSON string         `json:"-"`
+	Recap          *WorkflowRecap `json:"recap,omitempty"`
+	CreatedAt      time.Time      `json:"created_at"`
+	UpdatedAt      time.Time      `json:"updated_at"`
 }
 
 // Message holds a single message persisted for a run.
 type Message struct {
-	Seq            int    `json:"seq"`
-	RunID          string `json:"run_id"`
-	Role           string `json:"role"`
-	Content        string `json:"content,omitempty"`
-	ToolCallsJSON  string `json:"-"` // JSON-encoded []harness.ToolCall
-	ToolCallID     string `json:"tool_call_id,omitempty"`
-	Name           string `json:"name,omitempty"`
-	IsMeta         bool   `json:"is_meta,omitempty"`
-	IsCompactSummary bool `json:"is_compact_summary,omitempty"`
+	Seq              int    `json:"seq"`
+	RunID            string `json:"run_id"`
+	Role             string `json:"role"`
+	Content          string `json:"content,omitempty"`
+	ToolCallsJSON    string `json:"-"` // JSON-encoded []harness.ToolCall
+	ToolCallID       string `json:"tool_call_id,omitempty"`
+	Name             string `json:"name,omitempty"`
+	IsMeta           bool   `json:"is_meta,omitempty"`
+	IsCompactSummary bool   `json:"is_compact_summary,omitempty"`
 }
 
 // Event holds a single SSE event persisted for a run.

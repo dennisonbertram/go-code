@@ -165,6 +165,36 @@ func TestRecordedProvider_DoesNotReadToolCallsFromTurnCompleted(t *testing.T) {
 	}
 }
 
+func TestReplayToolDispatchOutputReturnsRecordedResult(t *testing.T) {
+	t.Parallel()
+
+	dispatch, err := NewReplayToolDispatch([]rollout.RolloutEvent{
+		{Type: "run.started", Step: 0, Payload: map[string]any{"prompt": "go"}},
+		{Type: "llm.turn.completed", Step: 1, Payload: map[string]any{"tool_calls": float64(1)}},
+		{Type: "tool.call.started", Step: 1, Payload: map[string]any{
+			"call_id": "call-1", "tool": "bash", "arguments": `{"cmd":"echo hi"}`,
+		}},
+		{Type: "tool.call.completed", Step: 1, Payload: map[string]any{
+			"call_id": "call-1", "tool": "bash", "result": "preferred result", "output": "fallback output",
+		}},
+		{Type: "run.completed", Step: 2, Payload: map[string]any{"output": "done"}},
+	})
+	if err != nil {
+		t.Fatalf("NewReplayToolDispatch: %v", err)
+	}
+
+	got, ok := dispatch.Output("call-1")
+	if !ok {
+		t.Fatal("expected recorded output for call-1")
+	}
+	if got != "preferred result" {
+		t.Fatalf("Output = %q, want preferred result", got)
+	}
+	if got, ok := dispatch.Output("missing"); ok || got != "" {
+		t.Fatalf("missing Output = (%q, %v), want empty false", got, ok)
+	}
+}
+
 // TestRecordedProvider_SetsUsageAndCostStatus verifies that Complete sets
 // UsageStatus=ProviderReported and CostStatus=Available when the recorded step
 // carries usage and cost. Without these statuses, recordAccounting re-derives

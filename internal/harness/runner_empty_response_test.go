@@ -1,6 +1,7 @@
 package harness
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -77,8 +78,8 @@ func TestEmptyResponseRetry_RetriesAndContinues(t *testing.T) {
 }
 
 // TestEmptyResponseRetry_MaxRetriesExhausted verifies that after
-// maxEmptyRetries consecutive empty responses the run terminates
-// (without injecting more retries indefinitely).
+// maxEmptyRetries consecutive empty responses the run fails explicitly
+// instead of silently completing with empty output.
 func TestEmptyResponseRetry_MaxRetriesExhausted(t *testing.T) {
 	t.Parallel()
 
@@ -110,12 +111,15 @@ func TestEmptyResponseRetry_MaxRetriesExhausted(t *testing.T) {
 	if !ok {
 		t.Fatal("expected run state")
 	}
-	if state.Status != RunStatusCompleted {
-		t.Fatalf("expected completed status after max retries exhausted, got %q", state.Status)
+	if state.Status != RunStatusFailed {
+		t.Fatalf("expected failed status after max retries exhausted, got %q", state.Status)
+	}
+	if !strings.Contains(state.Error, "max_empty_responses") {
+		t.Fatalf("expected max_empty_responses error, got %q", state.Error)
 	}
 
-	// There should be exactly maxEmptyRetries-1 retry events (not maxEmptyRetries,
-	// because the last empty response falls through to completion without retrying).
+	// There should be exactly maxEmptyRetries-1 retry events; the final empty
+	// response fails the run instead of scheduling another retry.
 	retryCount := 0
 	for _, ev := range events {
 		if ev.Type == EventEmptyResponseRetry {
@@ -124,6 +128,47 @@ func TestEmptyResponseRetry_MaxRetriesExhausted(t *testing.T) {
 	}
 	if retryCount != maxEmptyRetries-1 {
 		t.Errorf("expected %d EventEmptyResponseRetry events, got %d", maxEmptyRetries-1, retryCount)
+	}
+}
+
+// TestEmptyResponseRetry_DoesNotConsumeStepBudget verifies empty-response
+// retries do not consume outer step budget. A run with MaxSteps=1 can still
+// recover after retryable empty responses.
+func TestEmptyResponseRetry_DoesNotConsumeStepBudget(t *testing.T) {
+	t.Parallel()
+
+	provider := &stubProvider{turns: []CompletionResult{
+		{Content: "", ToolCalls: nil},
+		{Content: "", ToolCalls: nil},
+		{Content: "Recovered within the first step"},
+	}}
+
+	runner := NewRunner(provider, NewRegistry(), RunnerConfig{
+		DefaultModel: "gemini-2.5-flash",
+		MaxSteps:     1,
+	})
+
+	run, err := runner.StartRun(RunRequest{Prompt: "Do something"})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	if _, err := collectRunEvents(t, runner, run.ID); err != nil {
+		t.Fatalf("collect events: %v", err)
+	}
+	if provider.calls != 3 {
+		t.Fatalf("expected provider to be called 3 times, got %d", provider.calls)
+	}
+
+	state, ok := runner.GetRun(run.ID)
+	if !ok {
+		t.Fatal("expected run state")
+	}
+	if state.Status != RunStatusCompleted {
+		t.Fatalf("expected completed status, got %q with error %q", state.Status, state.Error)
+	}
+	if state.Output != "Recovered within the first step" {
+		t.Fatalf("unexpected output: %q", state.Output)
 	}
 }
 

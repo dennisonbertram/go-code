@@ -191,7 +191,10 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 	httpServer := &http.Server{
 		Addr:              opts.addr,
 		Handler:           topMux,
+		ReadTimeout:       60 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	return httpRuntime{

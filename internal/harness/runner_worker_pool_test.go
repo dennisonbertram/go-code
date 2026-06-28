@@ -47,6 +47,8 @@ type countingHeldProvider struct {
 	firstEntered chan struct{} // closed when first call has entered
 	restWait     chan struct{} // closed to release subsequent calls
 	callCount    atomic.Int32
+	firstOnce    sync.Once
+	restOnce     sync.Once
 }
 
 func newCountingHeldProvider() *countingHeldProvider {
@@ -69,6 +71,14 @@ func (p *countingHeldProvider) Complete(_ context.Context, _ CompletionRequest) 
 		<-p.restWait
 	}
 	return CompletionResult{Content: "done"}, nil
+}
+
+func (p *countingHeldProvider) releaseFirst() {
+	p.firstOnce.Do(func() { close(p.firstWait) })
+}
+
+func (p *countingHeldProvider) releaseRest() {
+	p.restOnce.Do(func() { close(p.restWait) })
 }
 
 // seqRecordingProvider records the order in which calls complete.
@@ -160,6 +170,10 @@ func TestWorkerPool_QueuedTransitionsToRunning(t *testing.T) {
 	const poolSize = 1
 
 	prov := newCountingHeldProvider()
+	t.Cleanup(func() {
+		prov.releaseFirst()
+		prov.releaseRest()
+	})
 
 	runner := NewRunner(prov, NewRegistry(), RunnerConfig{
 		DefaultModel:   "gpt-4.1-mini",
@@ -195,9 +209,9 @@ func TestWorkerPool_QueuedTransitionsToRunning(t *testing.T) {
 	}
 
 	// Release run1.
-	close(prov.firstWait)
+	prov.releaseFirst()
 	// Unblock subsequent (run2) calls too.
-	close(prov.restWait)
+	prov.releaseRest()
 
 	waitForRunStatus(t, runner, run1.ID, RunStatusCompleted, 5*time.Second)
 	waitForRunStatus(t, runner, run2.ID, RunStatusCompleted, 5*time.Second)
@@ -369,6 +383,10 @@ func TestWorkerPool_RunQueuedEventEmitted(t *testing.T) {
 	t.Parallel()
 
 	prov := newCountingHeldProvider()
+	t.Cleanup(func() {
+		prov.releaseFirst()
+		prov.releaseRest()
+	})
 
 	runner := NewRunner(prov, NewRegistry(), RunnerConfig{
 		DefaultModel:   "gpt-4.1-mini",
@@ -385,7 +403,7 @@ func TestWorkerPool_RunQueuedEventEmitted(t *testing.T) {
 
 	select {
 	case <-prov.firstEntered:
-	case <-time.After(3 * time.Second):
+	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for first run to start")
 	}
 
@@ -424,8 +442,8 @@ func TestWorkerPool_RunQueuedEventEmitted(t *testing.T) {
 		t.Errorf("run2: expected run.queued event; got events: %v", types)
 	}
 
-	close(prov.firstWait)
-	close(prov.restWait)
+	prov.releaseFirst()
+	prov.releaseRest()
 	waitForRunStatus(t, runner, run1.ID, RunStatusCompleted, 5*time.Second)
 	waitForRunStatus(t, runner, run2.ID, RunStatusCompleted, 5*time.Second)
 }

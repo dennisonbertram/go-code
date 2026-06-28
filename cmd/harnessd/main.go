@@ -1428,6 +1428,7 @@ type cronClientAdapter struct {
 
 func (a *cronClientAdapter) CreateJob(ctx context.Context, req htools.CronCreateJobRequest) (htools.CronJob, error) {
 	j, err := a.client.CreateJob(ctx, cron.CreateJobRequest{
+		TenantID:   req.TenantID,
 		Name:       req.Name,
 		Schedule:   req.Schedule,
 		ExecType:   req.ExecType,
@@ -1436,6 +1437,9 @@ func (a *cronClientAdapter) CreateJob(ctx context.Context, req htools.CronCreate
 		Tags:       req.Tags,
 	})
 	if err != nil {
+		if cron.IsJobNotFound(err) {
+			return htools.CronJob{}, htools.ErrCronJobNotFound
+		}
 		return htools.CronJob{}, err
 	}
 	return cronJobFromCron(j), nil
@@ -1456,6 +1460,9 @@ func (a *cronClientAdapter) ListJobs(ctx context.Context) ([]htools.CronJob, err
 func (a *cronClientAdapter) GetJob(ctx context.Context, id string) (htools.CronJob, error) {
 	j, err := a.client.GetJob(ctx, id)
 	if err != nil {
+		if cron.IsJobNotFound(err) {
+			return htools.CronJob{}, htools.ErrCronJobNotFound
+		}
 		return htools.CronJob{}, err
 	}
 	return cronJobFromCron(j), nil
@@ -1470,13 +1477,22 @@ func (a *cronClientAdapter) UpdateJob(ctx context.Context, id string, req htools
 		Tags:       req.Tags,
 	})
 	if err != nil {
+		if cron.IsJobNotFound(err) {
+			return htools.CronJob{}, htools.ErrCronJobNotFound
+		}
 		return htools.CronJob{}, err
 	}
 	return cronJobFromCron(j), nil
 }
 
 func (a *cronClientAdapter) DeleteJob(ctx context.Context, id string) error {
-	return a.client.DeleteJob(ctx, id)
+	if err := a.client.DeleteJob(ctx, id); err != nil {
+		if cron.IsJobNotFound(err) {
+			return htools.ErrCronJobNotFound
+		}
+		return err
+	}
+	return nil
 }
 
 func (a *cronClientAdapter) ListExecutions(ctx context.Context, jobID string, limit, offset int) ([]htools.CronExecution, error) {
@@ -1498,6 +1514,7 @@ func (a *cronClientAdapter) Health(ctx context.Context) error {
 func cronJobFromCron(j cron.Job) htools.CronJob {
 	return htools.CronJob{
 		ID:         j.ID,
+		TenantID:   j.TenantID,
 		Name:       j.Name,
 		Schedule:   j.Schedule,
 		ExecType:   j.ExecType,
@@ -1554,6 +1571,7 @@ func (a *embeddedCronAdapter) CreateJob(ctx context.Context, req htools.CronCrea
 	now := a.clock.Now()
 	job := cron.Job{
 		ID:         uuid.New().String(),
+		TenantID:   req.TenantID,
 		Name:       req.Name,
 		Schedule:   req.Schedule,
 		ExecType:   req.ExecType,
@@ -1567,6 +1585,9 @@ func (a *embeddedCronAdapter) CreateJob(ctx context.Context, req htools.CronCrea
 	}
 	job, err = a.store.CreateJob(ctx, job)
 	if err != nil {
+		if cron.IsJobNotFound(err) {
+			return htools.CronJob{}, htools.ErrCronJobNotFound
+		}
 		return htools.CronJob{}, fmt.Errorf("store: %w", err)
 	}
 	if addErr := a.scheduler.AddJob(job); addErr != nil {
@@ -1590,9 +1611,15 @@ func (a *embeddedCronAdapter) ListJobs(ctx context.Context) ([]htools.CronJob, e
 func (a *embeddedCronAdapter) GetJob(ctx context.Context, id string) (htools.CronJob, error) {
 	job, err := a.store.GetJob(ctx, id)
 	if err != nil {
+		if !cron.IsJobNotFound(err) {
+			return htools.CronJob{}, err
+		}
 		job, err = a.store.GetJobByName(ctx, id)
 		if err != nil {
-			return htools.CronJob{}, fmt.Errorf("job not found")
+			if cron.IsJobNotFound(err) {
+				return htools.CronJob{}, htools.ErrCronJobNotFound
+			}
+			return htools.CronJob{}, err
 		}
 	}
 	return cronJobFromCron(job), nil
@@ -1601,7 +1628,10 @@ func (a *embeddedCronAdapter) GetJob(ctx context.Context, id string) (htools.Cro
 func (a *embeddedCronAdapter) UpdateJob(ctx context.Context, id string, req htools.CronUpdateJobRequest) (htools.CronJob, error) {
 	job, err := a.store.GetJob(ctx, id)
 	if err != nil {
-		return htools.CronJob{}, fmt.Errorf("job not found")
+		if cron.IsJobNotFound(err) {
+			return htools.CronJob{}, htools.ErrCronJobNotFound
+		}
+		return htools.CronJob{}, err
 	}
 
 	if req.Schedule != nil {
@@ -1651,6 +1681,9 @@ func (a *embeddedCronAdapter) UpdateJob(ctx context.Context, id string, req htoo
 
 	job.UpdatedAt = a.clock.Now()
 	if err := a.store.UpdateJob(ctx, job); err != nil {
+		if cron.IsJobNotFound(err) {
+			return htools.CronJob{}, htools.ErrCronJobNotFound
+		}
 		return htools.CronJob{}, fmt.Errorf("store: %w", err)
 	}
 	return cronJobFromCron(job), nil
@@ -1658,6 +1691,9 @@ func (a *embeddedCronAdapter) UpdateJob(ctx context.Context, id string, req htoo
 
 func (a *embeddedCronAdapter) DeleteJob(ctx context.Context, id string) error {
 	if err := a.store.DeleteJob(ctx, id); err != nil {
+		if cron.IsJobNotFound(err) {
+			return htools.ErrCronJobNotFound
+		}
 		return err
 	}
 	a.scheduler.RemoveJob(id)

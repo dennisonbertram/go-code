@@ -554,3 +554,227 @@ func TestRunCancel_SendsPostToCorrectPath(t *testing.T) {
 		t.Errorf("expected /v1/runs/run_test123/cancel, got %s", capturedPath)
 	}
 }
+
+func TestRunContinue_PostsPromptAndStreamsNewRun(t *testing.T) {
+	var capturedPrompt string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/runs/run_prev/continue":
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatalf("decode continue body: %v", err)
+			}
+			capturedPrompt = body["prompt"]
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = io.WriteString(w, `{"run_id":"run_next","status":"queued"}`)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/runs/run_next/events":
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: run.completed\n")
+			_, _ = io.WriteString(w, `data: {"id":"run_next:0","run_id":"run_next","type":"run.completed","payload":{"output":"ok"}}`+"\n\n")
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer ts.Close()
+
+	outBuf, errBuf, restore := captureOutput(t)
+	defer restore()
+
+	origRequestClient := requestHTTPClient
+	origStreamClient := streamHTTPClient
+	requestHTTPClient = ts.Client()
+	streamHTTPClient = ts.Client()
+	defer func() {
+		requestHTTPClient = origRequestClient
+		streamHTTPClient = origStreamClient
+	}()
+
+	code := runContinue([]string{"-base-url=" + ts.URL, "run_prev", "follow up"})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%s)", code, errBuf.String())
+	}
+	if capturedPrompt != "follow up" {
+		t.Fatalf("prompt = %q, want %q", capturedPrompt, "follow up")
+	}
+	output := outBuf.String()
+	for _, want := range []string{"run_id=run_next", "run.completed", "terminal_event=run.completed"} {
+		if !strings.Contains(output, want) {
+			t.Errorf("continue output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestRunReplay_PostsRolloutSpecifier(t *testing.T) {
+	var captured map[string]any
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/runs/replay" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode replay body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"mode":"simulate","events_replayed":3,"matched":true}`)
+	}))
+	defer ts.Close()
+
+	outBuf, errBuf, restore := captureOutput(t)
+	defer restore()
+
+	origClient := requestHTTPClient
+	requestHTTPClient = ts.Client()
+	defer func() { requestHTTPClient = origClient }()
+
+	code := runReplay([]string{"-base-url=" + ts.URL, "-detect-drift", "run_abc"})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%s)", code, errBuf.String())
+	}
+	if captured["rollout_path"] != "run_abc" {
+		t.Fatalf("rollout_path = %v, want run_abc", captured["rollout_path"])
+	}
+	if captured["mode"] != "simulate" {
+		t.Fatalf("mode = %v, want simulate", captured["mode"])
+	}
+	if captured["detect_drift"] != true {
+		t.Fatalf("detect_drift = %v, want true", captured["detect_drift"])
+	}
+	if !strings.Contains(outBuf.String(), `"events_replayed": 3`) {
+		t.Errorf("expected formatted replay JSON, got:\n%s", outBuf.String())
+	}
+}
+
+func TestRunSearch_FiltersRunMetadata(t *testing.T) {
+	runs := []map[string]any{
+		sampleRunJSON("run_match", "completed", "gpt-4o", "fix flaky terminal search"),
+		sampleRunJSON("run_other", "completed", "gpt-4o", "write release notes"),
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/v1/runs" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"runs": runs})
+	}))
+	defer ts.Close()
+
+	outBuf, errBuf, restore := captureOutput(t)
+	defer restore()
+
+	origClient := requestHTTPClient
+	requestHTTPClient = ts.Client()
+	defer func() { requestHTTPClient = origClient }()
+
+	code := runSearch([]string{"-base-url=" + ts.URL, "terminal"})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%s)", code, errBuf.String())
+	}
+	output := outBuf.String()
+	if !strings.Contains(output, "run_match") {
+		t.Errorf("search output missing matching run:\n%s", output)
+	}
+	if strings.Contains(output, "run_other") {
+		t.Errorf("search output included non-matching run:\n%s", output)
+	}
+}
+
+func TestRunSearch_MatchesWorkflowRecap(t *testing.T) {
+	match := sampleRunJSON("run_recap", "completed", "gpt-4o", "ordinary prompt")
+	match["recap"] = map[string]any{
+		"goal":                     "ordinary prompt",
+		"changed_files":            []string{"internal/harness/workflow_recap.go"},
+		"tests_run":                []string{"go test ./internal/harness"},
+		"fix_pattern":              "rare coverage needle",
+		"next_continuation_prompt": "Continue run_recap",
+	}
+	runs := []map[string]any{
+		match,
+		sampleRunJSON("run_other", "completed", "gpt-4o", "write release notes"),
+	}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"runs": runs})
+	}))
+	defer ts.Close()
+
+	outBuf, errBuf, restore := captureOutput(t)
+	defer restore()
+
+	origClient := requestHTTPClient
+	requestHTTPClient = ts.Client()
+	defer func() { requestHTTPClient = origClient }()
+
+	code := runSearch([]string{"-base-url=" + ts.URL, "rare coverage needle"})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%s)", code, errBuf.String())
+	}
+	output := outBuf.String()
+	if !strings.Contains(output, "run_recap") {
+		t.Errorf("search output missing recap match:\n%s", output)
+	}
+	if strings.Contains(output, "run_other") {
+		t.Errorf("search output included non-matching run:\n%s", output)
+	}
+}
+
+func TestPrintWorkflowRecapShowsSearchableTaskSummary(t *testing.T) {
+	outBuf, _, restore := captureOutput(t)
+	defer restore()
+
+	printWorkflowRecap(&workflowRecap{
+		Goal:                   "stabilize TUI run controls",
+		ChangedFiles:           []string{"cmd/harnesscli/tui/model.go", "cmd/harnesscli/tui/api.go"},
+		TestsRun:               []string{"go test ./cmd/harnesscli/tui"},
+		FailureCause:           "coveragegate found an uncovered run-control seam",
+		FixPattern:             "added regression coverage before implementation",
+		UsefulCommands:         []string{"go test ./cmd/harnesscli/tui", "./scripts/test-regression.sh"},
+		NextContinuationPrompt: "Continue run run_123",
+	})
+
+	output := outBuf.String()
+	for _, want := range []string{
+		"Recap:",
+		"Goal: stabilize TUI run controls",
+		"Changed files: cmd/harnesscli/tui/model.go, cmd/harnesscli/tui/api.go",
+		"Tests run: go test ./cmd/harnesscli/tui",
+		"Failure cause: coveragegate found an uncovered run-control seam",
+		"Fix pattern: added regression coverage before implementation",
+		"Useful commands: go test ./cmd/harnesscli/tui, ./scripts/test-regression.sh",
+		"Next: Continue run run_123",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("recap output missing %q:\n%s", want, output)
+		}
+	}
+}
+
+func TestDispatch_DailyAliasesRouted(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/runs":
+			_ = json.NewEncoder(w).Encode(map[string]any{"runs": []any{}})
+		case "/v1/runs/run_show":
+			_ = json.NewEncoder(w).Encode(sampleRunJSON("run_show", "completed", "gpt-4o", "done"))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer ts.Close()
+
+	origClient := requestHTTPClient
+	requestHTTPClient = ts.Client()
+	defer func() { requestHTTPClient = origClient }()
+
+	_, _, restore := captureOutput(t)
+	defer restore()
+
+	if code := dispatch([]string{"runs", "-base-url=" + ts.URL}); code != 0 {
+		t.Fatalf("dispatch runs returned %d", code)
+	}
+	if code := dispatch([]string{"show", "-base-url=" + ts.URL, "run_show"}); code != 0 {
+		t.Fatalf("dispatch show returned %d", code)
+	}
+}

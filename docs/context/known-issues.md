@@ -4,12 +4,12 @@
 
 **Severity:** HIGH / Security
 **Found:** 2026-03-31
-**Status:** Open
+**Status:** Resolved / stale doc reconciled 2026-06-26
 
-`ContinueRun` in `runner.go` does not copy `allowedTools` from the source run state. This means per-run tool restrictions are silently dropped after the first message in a multi-turn conversation. The continuation run defaults to `nil` (unrestricted), giving the agent access to all tools.
+This note is preserved for history, but the concrete continuation bug described here is no longer present in the current runner implementation.
 
-**Additionally:** Conversation history contains tool call results from prior runs, so the LLM "remembers" having tools even if they're filtered on the current run. This is a secondary exploit vector — even if `allowedTools` were properly propagated, old tool calls in history reinforce the model's belief that it has access.
+`ContinueRunWithOptions` now snapshots `state.allowedTools`, inherits that filter by default, and only replaces it when the continuation request provides an explicit `allowed_tools` value. The continuation request type also documents this inheritance contract.
 
-**Workaround:** None currently. The `allowed_tools` API field is effectively broken for multi-turn conversations.
+**Current residual security work:** adjacent `allowed_tools` issues may still exist, especially deferred-tool activation and stale conversation history behavior tracked outside this note. Do not use this entry as evidence that all `allowed_tools` security work is complete.
 
-**Fix:** Snapshot `allowedTools` in `ContinueRun`'s `contState` initialization, and consider sanitizing conversation history when tool restrictions change between runs.
+**Verification reference:** `internal/harness/runner.go` snapshots and propagates `allowedTools` during continuation, and `internal/server/http_continuation_test.go` covers continuation policy overrides.
