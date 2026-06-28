@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	htools "go-agent-harness/internal/harness/tools"
 )
@@ -274,6 +275,107 @@ func TestRegistry_UnregisterMCPServer_ToolNamesUsePrefix(t *testing.T) {
 	}
 	if !strings.HasPrefix(defs[0].Name, "mcp_social_extra_") {
 		t.Errorf("expected mcp_social_extra_find to remain, got %q", defs[0].Name)
+	}
+}
+
+func TestRegistry_ReplaceByTagRebuildsMCPServerTools(t *testing.T) {
+	r := NewRegistry()
+	caller := &mockMCPReg{}
+
+	if _, err := r.RegisterMCPTools("social", []htools.MCPToolDefinition{
+		{Name: "search", Description: "Search", Parameters: map[string]any{}},
+	}, caller); err != nil {
+		t.Fatalf("RegisterMCPTools: %v", err)
+	}
+
+	err := r.ReplaceByTag("dynamic", []htools.Tool{{
+		Definition: htools.Definition{
+			Name:        "mcp_social_fetch",
+			Description: "replacement",
+			Tags:        []string{"mcp", "mcp_server:social"},
+			Tier:        htools.TierDeferred,
+		},
+		Handler: func(context.Context, json.RawMessage) (string, error) {
+			return "replacement", nil
+		},
+	}})
+	if err != nil {
+		t.Fatalf("ReplaceByTag: %v", err)
+	}
+
+	r.mu.RLock()
+	tracked := append([]string(nil), r.mcpServerTools["social"]...)
+	r.mu.RUnlock()
+	if len(tracked) != 1 || tracked[0] != "mcp_social_fetch" {
+		t.Fatalf("expected social to track only replacement MCP tool, got %#v", tracked)
+	}
+
+	r.UnregisterMCPServer("social")
+	if _, err := r.Execute(context.Background(), "mcp_social_fetch", json.RawMessage(`{}`)); err == nil {
+		t.Fatal("expected replacement MCP tool to be removed by UnregisterMCPServer")
+	}
+}
+
+func TestRegistry_ReplaceByTagWaitsForInFlightExecution(t *testing.T) {
+	r := NewRegistry()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	if err := r.RegisterWithOptions(ToolDefinition{Name: "slow"}, func(context.Context, json.RawMessage) (string, error) {
+		close(started)
+		<-release
+		return "old", nil
+	}, RegisterOptions{Tags: []string{"hot"}}); err != nil {
+		t.Fatalf("RegisterWithOptions: %v", err)
+	}
+
+	execDone := make(chan struct{})
+	go func() {
+		defer close(execDone)
+		if _, err := r.Execute(context.Background(), "slow", json.RawMessage(`{}`)); err != nil {
+			t.Errorf("Execute slow: %v", err)
+		}
+	}()
+	<-started
+
+	replaceDone := make(chan struct{})
+	go func() {
+		defer close(replaceDone)
+		err := r.ReplaceByTag("hot", []htools.Tool{{
+			Definition: htools.Definition{Name: "slow", Tags: []string{"hot"}},
+			Handler: func(context.Context, json.RawMessage) (string, error) {
+				return "new", nil
+			},
+		}})
+		if err != nil {
+			t.Errorf("ReplaceByTag: %v", err)
+		}
+	}()
+
+	select {
+	case <-replaceDone:
+		t.Fatal("ReplaceByTag returned before the in-flight handler completed")
+	case <-time.After(25 * time.Millisecond):
+	}
+
+	close(release)
+	select {
+	case <-execDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for old execution")
+	}
+	select {
+	case <-replaceDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for ReplaceByTag")
+	}
+
+	got, err := r.Execute(context.Background(), "slow", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute replacement: %v", err)
+	}
+	if got != "new" {
+		t.Fatalf("expected replacement handler, got %q", got)
 	}
 }
 

@@ -1,0 +1,200 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "benchmarks/comparison/result.schema.json",
+  "title": "BenchmarkResult",
+  "description": "One result record per (tool, task) pair. Mirrors internal/benchresult.BenchmarkResult fields plus adapter-added fields (tool_id, task_id, git_sha) and external oracle fields (is_resolved). Fields are annotated to their real source. No invented fields. task pass/fail (is_resolved) is EXTERNAL — it comes from the pytest oracle, NOT from the harness API.",
+  "type": "object",
+  "required": [
+    "run_id",
+    "status",
+    "steps_taken",
+    "total_prompt_tokens",
+    "total_completion_tokens",
+    "total_cost_usd",
+    "cost_status",
+    "cache_hit_rate",
+    "model",
+    "prompt",
+    "created_at",
+    "updated_at",
+    "duration_ms",
+    "tool_calls",
+    "tool_id",
+    "task_id"
+  ],
+  "properties": {
+    "tool_id": {
+      "type": "string",
+      "description": "Entrant ID from tools.json (e.g. 'go-code'). Added by the adapter."
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Task identifier (e.g. 'go-interface-migration'). Added by the adapter from TASK_DIR basename or TASK_ID env var."
+    },
+    "run_id": {
+      "type": "string",
+      "description": "Source: benchresult.BenchmarkResult.RunID = RunSummary.RunID = Run.ID."
+    },
+    "status": {
+      "type": "string",
+      "enum": ["completed", "failed", "queued", "running", "cancelled"],
+      "description": "Terminal run status. Source: RunSummary.Status (harness.RunStatus). 'completed' means the harness finished — NOT that the task was solved."
+    },
+    "steps_taken": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Number of LLM turns before run ended. Source: RunSummary.StepsTaken."
+    },
+    "total_prompt_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Cumulative input-token count across all turns. Source: RunSummary.TotalPromptTokens."
+    },
+    "total_completion_tokens": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Cumulative output-token count across all turns. Source: RunSummary.TotalCompletionTokens."
+    },
+    "total_cost_usd": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Total run cost in USD. Source: RunSummary.TotalCostUSD."
+    },
+    "cost_status": {
+      "type": "string",
+      "description": "Pricing confidence level (e.g. 'available', 'unpriced_model', 'provider_unreported'). Source: RunSummary.CostStatus."
+    },
+    "cache_hit_rate": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1,
+      "description": "Fraction of prompt tokens served from cache [0,1]. Source: RunSummary.CacheHitRate."
+    },
+    "error_message": {
+      "type": "string",
+      "description": "Non-empty only when status == 'failed'. Source: RunSummary.Error."
+    },
+    "model": {
+      "type": "string",
+      "description": "Model name used for this run (e.g. 'gpt-4.1-mini'). Source: Run.Model."
+    },
+    "provider_name": {
+      "type": "string",
+      "description": "Resolved provider key (e.g. 'openai', 'anthropic'). Source: Run.ProviderName."
+    },
+    "prompt": {
+      "type": "string",
+      "description": "Task prompt submitted to the agent. Source: Run.Prompt."
+    },
+    "output": {
+      "type": "string",
+      "description": "Final agent response text. Source: Run.Output."
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant scoping key if set. Source: Run.TenantID."
+    },
+    "conversation_id": {
+      "type": "string",
+      "description": "Conversation continuity key if set. Source: Run.ConversationID."
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "Agent identifier if set. Source: Run.AgentID."
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp when the run was created. Source: Run.CreatedAt."
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC timestamp of the last run state change. Source: Run.UpdatedAt."
+    },
+    "duration_ms": {
+      "type": "integer",
+      "description": "DERIVED: Run.UpdatedAt.Sub(Run.CreatedAt).Milliseconds(). Not a raw API field."
+    },
+    "rollout_path": {
+      "type": "string",
+      "description": "RECONSTRUCTED: <rolloutDir>/<YYYY-MM-DD>/<run_id>.jsonl from Run.CreatedAt UTC. Empty when rolloutDir is unknown. Never guessed."
+    },
+    "tool_calls": {
+      "type": "array",
+      "description": "Ordered list of tool invocations. Source: RunSummary.ToolCalls.",
+      "items": {
+        "type": "object",
+        "required": ["tool_name", "step"],
+        "properties": {
+          "tool_name": {
+            "type": "string",
+            "description": "Registered name of the tool called. Source: ToolCallSummary.ToolName."
+          },
+          "step": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "LLM turn number during which the tool was called (1-indexed). Source: ToolCallSummary.Step."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "drift": {
+      "type": "object",
+      "description": "EXTERNAL/opt-in. Populated by an external drift-analysis oracle AFTER the run. Never derived from harness data.",
+      "properties": {
+        "baseline_run_id": {
+          "type": "string",
+          "description": "EXTERNAL: Run ID of the reference run being compared against."
+        },
+        "output_similarity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "EXTERNAL: [0,1] similarity score vs. baseline output."
+        },
+        "drift_flags": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "EXTERNAL: Free-text flags describing detected differences."
+        }
+      },
+      "additionalProperties": false
+    },
+    "forensic_events": {
+      "type": "array",
+      "items": { "type": "object" },
+      "description": "EXTERNAL/opt-in. Raw forensic event payloads from the rollout JSONL. Populated by an external loader, never by the adapter."
+    },
+    "is_resolved": {
+      "type": "boolean",
+      "description": "EXTERNAL: task pass/fail as determined by the pytest oracle (terminal-bench or equivalent). This field is NOT produced by the harness adapter — it must be merged in by the benchmark runner from the oracle's results. Never fake this field."
+    },
+    "parser_results": {
+      "type": "object",
+      "description": "EXTERNAL: raw per-test oracle results from Terminal-Bench. Populated only by post-processing Terminal-Bench output.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "failure_classification": {
+      "type": "string",
+      "enum": [
+        "oracle_fail",
+        "agent_timeout",
+        "harness_error",
+        "provider_error",
+        "tool_contract_error",
+        "workspace_error",
+        "infra_error"
+      ],
+      "description": "DERIVED/EXTERNAL: post-processing classification for failed Terminal-Bench tasks. Not produced by the adapter."
+    },
+    "git_sha": {
+      "type": "string",
+      "description": "Optional: git SHA of this repo at the time of the run. Recorded for reproducibility by the adapter when available."
+    }
+  },
+  "additionalProperties": false
+}

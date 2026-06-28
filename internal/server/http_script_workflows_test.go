@@ -24,11 +24,11 @@ import (
 // =============================================================================
 
 type mockScriptWorkflowMgr struct {
-	mu       sync.Mutex
-	runs     map[string]*workflow.Run
-	events   map[string][]workflow.Event
-	subs     map[string]map[chan workflow.Event]struct{}
-	seqs     map[string]int64
+	mu        sync.Mutex
+	runs      map[string]*workflow.Run
+	events    map[string][]workflow.Event
+	subs      map[string]map[chan workflow.Event]struct{}
+	seqs      map[string]int64
 	workflows []workflow.Meta
 }
 
@@ -433,7 +433,9 @@ func TestPOC6_EndToEndWorkflowLifecycle(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
-	var listResp struct{ Workflows []workflow.Meta `json:"workflows"` }
+	var listResp struct {
+		Workflows []workflow.Meta `json:"workflows"`
+	}
 	json.Unmarshal(rec.Body.Bytes(), &listResp)
 	assert.Len(t, listResp.Workflows, 3)
 
@@ -443,7 +445,9 @@ func TestPOC6_EndToEndWorkflowLifecycle(t *testing.T) {
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusAccepted, rec.Code)
-	var startResp struct{ RunID string `json:"run_id"` }
+	var startResp struct {
+		RunID string `json:"run_id"`
+	}
 	json.Unmarshal(rec.Body.Bytes(), &startResp)
 
 	// Step 3: Start "deploy" workflow
@@ -451,11 +455,21 @@ func TestPOC6_EndToEndWorkflowLifecycle(t *testing.T) {
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusAccepted, rec.Code)
-	var deployResp struct{ RunID string `json:"run_id"` }
+	var deployResp struct {
+		RunID string `json:"run_id"`
+	}
 	json.Unmarshal(rec.Body.Bytes(), &deployResp)
 
-	// Step 4: Stream events for analyze
+	// Step 4: Stream events for analyze — blocks until workflow.completed received.
 	req = httptest.NewRequest(http.MethodGet, "/v1/script-workflow-runs/"+startResp.RunID+"/events", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	assert.Contains(t, rec.Body.String(), "event: workflow.completed")
+
+	// Step 4b: Stream events for deploy — ensures the deploy goroutine has finished
+	// before we poll its status in Step 5 (avoids a timing race where the 50 ms
+	// async completion goroutine has not yet marked the run "completed").
+	req = httptest.NewRequest(http.MethodGet, "/v1/script-workflow-runs/"+deployResp.RunID+"/events", nil)
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	assert.Contains(t, rec.Body.String(), "event: workflow.completed")
@@ -466,7 +480,9 @@ func TestPOC6_EndToEndWorkflowLifecycle(t *testing.T) {
 		rec = httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
-		var runResp struct{ Status string `json:"status"` }
+		var runResp struct {
+			Status string `json:"status"`
+		}
 		json.Unmarshal(rec.Body.Bytes(), &runResp)
 		assert.Equal(t, "completed", runResp.Status)
 	}
@@ -505,7 +521,9 @@ func TestPOC7_ConcurrentWorkflowRuns(t *testing.T) {
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
 			assert.Equal(t, http.StatusAccepted, rec.Code)
-			var resp struct{ RunID string `json:"run_id"` }
+			var resp struct {
+				RunID string `json:"run_id"`
+			}
 			json.Unmarshal(rec.Body.Bytes(), &resp)
 			mu.Lock()
 			runIDs[idx] = resp.RunID
@@ -587,7 +605,9 @@ func TestPOC9_SSEEventFormat(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/script-workflows/test-workflow/runs", nil)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
-	var startResp struct{ RunID string `json:"run_id"` }
+	var startResp struct {
+		RunID string `json:"run_id"`
+	}
 	json.Unmarshal(rec.Body.Bytes(), &startResp)
 
 	// Stream events

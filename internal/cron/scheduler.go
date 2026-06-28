@@ -201,9 +201,13 @@ func (s *Scheduler) fireJob(job Job) {
 			log.Printf("cron: failed to update execution %s: %v", exec.ID, updateErr)
 		}
 
-		// Update job's last_run_at.
+		// Update job's last_run_at and recompute NextRunAt.
 		job.LastRunAt = endTime
 		job.UpdatedAt = endTime
+		if next, parseErr := NextRunTime(job.Schedule, endTime); parseErr == nil {
+			job.NextRunAt = next
+		}
+		// On schedule parse error, NextRunAt is left unchanged.
 		if updateErr := s.store.UpdateJob(ctx, job); updateErr != nil {
 			log.Printf("cron: failed to update job %s last_run_at: %v", job.ID, updateErr)
 		}

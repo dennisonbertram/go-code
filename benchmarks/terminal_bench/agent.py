@@ -8,7 +8,9 @@ import shlex
 import subprocess
 import tarfile
 import tempfile
+import threading
 from pathlib import Path
+from datetime import datetime, timezone
 
 from terminal_bench.agents.base_agent import AgentResult, BaseAgent
 from terminal_bench.agents.failure_mode import FailureMode
@@ -18,6 +20,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONTAINER_REPO_ROOT = "/opt/go-agent-harness"
 CONTAINER_BIN_DIR = "/tmp/go-agent-harness-bin"
 HARNESS_BASE_URL = "http://127.0.0.1:8080"
+_BINARY_CACHE: dict[str, Path] = {}
+_BINARY_CACHE_LOCK = threading.Lock()
 
 
 class GoAgentHarnessAgent(BaseAgent):
@@ -29,6 +33,16 @@ class GoAgentHarnessAgent(BaseAgent):
         self._max_steps = kwargs.get("harness_max_steps", os.getenv("HARNESS_BENCH_MAX_STEPS", "100"))
         self._memory_mode = kwargs.get("harness_memory_mode", os.getenv("HARNESS_BENCH_MEMORY_MODE", "off"))
         self._target_arch = kwargs.get("target_arch", os.getenv("HARNESS_BENCH_TARGET_ARCH", self._default_target_arch()))
+        self._provider = kwargs.get("harness_provider", os.getenv("HARNESS_PROVIDER", ""))
+        self._fake_turns = kwargs.get("harness_fake_turns", os.getenv("HARNESS_FAKE_TURNS", ""))
+        self._binary_dir = kwargs.get("harness_binary_dir", os.getenv("HARNESS_BENCH_BINARY_DIR", ""))
+        self._pricing_catalog_path = kwargs.get(
+            "harness_pricing_catalog_path",
+            os.getenv(
+                "HARNESS_BENCH_PRICING_CATALOG_PATH",
+                f"{CONTAINER_REPO_ROOT}/catalog/pricing.json",
+            ),
+        )
 
     @staticmethod
     def name() -> str:
@@ -40,19 +54,29 @@ class GoAgentHarnessAgent(BaseAgent):
         session: TmuxSession,
         logging_dir: Path | None = None,
     ) -> AgentResult:
-        if not self._api_key:
+        fake_mode = self._provider == "fake" and bool(self._fake_turns)
+        if not self._api_key and not fake_mode:
             return AgentResult(failure_mode=FailureMode.AGENT_INSTALLATION_FAILED)
 
         archive_path = self._package_repo()
+        env_file_path: Path | None = None
         binary_dir = self._build_binaries()
+        container_fake_turns = ""
         session.copy_to_container(paths=[archive_path], container_dir="/tmp")
+        if self._fake_turns:
+            fake_turns_path = Path(self._fake_turns)
+            session.copy_to_container(paths=[fake_turns_path], container_dir="/tmp")
+            container_fake_turns = f"/tmp/{fake_turns_path.name}"
+        env_file_path = self._write_env_file(container_fake_turns)
+        session.copy_to_container(paths=[env_file_path], container_dir="/tmp")
+        container_env_path = f"/tmp/{env_file_path.name}"
         session.copy_to_container(
             paths=[binary_dir / "harnessd", binary_dir / "harnesscli"],
             container_dir="/tmp",
         )
 
         try:
-            install_script = self._build_install_script(archive_path.name)
+            install_script = self._build_install_script(archive_path.name, container_env_path)
             session.send_keys([f"bash -lc {shlex.quote(install_script)}", "Enter"], block=True, max_timeout_sec=1200)
 
             run_script = self._build_run_script(self._render_instruction(instruction))
@@ -61,35 +85,41 @@ class GoAgentHarnessAgent(BaseAgent):
 
             terminal_output = session.capture_pane(capture_entire=True)
             run_id = self._extract_run_id(terminal_output)
+            run_record = self._fetch_run_record(session, run_id)
             telemetry = self._fetch_telemetry(session, run_id)
-            if logging_dir and telemetry:
+            if logging_dir:
                 logging_dir.mkdir(parents=True, exist_ok=True)
-                (logging_dir / "harness_telemetry.json").write_text(
-                    json.dumps(telemetry, indent=2)
+                if telemetry:
+                    (logging_dir / "harness_telemetry.json").write_text(
+                        json.dumps(telemetry, indent=2)
+                    )
+                benchmark_result = self._build_benchmark_result(
+                    run_record,
+                    telemetry,
+                    self._render_instruction(instruction),
+                    logging_dir,
                 )
+                if benchmark_result:
+                    (logging_dir / "benchmark_result.json").write_text(
+                        json.dumps(benchmark_result, indent=2)
+                    )
+                harness_log = self._capture_container_file(session, "/tmp/harnessd.log")
+                if harness_log:
+                    (logging_dir / "harnessd.log").write_text(harness_log)
             if "terminal_event=run.completed" in terminal_output:
                 return self._make_result(FailureMode.NONE, telemetry)
             return AgentResult(failure_mode=FailureMode.UNKNOWN_AGENT_ERROR)
         finally:
             archive_path.unlink(missing_ok=True)
-            for binary_path in binary_dir.glob("*"):
-                binary_path.unlink(missing_ok=True)
-            binary_dir.rmdir()
+            if env_file_path:
+                env_file_path.unlink(missing_ok=True)
 
-    def _build_install_script(self, archive_name: str) -> str:
-        server_command = self._shell_join(
-            {
-                "OPENAI_API_KEY": self._api_key,
-                "OPENAI_BASE_URL": self._base_url,
-                "HARNESS_ADDR": ":8080",
-                "HARNESS_MODEL": self._model,
-                "HARNESS_MAX_STEPS": str(self._max_steps),
-                "HARNESS_MEMORY_MODE": self._memory_mode,
-                "HARNESS_PROMPTS_DIR": f"{CONTAINER_REPO_ROOT}/prompts",
-            },
-            f"{CONTAINER_BIN_DIR}/harnessd >/tmp/harnessd.log 2>&1",
+    def _build_install_script(self, archive_name: str, container_env_path: str) -> str:
+        quoted_env_path = shlex.quote(container_env_path)
+        tmux_command = (
+            f'cd "$TASK_ROOT" && set -a && . {quoted_env_path} && set +a && '
+            f'HARNESS_WORKSPACE="$TASK_ROOT" {CONTAINER_BIN_DIR}/harnessd >/tmp/harnessd.log 2>&1'
         )
-        tmux_command = f'cd "$TASK_ROOT" && HARNESS_WORKSPACE="$TASK_ROOT" {server_command}'
         return f"""
 set -euo pipefail
 TASK_ROOT="$(pwd)"
@@ -113,6 +143,31 @@ echo "harness server did not become healthy" >&2
 tail -n 200 /tmp/harnessd.log >&2 || true
 exit 1
 """
+
+    def _write_env_file(self, container_fake_turns: str = "") -> Path:
+        fd, temp_path = tempfile.mkstemp(prefix="go-agent-harness-env-", suffix=".sh")
+        os.close(fd)
+        env_path = Path(temp_path)
+        env_map = {
+            "OPENAI_API_KEY": self._api_key,
+            "OPENAI_BASE_URL": self._base_url,
+            "HARNESS_PROVIDER": self._provider,
+            "HARNESS_FAKE_TURNS": container_fake_turns,
+            "HARNESS_ADDR": ":8080",
+            "HARNESS_MODEL": self._model,
+            "HARNESS_MAX_STEPS": str(self._max_steps),
+            "HARNESS_MEMORY_MODE": self._memory_mode,
+            "HARNESS_PROMPTS_DIR": f"{CONTAINER_REPO_ROOT}/prompts",
+            "HARNESS_PRICING_CATALOG_PATH": self._pricing_catalog_path,
+        }
+        lines = ["# go-code Terminal-Bench harness environment"]
+        for key, value in env_map.items():
+            if value == "":
+                continue
+            lines.append(f"{key}={shlex.quote(str(value))}")
+        env_path.write_text("\n".join(lines) + "\n")
+        env_path.chmod(0o600)
+        return env_path
 
     def _build_run_script(self, instruction: str) -> str:
         cli_command = self._shell_join(
@@ -161,6 +216,18 @@ cd "$TASK_ROOT"
         return tarinfo
 
     def _build_binaries(self) -> Path:
+        if self._binary_dir:
+            candidate = Path(self._binary_dir)
+            if (candidate / "harnessd").exists() and (candidate / "harnesscli").exists():
+                return candidate
+            raise FileNotFoundError(f"HARNESS_BENCH_BINARY_DIR missing harness binaries: {candidate}")
+
+        cache_key = self._target_arch
+        with _BINARY_CACHE_LOCK:
+            cached = _BINARY_CACHE.get(cache_key)
+            if cached and (cached / "harnessd").exists() and (cached / "harnesscli").exists():
+                return cached
+
         temp_dir = Path(tempfile.mkdtemp(prefix="go-agent-harness-bin-"))
         build_env = os.environ.copy()
         build_env.update(
@@ -182,6 +249,8 @@ cd "$TASK_ROOT"
             env=build_env,
             check=True,
         )
+        with _BINARY_CACHE_LOCK:
+            _BINARY_CACHE[cache_key] = temp_dir
         return temp_dir
 
     def _default_target_arch(self) -> str:
@@ -203,29 +272,117 @@ cd "$TASK_ROOT"
 
     @staticmethod
     def _extract_run_id(terminal_output: str) -> str | None:
-        match = re.search(r"run_id=(\S+)", terminal_output)
-        return match.group(1) if match else None
+        for pattern in [r"run_id=(\S+)", r'"run_id"\s*:\s*"([^"]+)"']:
+            match = re.search(pattern, terminal_output)
+            if match:
+                return match.group(1)
+        return None
 
     @staticmethod
     def _fetch_telemetry(session: TmuxSession, run_id: str | None) -> dict | None:
-        if not run_id:
+        return GoAgentHarnessAgent._fetch_json(session, f"{HARNESS_BASE_URL}/v1/runs/{run_id}/summary" if run_id else "")
+
+    @staticmethod
+    def _fetch_run_record(session: TmuxSession, run_id: str | None) -> dict | None:
+        return GoAgentHarnessAgent._fetch_json(session, f"{HARNESS_BASE_URL}/v1/runs/{run_id}" if run_id else "")
+
+    @staticmethod
+    def _fetch_json(session: TmuxSession, url: str) -> dict | None:
+        if not url:
             return None
         try:
-            fetch_script = (
-                f"curl -fsS {HARNESS_BASE_URL}/v1/runs/{run_id}/summary"
-            )
-            session.clear_history()
-            session.send_keys(
-                [f"bash -lc {shlex.quote(fetch_script)}", "Enter"],
-                block=True,
-                max_timeout_sec=10,
-            )
-            output = session.capture_pane(capture_entire=True)
-            # Find the JSON object in the output
-            for line in output.splitlines():
-                stripped = line.strip()
-                if stripped.startswith("{"):
-                    return json.loads(stripped)
-            return None
+            result = session.container.exec_run(["curl", "-fsS", url])
+            if result.exit_code != 0:
+                return None
+            return json.loads(result.output.decode(errors="replace"))
         except Exception:
             return None
+
+    @staticmethod
+    def _capture_container_file(session: TmuxSession, path: str) -> str:
+        try:
+            script = f"test -f {shlex.quote(path)} && cat {shlex.quote(path)} || true"
+            result = session.container.exec_run(["sh", "-lc", script])
+            if result.exit_code != 0:
+                return ""
+            return result.output.decode(errors="replace")
+        except Exception:
+            return ""
+
+    def _build_benchmark_result(
+        self,
+        run_record: dict | None,
+        telemetry: dict | None,
+        prompt: str,
+        logging_dir: Path,
+    ) -> dict | None:
+        if not run_record and not telemetry:
+            return None
+        run_record = run_record or {}
+        telemetry = telemetry or {}
+        created_at = run_record.get("created_at") or self._now_iso()
+        updated_at = run_record.get("updated_at") or created_at
+        result = {
+            "tool_id": "go-code",
+            "task_id": self._task_id_from_logging_dir(logging_dir),
+            "run_id": telemetry.get("run_id") or run_record.get("id") or run_record.get("run_id") or "",
+            "status": telemetry.get("status") or run_record.get("status") or "failed",
+            "steps_taken": int(telemetry.get("steps_taken") or 0),
+            "total_prompt_tokens": int(telemetry.get("total_prompt_tokens") or 0),
+            "total_completion_tokens": int(telemetry.get("total_completion_tokens") or 0),
+            "total_cost_usd": float(telemetry.get("total_cost_usd") or 0.0),
+            "cost_status": telemetry.get("cost_status") or "provider_unreported",
+            "cache_hit_rate": float(telemetry.get("cache_hit_rate") or 0.0),
+            "model": run_record.get("model") or self._model,
+            "prompt": run_record.get("prompt") or prompt,
+            "created_at": created_at,
+            "updated_at": updated_at,
+            "duration_ms": self._duration_ms(created_at, updated_at),
+            "tool_calls": telemetry.get("tool_calls") or [],
+        }
+        optional_map = {
+            "provider_name": run_record.get("provider_name"),
+            "output": run_record.get("output"),
+            "tenant_id": run_record.get("tenant_id"),
+            "conversation_id": run_record.get("conversation_id"),
+            "agent_id": run_record.get("agent_id"),
+            "error_message": telemetry.get("error") or run_record.get("error"),
+        }
+        for key, value in optional_map.items():
+            if value:
+                result[key] = value
+        return result
+
+    @staticmethod
+    def _task_id_from_logging_dir(logging_dir: Path) -> str:
+        parts = logging_dir.parts
+        if len(parts) >= 3 and parts[-1] == "agent-logs":
+            return parts[-3]
+        if len(parts) >= 2:
+            return parts[-2]
+        return ""
+
+    @staticmethod
+    def _duration_ms(created_at: str, updated_at: str) -> int:
+        try:
+            start = GoAgentHarnessAgent._parse_ts(created_at)
+            end = GoAgentHarnessAgent._parse_ts(updated_at)
+            if start and end:
+                return int((end - start).total_seconds() * 1000)
+        except Exception:
+            pass
+        return 0
+
+    @staticmethod
+    def _parse_ts(value: str) -> datetime | None:
+        if not value:
+            return None
+        normalized = value.replace("Z", "+00:00")
+        try:
+            return datetime.fromisoformat(normalized)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _now_iso() -> str:
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")

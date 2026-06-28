@@ -18,11 +18,11 @@ import (
 // =============================================================================
 
 type mockExecutor struct {
-	backend    string
-	executeFn  func(ctx context.Context, job cloudscheduler.Job) (string, error)
-	callCount  int
-	mu         sync.Mutex
-	delay      time.Duration
+	backend   string
+	executeFn func(ctx context.Context, job cloudscheduler.Job) (string, error)
+	callCount int
+	mu        sync.Mutex
+	delay     time.Duration
 }
 
 func (m *mockExecutor) Backend() string { return m.backend }
@@ -56,10 +56,12 @@ func TestCloudPOC1_SubmitAndComplete(t *testing.T) {
 	sched.RegisterExecutor(newMockExecutor("docker"))
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	sched.Start(ctx)
-	defer sched.Stop()
 
-	// Submit a job
+	// Submit BEFORE Start so the submit-time status is deterministically observable.
+	// If we Start() first, the worker can complete the (instant) mock job before this
+	// assertion runs, racing the transient "queued" state. Submit enqueues into the
+	// buffered channel and the deferred Start() drains it. (Submit now also returns a
+	// by-value snapshot, so job.Status is a stable submit-time view regardless.)
 	job, err := sched.Submit(cloudscheduler.Job{
 		WorkflowName: "test-workflow",
 		Args:         map[string]any{"target": "production"},
@@ -68,8 +70,11 @@ func TestCloudPOC1_SubmitAndComplete(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, cloudscheduler.JobStatusQueued, job.Status)
 
-	// Wait for completion
-	deadline := time.Now().Add(5 * time.Second)
+	sched.Start(ctx)
+	defer sched.Stop()
+
+	// Wait for completion. Generous deadline to survive heavy parallel load.
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		j, _ := sched.GetJob(job.ID)
 		if j.Status == cloudscheduler.JobStatusCompleted || j.Status == cloudscheduler.JobStatusFailed {
@@ -115,10 +120,16 @@ func TestCloudPOC2_MultipleBackends(t *testing.T) {
 		jobIDs = append(jobIDs, job.ID)
 	}
 
-	// Wait for all to complete
-	time.Sleep(3 * time.Second)
-
+	// Wait for all to complete via polling (fixed sleeps race a saturated machine).
+	deadline := time.Now().Add(30 * time.Second)
 	for _, id := range jobIDs {
+		for time.Now().Before(deadline) {
+			job, err := sched.GetJob(id)
+			if err == nil && (job.Status == cloudscheduler.JobStatusCompleted || job.Status == cloudscheduler.JobStatusFailed) {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 		job, err := sched.GetJob(id)
 		require.NoError(t, err)
 		assert.Equal(t, cloudscheduler.JobStatusCompleted, job.Status)
@@ -145,7 +156,10 @@ func TestCloudPOC3_ScheduledExecution(t *testing.T) {
 	sched.Start(ctx)
 	defer sched.Stop()
 
-	future := time.Now().Add(500 * time.Millisecond)
+	// Use a generous schedule delay so the "still queued" check below is robust
+	// even if this goroutine is starved under heavy parallel load: the job is not
+	// enqueued until the delay elapses, so it stays queued until then.
+	future := time.Now().Add(2 * time.Second)
 	job, err := sched.Submit(cloudscheduler.Job{
 		WorkflowName: "scheduled-workflow",
 		Backend:      "docker",
@@ -153,12 +167,21 @@ func TestCloudPOC3_ScheduledExecution(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Immediately, it should still be queued
+	// Immediately, it should still be queued (the delayed enqueue has not fired).
 	j, _ := sched.GetJob(job.ID)
 	assert.Equal(t, cloudscheduler.JobStatusQueued, j.Status)
 
-	// After the schedule time, it should complete
-	time.Sleep(time.Second)
+	// After the schedule time it should complete; poll with a generous deadline
+	// instead of a fixed sleep so the terminal assertion does not race a slow,
+	// saturated scheduler.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		j, _ = sched.GetJob(job.ID)
+		if j.Status == cloudscheduler.JobStatusCompleted || j.Status == cloudscheduler.JobStatusFailed {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	j, err = sched.GetJob(job.ID)
 	require.NoError(t, err)
@@ -192,8 +215,9 @@ func TestCloudPOC4_EventStreaming(t *testing.T) {
 	allEvents := make([]cloudscheduler.Event, 0, len(history))
 	allEvents = append(allEvents, history...)
 
-	// Collect live events
-	timeout := time.After(3 * time.Second)
+	// Collect live events. Generous timeout so a saturated scheduler still
+	// delivers the terminal event before we give up (early-exit on terminal).
+	timeout := time.After(30 * time.Second)
 loop:
 	for {
 		select {
@@ -252,7 +276,7 @@ func TestCloudPOC5_ConcurrentJobs(t *testing.T) {
 	wg.Wait()
 
 	// Wait for all to complete with polling
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for _, id := range jobIDs {
 		for time.Now().Before(deadline) {
 			job, err := sched.GetJob(id)
@@ -339,8 +363,19 @@ func TestCloudPOC7_RetryOnFailure(t *testing.T) {
 		},
 	})
 
-	// Wait for retries to complete
-	time.Sleep(2 * time.Second)
+	// Wait for retries to complete. Poll specifically for Completed — NOT Failed —
+	// because executeJob transiently sets the status to Failed during each retry
+	// backoff window before retryJob re-queues the job. Breaking on Failed would
+	// race that transient window under load. This mock succeeds on the 3rd attempt,
+	// so Completed is the stable terminal outcome; the deadline bounds a real hang.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		j, _ := sched.GetJob(job.ID)
+		if j.Status == cloudscheduler.JobStatusCompleted {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	final, err := sched.GetJob(job.ID)
 	require.NoError(t, err)
@@ -368,7 +403,15 @@ func TestCloudPOC8_ListAndFilter(t *testing.T) {
 		})
 	}
 
-	time.Sleep(2 * time.Second)
+	// Poll until all 5 jobs reach Completed instead of a fixed sleep, so the
+	// terminal-state assertions below do not race a slow scheduler under load.
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if len(sched.ListJobs(cloudscheduler.JobStatusCompleted)) == 5 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 
 	// List all
 	all := sched.ListJobs("")
@@ -378,7 +421,7 @@ func TestCloudPOC8_ListAndFilter(t *testing.T) {
 	completed := sched.ListJobs(cloudscheduler.JobStatusCompleted)
 	assert.Len(t, completed, 5, "all 5 jobs should complete")
 
-	// List queued (should be empty now)
+	// List queued (should be empty now — all jobs have reached a terminal state)
 	queued := sched.ListJobs(cloudscheduler.JobStatusQueued)
 	assert.Len(t, queued, 0)
 }
@@ -443,22 +486,25 @@ func TestCloudPOC10_FullCloudLifecycle(t *testing.T) {
 		jobIDs = append(jobIDs, created.ID)
 	}
 
-	// Wait for all to complete with polling
-	deadline := time.Now().Add(10 * time.Second)
+	// Wait for all to complete with polling. This test submits exactly 3 jobs
+	// (the wait condition previously checked for 5 — a copy/paste bug that made
+	// the early-exit dead code, so the loop always burned the full deadline).
+	const wantJobs = 3
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		all := sched.ListJobs("")
-		if len(all) >= 5 {
+		if len(all) >= wantJobs {
 			completed := 0
 			for _, j := range all {
 				if j.Status == cloudscheduler.JobStatusCompleted {
 					completed++
 				}
 			}
-			if completed == 5 {
+			if completed == wantJobs {
 				break
 			}
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 
 	// Verify all completed

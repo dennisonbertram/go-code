@@ -43,6 +43,13 @@ and error recovery chains.
 - OpenAI is the primary provider path.
 - Anthropic provider support exists in the provider catalog and should not be described as merely planned.
 
+## Benchmarks
+
+- `benchmarks/` and `harness_agent/` are Python (not Go). They need external pip deps (`terminal_bench`, `harbor`) that are not vendored here.
+- Key-free deterministic smoke: `go test ./internal/server/... -run TestRunSmoke` (no key, no Docker).
+- Shell smoke: `bash scripts/run-bench-smoke.sh` (builds harnessd, uses `HARNESS_PROVIDER=fake`).
+- Full benchmark runbook (smokes, result schema, comparison harness, Python paths, honesty caveats): `docs/runbooks/benchmark-smoke.md`.
+
 ## Operational Reminder
 
 - Keep `docs/logs/long-term-thinking-log.md` in sync with any durable intent or success-criteria changes.

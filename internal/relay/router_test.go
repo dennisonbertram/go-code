@@ -20,28 +20,28 @@ func setupTestRouter(t *testing.T) (*relay.PlacementRouter, relay.WorkerStore) {
 			LocationType: relay.LocationLocal, Status: relay.WorkerStatusOnline,
 			TrustTier: relay.TrustTierStandard, Load: 0,
 			SupportedWorkspaceModes: []string{"local", "worktree"},
-			LastHeartbeat: now, CreatedAt: now, UpdatedAt: now,
+			LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
 		},
 		{
 			ID: "w-local-dirty", TenantID: "t1", Name: "Local Dirty",
 			LocationType: relay.LocationLocal, Status: relay.WorkerStatusOnline,
 			TrustTier: relay.TrustTierStandard, Load: 2,
 			SupportedWorkspaceModes: []string{"local"},
-			LastHeartbeat: now, CreatedAt: now, UpdatedAt: now,
+			LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
 		},
 		{
 			ID: "w-container", TenantID: "t1", Name: "Container Worker",
 			LocationType: relay.LocationContainer, Status: relay.WorkerStatusOnline,
 			TrustTier: relay.TrustTierStandard, Load: 0,
 			SupportedWorkspaceModes: []string{"container"},
-			LastHeartbeat: now, CreatedAt: now, UpdatedAt: now,
+			LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
 		},
 		{
 			ID: "w-vm", TenantID: "t1", Name: "Cloud VM",
 			LocationType: relay.LocationVM, Status: relay.WorkerStatusOnline,
 			TrustTier: relay.TrustTierPrivileged, Load: 0,
 			SupportedWorkspaceModes: []string{"vm"},
-			LastHeartbeat: now, CreatedAt: now, UpdatedAt: now,
+			LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
 		},
 		{
 			ID: "w-offline", TenantID: "t1", Name: "Offline Worker",
@@ -60,7 +60,7 @@ func setupTestRouter(t *testing.T) (*relay.PlacementRouter, relay.WorkerStore) {
 			LocationType: relay.LocationSandbox, Status: relay.WorkerStatusOnline,
 			TrustTier: relay.TrustTierUntrusted, Load: 0,
 			SupportedWorkspaceModes: []string{"sandbox"},
-			LastHeartbeat: now, CreatedAt: now, UpdatedAt: now,
+			LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
 		},
 		{
 			ID: "w-other-tenant", TenantID: "t2", Name: "Other Tenant Worker",
@@ -150,8 +150,8 @@ func TestPlacementTrustTierConstraint(t *testing.T) {
 	router, _ := setupTestRouter(t)
 
 	req := relay.PlacementRequest{
-		RunID:           "run-3",
-		TenantID:        "t1",
+		RunID:            "run-3",
+		TenantID:         "t1",
 		MinimumTrustTier: relay.TrustTierPrivileged,
 	}
 
@@ -168,8 +168,8 @@ func TestPlacementLocalOnly(t *testing.T) {
 	router, _ := setupTestRouter(t)
 
 	req := relay.PlacementRequest{
-		RunID:    "run-4",
-		TenantID: "t1",
+		RunID:     "run-4",
+		TenantID:  "t1",
 		LocalOnly: true,
 	}
 
@@ -192,8 +192,8 @@ func TestPlacementAllowedLocationTypes(t *testing.T) {
 	router, _ := setupTestRouter(t)
 
 	req := relay.PlacementRequest{
-		RunID:               "run-5",
-		TenantID:            "t1",
+		RunID:                "run-5",
+		TenantID:             "t1",
 		AllowedLocationTypes: []relay.LocationType{relay.LocationVM, relay.LocationSandbox},
 	}
 
@@ -230,8 +230,8 @@ func TestPlacementPreferCleanWorkspace(t *testing.T) {
 	router, _ := setupTestRouter(t)
 
 	req := relay.PlacementRequest{
-		RunID:               "run-7",
-		TenantID:            "t1",
+		RunID:                "run-7",
+		TenantID:             "t1",
 		PreferCleanWorkspace: true,
 	}
 
@@ -268,9 +268,9 @@ func TestPlacementRequiredWorkspaceModes(t *testing.T) {
 	router, _ := setupTestRouter(t)
 
 	req := relay.PlacementRequest{
-		RunID:                   "run-9",
-		TenantID:                "t1",
-		RequiredWorkspaceModes:  []string{"vm"},
+		RunID:                  "run-9",
+		TenantID:               "t1",
+		RequiredWorkspaceModes: []string{"vm"},
 	}
 
 	record, err := router.Place(context.Background(), req)
@@ -282,13 +282,130 @@ func TestPlacementRequiredWorkspaceModes(t *testing.T) {
 	}
 }
 
+func TestPlacementRequiresCapabilityInventory(t *testing.T) {
+	store := newTestWorkerStore()
+	caps := newTestCapabilityStore()
+	now := time.Now().UTC()
+
+	for _, w := range []*relay.Worker{
+		{
+			ID: "w-a-missing", TenantID: "t1", Name: "Missing Capabilities",
+			LocationType: relay.LocationLocal, Status: relay.WorkerStatusOnline,
+			TrustTier: relay.TrustTierStandard, Load: 0,
+			SupportedWorkspaceModes: []string{"local"},
+			LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
+		},
+		{
+			ID: "w-z-capable", TenantID: "t1", Name: "Capable Worker",
+			LocationType: relay.LocationLocal, Status: relay.WorkerStatusOnline,
+			TrustTier: relay.TrustTierStandard, Load: 0,
+			SupportedWorkspaceModes: []string{"local"},
+			LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
+		},
+	} {
+		if err := store.RegisterWorker(context.Background(), w); err != nil {
+			t.Fatalf("RegisterWorker %s: %v", w.ID, err)
+		}
+	}
+	if err := caps.SetInventory(context.Background(), &relay.CapabilityInventory{
+		WorkerID: "w-z-capable",
+		Tools: []relay.ToolCapability{
+			{Name: "slack"},
+		},
+		MCPServers: []relay.MCPServerCapability{
+			{Name: "github"},
+		},
+		Memories: []relay.MemoryCapability{
+			{Name: "repo-memory"},
+		},
+		Repos: []relay.RepoCapability{
+			{RepoURL: "https://github.com/dennisonbertram/go-code.git"},
+		},
+		Secrets: []relay.SecretCapability{
+			{Name: "github-token", Ref: "secret/github", Scope: "repo"},
+		},
+		OutputSurfaces: []relay.OutputSurfaceCapability{
+			{Type: "slack:reply"},
+		},
+		Browser: &relay.BrowserCapability{Available: true, Driver: "playwright"},
+		Docker:  &relay.DockerCapability{Available: true, Runtimes: []string{"docker"}},
+	}); err != nil {
+		t.Fatalf("SetInventory: %v", err)
+	}
+
+	router := relay.NewPlacementRouter(store, caps)
+	req := relay.PlacementRequest{
+		RunID:           "run-capabilities",
+		TenantID:        "t1",
+		RequiredRepoURL: "https://github.com/dennisonbertram/go-code.git",
+		RequireBrowser:  true,
+		RequireDocker:   true,
+		RequiredCapabilities: relay.CapabilityPack{
+			Tools: []relay.ToolCapability{
+				{Name: "slack"},
+			},
+			MCPServers: []relay.MCPServerCapability{
+				{Name: "github"},
+			},
+			Memories: []relay.MemoryCapability{
+				{Name: "repo-memory"},
+			},
+			Secrets: []relay.SecretCapability{
+				{Ref: "secret/github"},
+			},
+			OutputSurfaces: []relay.OutputSurfaceCapability{
+				{Type: "slack:reply"},
+			},
+		},
+	}
+
+	record, err := router.Place(context.Background(), req)
+	if err != nil {
+		t.Fatalf("Place: %v", err)
+	}
+	if record.SelectedWorker != "w-z-capable" {
+		t.Fatalf("expected capable worker, got %q", record.SelectedWorker)
+	}
+	if !hasRejection(record, "w-a-missing", "capability") {
+		t.Fatalf("expected missing-capability worker to be rejected, got %#v", record.RejectedWorkers)
+	}
+}
+
+func TestPlacementRejectsCapabilityRequirementsWithoutCapabilityStore(t *testing.T) {
+	router, _ := setupTestRouter(t)
+
+	record, err := router.Place(context.Background(), relay.PlacementRequest{
+		RunID:    "run-no-cap-store",
+		TenantID: "t1",
+		RequiredCapabilities: relay.CapabilityPack{
+			Tools: []relay.ToolCapability{{Name: "slack"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Place: %v", err)
+	}
+	if record.SelectedWorker != "" {
+		t.Fatalf("expected no worker without capability store, got %q", record.SelectedWorker)
+	}
+	foundCapabilityRejection := false
+	for _, r := range record.RejectedWorkers {
+		if r.Category == "capability" {
+			foundCapabilityRejection = true
+			break
+		}
+	}
+	if !foundCapabilityRejection {
+		t.Fatalf("expected capability rejections, got %#v", record.RejectedWorkers)
+	}
+}
+
 func TestPlacementNoEligibleWorkers(t *testing.T) {
 	router, _ := setupTestRouter(t)
 
 	req := relay.PlacementRequest{
-		RunID:           "run-10",
-		TenantID:        "t1",
-		MinimumTrustTier: relay.TrustTierPrivileged,
+		RunID:                  "run-10",
+		TenantID:               "t1",
+		MinimumTrustTier:       relay.TrustTierPrivileged,
 		RequiredWorkspaceModes: []string{"local"},
 	}
 
@@ -458,3 +575,66 @@ func (s *testWorkerStore) MarkStaleWorkers(_ context.Context) (int, error) {
 }
 
 func (s *testWorkerStore) Close() error { return nil }
+
+func hasRejection(record *relay.PlacementRecord, workerID, category string) bool {
+	for _, r := range record.RejectedWorkers {
+		if r.WorkerID == workerID && r.Category == category {
+			return true
+		}
+	}
+	return false
+}
+
+type testCapabilityStore struct {
+	inventories map[string]*relay.CapabilityInventory
+	packs       map[string]*relay.CapabilityPack
+}
+
+func newTestCapabilityStore() *testCapabilityStore {
+	return &testCapabilityStore{
+		inventories: make(map[string]*relay.CapabilityInventory),
+		packs:       make(map[string]*relay.CapabilityPack),
+	}
+}
+
+func (s *testCapabilityStore) SetInventory(_ context.Context, inv *relay.CapabilityInventory) error {
+	cp := *inv
+	s.inventories[inv.WorkerID] = &cp
+	return nil
+}
+
+func (s *testCapabilityStore) GetInventory(_ context.Context, workerID string) (*relay.CapabilityInventory, error) {
+	inv, ok := s.inventories[workerID]
+	if !ok {
+		return nil, relay.ErrCapabilityNotFound
+	}
+	cp := *inv
+	return &cp, nil
+}
+
+func (s *testCapabilityStore) DeleteInventory(_ context.Context, workerID string) error {
+	delete(s.inventories, workerID)
+	return nil
+}
+
+func (s *testCapabilityStore) SetPack(_ context.Context, pack *relay.CapabilityPack) error {
+	cp := *pack
+	s.packs[pack.RunID] = &cp
+	return nil
+}
+
+func (s *testCapabilityStore) GetPack(_ context.Context, runID string) (*relay.CapabilityPack, error) {
+	pack, ok := s.packs[runID]
+	if !ok {
+		return nil, relay.ErrCapabilityNotFound
+	}
+	cp := *pack
+	return &cp, nil
+}
+
+func (s *testCapabilityStore) DeletePack(_ context.Context, runID string) error {
+	delete(s.packs, runID)
+	return nil
+}
+
+func (s *testCapabilityStore) Close() error { return nil }

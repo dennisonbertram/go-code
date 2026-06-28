@@ -123,6 +123,58 @@ func (m *Model) ReplaceTailLines(count int, lines []string) {
 	}
 }
 
+// ReplaceLineRange replaces lines[start : start+count] with the provided lines.
+// start and count are clamped to valid ranges. If count is zero, lines are
+// inserted at start. Autoscroll and offset semantics are preserved the same
+// way as ReplaceTailLines. Use this for in-place updates to arbitrary viewport
+// segments (e.g. updating a tool card that is not at the tail).
+func (m *Model) ReplaceLineRange(start, count int, lines []string) {
+	if start < 0 {
+		start = 0
+	}
+	if start > len(m.lines) {
+		start = len(m.lines)
+	}
+	if count < 0 {
+		count = 0
+	}
+	if start+count > len(m.lines) {
+		count = len(m.lines) - start
+	}
+
+	end := start + count
+	next := make([]string, 0, start+len(lines)+(len(m.lines)-end))
+	next = append(next, m.lines[:start]...)
+	next = append(next, lines...)
+	next = append(next, m.lines[end:]...)
+	m.lines = next
+
+	if m.maxHistory > 0 && len(m.lines) > m.maxHistory {
+		dropped := len(m.lines) - m.maxHistory
+		m.lines = m.lines[dropped:]
+	}
+
+	if m.autoScroll {
+		m.offset = 0
+		m.newContentCount = 0
+		return
+	}
+
+	maxOff := len(m.lines) - m.height
+	if maxOff < 0 {
+		maxOff = 0
+	}
+	if m.offset > maxOff {
+		m.offset = maxOff
+	}
+}
+
+// LineCount returns the total number of lines currently in the viewport.
+// This is used by callers that track per-card start offsets.
+func (m Model) LineCount() int {
+	return len(m.lines)
+}
+
 // SetContent replaces all lines (e.g., for re-render of last message).
 // If the new content is shorter than the current offset, the offset is
 // clamped so it cannot exceed the maximum scrollable range.

@@ -463,12 +463,6 @@ func (e *Engine) emit(runID, eventType string, payload map[string]any) {
 	e.mu.Lock()
 	e.eventSeqs[runID]++
 	seq := e.eventSeqs[runID]
-	liveSubs := make([]chan Event, 0, len(e.subs[runID]))
-	for ch := range e.subs[runID] {
-		liveSubs = append(liveSubs, ch)
-	}
-	e.mu.Unlock()
-
 	event := Event{
 		Seq:           seq,
 		WorkflowRunID: runID,
@@ -477,12 +471,13 @@ func (e *Engine) emit(runID, eventType string, payload map[string]any) {
 		Timestamp:     e.now().UTC(),
 	}
 	_ = e.store.AppendEvent(context.Background(), &event)
-	for _, ch := range liveSubs {
+	for ch := range e.subs[runID] {
 		select {
 		case ch <- event:
 		default:
 		}
 	}
+	e.mu.Unlock()
 }
 
 func firstStepID(def Definition) string {

@@ -211,6 +211,25 @@ func TestStreamRunEventsTrailingBlockTerminal(t *testing.T) {
 	}
 }
 
+func TestStreamRunEventsIgnoresKeepaliveComments(t *testing.T) {
+	t.Parallel()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, ": ping\n\n")
+		_, _ = io.WriteString(w, "event: run.completed\n")
+		_, _ = io.WriteString(w, "data: {\"id\":\"e1\",\"run_id\":\"r1\",\"type\":\"run.completed\"}\n\n")
+	}))
+	defer ts.Close()
+
+	term, err := streamRunEvents(context.Background(), ts.Client(), ts.URL, "r1", io.Discard)
+	if err != nil {
+		t.Fatalf("streamRunEvents: %v", err)
+	}
+	if term != "run.completed" {
+		t.Fatalf("expected terminal event 'run.completed', got %q", term)
+	}
+}
+
 func TestRunBadFlagParse(t *testing.T) {
 	origStdout := stdout
 	origStderr := stderr

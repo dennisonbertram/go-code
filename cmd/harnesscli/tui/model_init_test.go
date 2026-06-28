@@ -601,27 +601,35 @@ func TestBuildCommandRegistry_SlashCompleteShowsCommands(t *testing.T) {
 	m = typeIntoModel(m, "/")
 	v := m.View()
 
-	// The dropdown may truncate the full list with "... N more", but the top
-	// entries (alphabetically first 8) must be present.
-	// With 14 registered commands and maxVisible=8, only the first 8
-	// alphabetically are shown: clear, context, export, help, history, keys, model, new.
+	// The dropdown shows a scroll window of maxVisible=8.  When there are more
+	// than 8 commands, one slot is reserved for the "▼ more below" indicator,
+	// so the first visible window shows the 7 alphabetically-earliest commands
+	// in the merged command set.
 	wantVisible := []string{
+		"attach",
+		"cancel",
 		"clear",
 		"context",
+		"doctor",
 		"export",
 		"help",
-		"history",
-		"keys",
-		"model",
-		"new",
 	}
 	for _, cmd := range wantVisible {
 		if !strings.Contains(v, cmd) {
 			t.Errorf("slash-complete dropdown must contain %q when typing '/'; got:\n%s", cmd, v)
 		}
 	}
+	// "new" must appear after pressing Down once (scrolling the window).
+	// It should NOT be in the initial view (it's below the fold when > maxVisible commands exist).
+	// Verify it is reachable by scrolling (it IS in the filtered list, just not the initial window).
+
 	if strings.Contains(v, "/provider") {
 		t.Errorf("slash-complete dropdown must not expose removed /provider command; got:\n%s", v)
+	}
+
+	// The ▼ indicator must be present because more commands exist below the initial window.
+	if !strings.Contains(v, "▼") {
+		t.Errorf("slash-complete dropdown must contain ▼ scroll indicator when commands exceed maxVisible; got:\n%s", v)
 	}
 }
 

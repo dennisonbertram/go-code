@@ -187,7 +187,11 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 			if readErr != nil {
 				return harness.CompletionResult{}, fmt.Errorf("read error response body: %w", readErr)
 			}
-			return harness.CompletionResult{}, fmt.Errorf("openai request failed (%d): %s", httpRes.StatusCode, strings.TrimSpace(string(responseBody)))
+			return harness.CompletionResult{}, &harness.ProviderHTTPError{
+				Provider:   "openai",
+				StatusCode: httpRes.StatusCode,
+				Body:       strings.TrimSpace(string(responseBody)),
+			}
 		}
 		// Wrap the stream function to capture TTFT timing.
 		var ttftMs int64
@@ -215,7 +219,11 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 	}
 
 	if httpRes.StatusCode >= 300 {
-		return harness.CompletionResult{}, fmt.Errorf("openai request failed (%d): %s", httpRes.StatusCode, strings.TrimSpace(string(responseBody)))
+		return harness.CompletionResult{}, &harness.ProviderHTTPError{
+			Provider:   "openai",
+			StatusCode: httpRes.StatusCode,
+			Body:       strings.TrimSpace(string(responseBody)),
+		}
 	}
 
 	result, err := c.decodeCompletionResponse(model, responseBody)

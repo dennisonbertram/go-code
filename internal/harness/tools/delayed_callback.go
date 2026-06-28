@@ -21,8 +21,61 @@ const (
 
 // RunStarter is the interface for starting a new run on a conversation.
 // Implemented by the runner; injected via lazy adapter to avoid circular deps.
+//
+// tenantID and agentID carry the originating run's scope so a callback fired
+// from a tenant- or agent-scoped conversation starts its follow-up run on the
+// SAME scope. Without them the follow-up run is denied access to the scoped
+// conversation at fire time (a direct autonomy breaker). Both may be empty for
+// the default/unscoped case.
 type RunStarter interface {
-	StartRun(prompt, conversationID string) error
+	StartRun(prompt, conversationID, tenantID, agentID string) error
+}
+
+// SetRequest carries the parameters for scheduling a delayed callback. It is a
+// small struct (rather than a long positional argument list) so the run scope
+// (tenant + agent) can be threaded through Set -> fire -> StartRun without
+// repeated signature churn.
+type SetRequest struct {
+	ConversationID string
+	Delay          time.Duration
+	Prompt         string
+	// TenantID and AgentID capture the originating run's scope so the fired
+	// follow-up run is started on the same tenant + agent. Both may be empty
+	// for the default/unscoped case.
+	TenantID string
+	AgentID  string
+}
+
+// CallbackEvents is an optional sink for callback lifecycle notifications.
+// The CallbackManager calls Emit when a callback is scheduled, fires, or is
+// canceled. The event name matches the harness EventType string values
+// ("callback.scheduled", "callback.fired", "callback.canceled"); the manager
+// uses plain strings to avoid importing the runner event bus (no import cycle).
+//
+// Implementations MUST be safe for concurrent use and MUST NOT call back into
+// the CallbackManager. A nil sink disables emission entirely.
+type CallbackEvents interface {
+	Emit(event string, info CallbackInfo)
+}
+
+// Event name constants for the callback lifecycle. These mirror the harness
+// EventType string values but live here so the tools package stays free of a
+// dependency on the runner.
+const (
+	eventCallbackScheduled = "callback.scheduled"
+	eventCallbackFired     = "callback.fired"
+	eventCallbackCanceled  = "callback.canceled"
+)
+
+// CallbackOption configures a CallbackManager at construction time.
+type CallbackOption func(*CallbackManager)
+
+// WithEventSink wires an optional CallbackEvents sink onto the manager so
+// callback lifecycle events are observable. Passing a nil sink is a no-op.
+func WithEventSink(sink CallbackEvents) CallbackOption {
+	return func(m *CallbackManager) {
+		m.events = sink
+	}
 }
 
 // CallbackState represents the lifecycle state of a callback.
@@ -43,6 +96,12 @@ type CallbackInfo struct {
 	State          CallbackState `json:"state"`
 	FiresAt        time.Time     `json:"fires_at"`
 	CreatedAt      time.Time     `json:"created_at"`
+	// TenantID and AgentID capture the originating run's scope so the fired
+	// follow-up run is started on the same tenant + agent. Both may be empty
+	// for the default/unscoped case. Omitted from JSON when empty to preserve
+	// the existing tool-result shape for unscoped callbacks.
+	TenantID string `json:"tenant_id,omitempty"`
+	AgentID  string `json:"agent_id,omitempty"`
 }
 
 type pendingCallback struct {
@@ -58,20 +117,69 @@ type CallbackManager struct {
 	starter   RunStarter
 	now       func() time.Time
 	stopped   bool
+	// events is an optional sink for callback lifecycle notifications. Nil by
+	// default (no emission). Set via WithEventSink. Read-only after construction.
+	events CallbackEvents
 }
 
-// NewCallbackManager creates a new CallbackManager.
-func NewCallbackManager(starter RunStarter) *CallbackManager {
-	return &CallbackManager{
+// NewCallbackManager creates a new CallbackManager. Optional CallbackOption
+// values (e.g. WithEventSink) configure observability; the zero-option call
+// NewCallbackManager(starter) remains valid and emits no events.
+func NewCallbackManager(starter RunStarter, opts ...CallbackOption) *CallbackManager {
+	m := &CallbackManager{
 		callbacks: make(map[string]*pendingCallback),
 		byConv:    make(map[string][]string),
 		starter:   starter,
 		now:       time.Now,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(m)
+		}
+	}
+	return m
 }
 
-// Set schedules a new delayed callback.
-func (m *CallbackManager) Set(conversationID string, delay time.Duration, prompt string) (CallbackInfo, error) {
+// emitEvent forwards a callback lifecycle event to the configured sink, if any.
+// It is always called OUTSIDE the manager lock so the sink cannot deadlock or
+// re-enter the manager while it holds m.mu.
+func (m *CallbackManager) emitEvent(event string, info CallbackInfo) {
+	if m.events == nil {
+		return
+	}
+	m.events.Emit(event, info)
+}
+
+// removeFromByConv removes id from the per-conversation byConv slice, freeing
+// the slot for future callbacks. It prunes the map entry when the slice
+// becomes empty. Callers MUST hold m.mu.
+func (m *CallbackManager) removeFromByConv(convID, id string) {
+	ids := m.byConv[convID]
+	for i, v := range ids {
+		if v == id {
+			// Swap-remove: replace the found element with the last, then shorten.
+			ids[i] = ids[len(ids)-1]
+			ids[len(ids)-1] = "" // zero for GC
+			ids = ids[:len(ids)-1]
+			break
+		}
+	}
+	if len(ids) == 0 {
+		delete(m.byConv, convID)
+	} else {
+		m.byConv[convID] = ids
+	}
+}
+
+// Set schedules a new delayed callback. The SetRequest carries the
+// conversation, delay, prompt, and the originating run's scope (tenant +
+// agent); the scope is stored on the callback and threaded through to StartRun
+// when the callback fires so the follow-up run runs on the same tenant + agent.
+func (m *CallbackManager) Set(req SetRequest) (CallbackInfo, error) {
+	conversationID := req.ConversationID
+	delay := req.Delay
+	prompt := req.Prompt
+
 	if delay < MinCallbackDelay {
 		return CallbackInfo{}, fmt.Errorf("delay %v is less than minimum %v", delay, MinCallbackDelay)
 	}
@@ -83,14 +191,15 @@ func (m *CallbackManager) Set(conversationID string, delay time.Duration, prompt
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if m.stopped {
+		m.mu.Unlock()
 		return CallbackInfo{}, fmt.Errorf("callback manager is shut down")
 	}
 
 	// Check per-conversation limit
 	if len(m.byConv[conversationID]) >= MaxCallbacksPerConv {
+		m.mu.Unlock()
 		return CallbackInfo{}, fmt.Errorf("conversation %s has reached the maximum of %d callbacks", conversationID, MaxCallbacksPerConv)
 	}
 
@@ -104,6 +213,8 @@ func (m *CallbackManager) Set(conversationID string, delay time.Duration, prompt
 		State:          CallbackStatePending,
 		FiresAt:        now.Add(delay),
 		CreatedAt:      now,
+		TenantID:       req.TenantID,
+		AgentID:        req.AgentID,
 	}
 
 	timer := time.AfterFunc(delay, func() {
@@ -112,6 +223,10 @@ func (m *CallbackManager) Set(conversationID string, delay time.Duration, prompt
 
 	m.callbacks[id] = &pendingCallback{info: info, timer: timer}
 	m.byConv[conversationID] = append(m.byConv[conversationID], id)
+	m.mu.Unlock()
+
+	// Emit outside the lock so the sink cannot re-enter the manager.
+	m.emitEvent(eventCallbackScheduled, info)
 
 	return info, nil
 }
@@ -119,23 +234,35 @@ func (m *CallbackManager) Set(conversationID string, delay time.Duration, prompt
 // Cancel cancels a pending callback.
 func (m *CallbackManager) Cancel(id string) (CallbackInfo, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	cb, ok := m.callbacks[id]
 	if !ok {
+		m.mu.Unlock()
 		return CallbackInfo{}, fmt.Errorf("callback %s not found", id)
 	}
 
 	switch cb.info.State {
 	case CallbackStateFired:
+		m.mu.Unlock()
 		return CallbackInfo{}, fmt.Errorf("callback %s already fired", id)
 	case CallbackStateCanceled:
+		m.mu.Unlock()
 		return CallbackInfo{}, fmt.Errorf("callback %s already canceled", id)
 	}
 
 	cb.timer.Stop()
 	cb.info.State = CallbackStateCanceled
-	return cb.info, nil
+	info := cb.info
+	// Remove from byConv so the slot is freed for future callbacks on this
+	// conversation. The callbacks map entry is kept so state can still be
+	// queried by white-box tests; only the per-conversation slot matters.
+	m.removeFromByConv(info.ConversationID, id)
+	m.mu.Unlock()
+
+	// Emit outside the lock so the sink cannot re-enter the manager.
+	m.emitEvent(eventCallbackCanceled, info)
+
+	return info, nil
 }
 
 // List returns all callbacks for a conversation.
@@ -156,14 +283,24 @@ func (m *CallbackManager) List(conversationID string) []CallbackInfo {
 // Shutdown stops all pending callbacks and prevents new ones.
 func (m *CallbackManager) Shutdown() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	m.stopped = true
+	var canceled []CallbackInfo
 	for _, cb := range m.callbacks {
 		if cb.info.State == CallbackStatePending {
 			cb.timer.Stop()
 			cb.info.State = CallbackStateCanceled
+			canceled = append(canceled, cb.info)
+			// Remove from byConv so slots are freed (prevents leaked entries
+			// if the manager is reused or inspected after shutdown).
+			m.removeFromByConv(cb.info.ConversationID, cb.info.ID)
 		}
+	}
+	m.mu.Unlock()
+
+	// Emit outside the lock so the sink cannot re-enter the manager.
+	for _, info := range canceled {
+		m.emitEvent(eventCallbackCanceled, info)
 	}
 }
 
@@ -176,12 +313,23 @@ func (m *CallbackManager) fire(id string) {
 		return
 	}
 	cb.info.State = CallbackStateFired
-	convID := cb.info.ConversationID
-	prompt := cb.info.Prompt
+	info := cb.info
+	convID := info.ConversationID
+	prompt := info.Prompt
+	tenantID := info.TenantID
+	agentID := info.AgentID
+	// Remove from byConv so the slot is freed for future callbacks on this
+	// conversation. The callbacks map entry is kept so state can still be
+	// queried; only the per-conversation slot counter matters for the limit.
+	m.removeFromByConv(convID, id)
 	m.mu.Unlock()
 
-	// Call StartRun outside the lock to avoid deadlocks
-	if err := m.starter.StartRun(prompt, convID); err != nil {
+	// Emit outside the lock so the sink cannot re-enter the manager.
+	m.emitEvent(eventCallbackFired, info)
+
+	// Call StartRun outside the lock to avoid deadlocks. Carry the originating
+	// run's tenant + agent so the follow-up run runs on the same scope.
+	if err := m.starter.StartRun(prompt, convID, tenantID, agentID); err != nil {
 		// Log error but callback is still marked as fired
 		log.Printf("callback %s: StartRun error: %v", id, err)
 	}
@@ -230,7 +378,13 @@ func setDelayedCallbackTool(mgr *CallbackManager) Tool {
 			return "", fmt.Errorf("set_delayed_callback: no run metadata in context")
 		}
 
-		info, err := mgr.Set(md.ConversationID, delay, args.Prompt)
+		info, err := mgr.Set(SetRequest{
+			ConversationID: md.ConversationID,
+			Delay:          delay,
+			Prompt:         args.Prompt,
+			TenantID:       md.TenantID,
+			AgentID:        md.AgentID,
+		})
 		if err != nil {
 			return "", fmt.Errorf("set_delayed_callback failed: %w", err)
 		}

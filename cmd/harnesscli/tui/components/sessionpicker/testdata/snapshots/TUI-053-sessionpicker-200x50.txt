@@ -1,8 +1,10 @@
 ╭────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
 │ Sessions                                                                                                                                                                                           │
 │                                                                                                                                                                                                    │
-│   abc12345  Mar 14  gpt-4.1-mini  5 turns  How do I implement a binary search tree?                                                                                                                │
-│   def67890  Mar 13  gpt-4o  12 turns  Write a concurrent queue in Go                                                                                                                               │
-│   fed11111  Mar 12  claude-3-opus  3 turns  Explain the actor model                                                                                                                                │
+│ >   abc12345  Mar 14  gpt-4.1-mini  5 turns  How do I implement a binary search tree?                                                                                                              │
+│     def67890  Mar 13  gpt-4o  12 turns  Write a concurrent queue in Go                                                                                                                             │
+│     fed11111  Mar 12  claude-3-opus  3 turns  Explain the actor model                                                                                                                              │
+│                                                                                                                                                                                                    │
+│   ↑/↓ navigate  enter select  esc cancel                                                                                                                                                           │
 │                                                                                                                                                                                                    │
 ╰────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

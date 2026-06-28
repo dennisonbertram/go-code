@@ -67,22 +67,34 @@ func (p *HetznerProvider) Create(ctx context.Context, opts VMCreateOpts) (*VM, e
 	}
 
 	server := result.Server
+	if server == nil {
+		return nil, fmt.Errorf("hetzner: server create returned nil server")
+	}
+	cleanupCreatedServer := func() {
+		forceCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, _ = p.client.Server.Delete(forceCtx, server)
+	}
 
 	// Poll until the server reaches running status.
 	deadline := time.Now().Add(hetznerProvisionTimeout)
 	for {
 		if ctx.Err() != nil {
+			cleanupCreatedServer()
 			return nil, fmt.Errorf("hetzner: context cancelled while waiting for server: %w", ctx.Err())
 		}
 		if time.Now().After(deadline) {
+			cleanupCreatedServer()
 			return nil, fmt.Errorf("hetzner: timed out waiting for server %d to reach running status", server.ID)
 		}
 
 		updated, _, err := p.client.Server.GetByID(ctx, server.ID)
 		if err != nil {
+			cleanupCreatedServer()
 			return nil, fmt.Errorf("hetzner: polling server status: %w", err)
 		}
 		if updated == nil {
+			cleanupCreatedServer()
 			return nil, fmt.Errorf("hetzner: server %d disappeared during provisioning", server.ID)
 		}
 
@@ -96,6 +108,7 @@ func (p *HetznerProvider) Create(ctx context.Context, opts VMCreateOpts) (*VM, e
 
 		select {
 		case <-ctx.Done():
+			cleanupCreatedServer()
 			return nil, fmt.Errorf("hetzner: context cancelled while waiting for server: %w", ctx.Err())
 		case <-time.After(hetznerPollInterval):
 		}

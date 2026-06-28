@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"go-agent-harness/internal/forensics/rollout"
+	"go-agent-harness/internal/harness"
 )
 
 func TestReplay_BasicFlow(t *testing.T) {
@@ -314,6 +315,74 @@ func TestReconstructMessages_EmptyEvents(t *testing.T) {
 	msgs := ReconstructMessages(nil, 0)
 	if len(msgs) != 0 {
 		t.Errorf("expected 0 messages, got %d", len(msgs))
+	}
+}
+
+// TestF0_ToolOutputKeyFallback is the TDD test for task F0.
+//
+// The runner emits tool results under the key "output" in tool.call.completed
+// events (runner_step_engine.go:847,874,1072,1091), but the replayer was
+// reading "result". Real captured rollouts therefore silently produced empty
+// tool outputs. This test uses the runner's actual emit key ("output") and
+// verifies that both Replay (Details["result"]) and ReconstructMessages
+// (tool message Content) are NON-empty.
+func TestF0_ToolOutputKeyFallback(t *testing.T) {
+	// Build a minimal valid rollout where tool.call.completed carries "output"
+	// (exactly as the runner emits) rather than "result".
+	events := []rollout.RolloutEvent{
+		{Type: "run.started", Step: 0, Payload: map[string]any{"prompt": "run a command"}},
+		{Type: "llm.turn.completed", Step: 1, Payload: map[string]any{
+			"content": "I'll run bash",
+			"tool_calls": []any{
+				map[string]any{"id": "call_x", "name": "bash", "arguments": `{"cmd":"ls"}`},
+			},
+		}},
+		{Type: "tool.call.started", Step: 1, Payload: map[string]any{
+			"call_id": "call_x", "tool": "bash", "arguments": `{"cmd":"ls"}`,
+		}},
+		// NOTE: key is "output" (runner emit key), NOT "result".
+		{Type: "tool.call.completed", Step: 1, Payload: map[string]any{
+			"call_id": "call_x", "tool": "bash", "output": "file_a.go\nfile_b.go",
+		}},
+		{Type: "llm.turn.completed", Step: 2, Payload: map[string]any{
+			"content": "Here are the files",
+		}},
+		{Type: "run.completed", Step: 3, Payload: map[string]any{"output": "done"}},
+	}
+
+	// --- Replay: the tool.call.started event's Details["result"] must be non-empty.
+	replayResult := Replay(events)
+
+	// Find the tool.call.started ReplayEvent (index 2 after run.started + llm.turn).
+	var startedEv *ReplayEvent
+	for i := range replayResult.Events {
+		if replayResult.Events[i].EventType == "tool.call.started" {
+			startedEv = &replayResult.Events[i]
+			break
+		}
+	}
+	if startedEv == nil {
+		t.Fatal("T-F0: no tool.call.started event found in ReplayResult.Events")
+	}
+	if got, _ := startedEv.Details["result"].(string); got == "" {
+		t.Errorf("T-F0 Replay: Details[\"result\"] is empty; replayer read \"result\" key but runner emits \"output\" — fallback missing")
+	}
+
+	// --- ReconstructMessages: the tool message Content must be non-empty.
+	msgs := ReconstructMessages(events, 3)
+
+	var toolMsg *harness.Message
+	for i := range msgs {
+		if msgs[i].Role == "tool" {
+			toolMsg = &msgs[i]
+			break
+		}
+	}
+	if toolMsg == nil {
+		t.Fatal("T-F0 ReconstructMessages: no tool-role message found")
+	}
+	if toolMsg.Content == "" {
+		t.Errorf("T-F0 ReconstructMessages: tool message Content is empty; replayer read \"result\" key but runner emits \"output\" — fallback missing")
 	}
 }
 

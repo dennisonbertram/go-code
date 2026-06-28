@@ -16,20 +16,34 @@ type mockRunStarter struct {
 	mu      sync.Mutex
 	calls   []startRunCall
 	err     error
-	startFn func(prompt, convID string) error
+	startFn func(prompt, convID, tenantID, agentID string) error
+}
+
+// setReq is a small helper for tests that schedule callbacks via the manager
+// directly (not through the tool handler). It builds a SetRequest with the
+// given conversation/delay/prompt and an empty (default/unscoped) tenant+agent.
+func setReq(convID string, delay time.Duration, prompt string) SetRequest {
+	return SetRequest{ConversationID: convID, Delay: delay, Prompt: prompt}
 }
 
 type startRunCall struct {
 	Prompt         string
 	ConversationID string
+	TenantID       string
+	AgentID        string
 }
 
-func (m *mockRunStarter) StartRun(prompt, conversationID string) error {
+func (m *mockRunStarter) StartRun(prompt, conversationID, tenantID, agentID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.calls = append(m.calls, startRunCall{Prompt: prompt, ConversationID: conversationID})
+	m.calls = append(m.calls, startRunCall{
+		Prompt:         prompt,
+		ConversationID: conversationID,
+		TenantID:       tenantID,
+		AgentID:        agentID,
+	})
 	if m.startFn != nil {
-		return m.startFn(prompt, conversationID)
+		return m.startFn(prompt, conversationID, tenantID, agentID)
 	}
 	return m.err
 }
@@ -50,7 +64,7 @@ func TestCallbackManagerSet(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, err := mgr.Set("conv-1", 10*time.Second, "check status")
+		info, err := mgr.Set(setReq("conv-1", 10*time.Second, "check status"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -76,7 +90,7 @@ func TestCallbackManagerSet(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		_, err := mgr.Set("conv-1", 1*time.Second, "check")
+		_, err := mgr.Set(setReq("conv-1", 1*time.Second, "check"))
 		if err == nil {
 			t.Fatal("expected error for short delay")
 		}
@@ -87,7 +101,7 @@ func TestCallbackManagerSet(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		_, err := mgr.Set("conv-1", 2*time.Hour, "check")
+		_, err := mgr.Set(setReq("conv-1", 2*time.Hour, "check"))
 		if err == nil {
 			t.Fatal("expected error for long delay")
 		}
@@ -98,7 +112,7 @@ func TestCallbackManagerSet(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		_, err := mgr.Set("conv-1", 10*time.Second, "")
+		_, err := mgr.Set(setReq("conv-1", 10*time.Second, ""))
 		if err == nil {
 			t.Fatal("expected error for empty prompt")
 		}
@@ -110,13 +124,13 @@ func TestCallbackManagerSet(t *testing.T) {
 		defer mgr.Shutdown()
 
 		for i := 0; i < MaxCallbacksPerConv; i++ {
-			_, err := mgr.Set("conv-1", 30*time.Second, fmt.Sprintf("check %d", i))
+			_, err := mgr.Set(setReq("conv-1", 30*time.Second, fmt.Sprintf("check %d", i)))
 			if err != nil {
 				t.Fatalf("unexpected error on callback %d: %v", i, err)
 			}
 		}
 
-		_, err := mgr.Set("conv-1", 30*time.Second, "one too many")
+		_, err := mgr.Set(setReq("conv-1", 30*time.Second, "one too many"))
 		if err == nil {
 			t.Fatal("expected error exceeding max callbacks")
 		}
@@ -128,14 +142,14 @@ func TestCallbackManagerSet(t *testing.T) {
 		defer mgr.Shutdown()
 
 		for i := 0; i < MaxCallbacksPerConv; i++ {
-			_, err := mgr.Set("conv-1", 30*time.Second, fmt.Sprintf("check %d", i))
+			_, err := mgr.Set(setReq("conv-1", 30*time.Second, fmt.Sprintf("check %d", i)))
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 		}
 
 		// Different conversation should still work
-		_, err := mgr.Set("conv-2", 30*time.Second, "check")
+		_, err := mgr.Set(setReq("conv-2", 30*time.Second, "check"))
 		if err != nil {
 			t.Fatalf("unexpected error for different conversation: %v", err)
 		}
@@ -146,7 +160,7 @@ func TestCallbackManagerSet(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		mgr.Shutdown()
 
-		_, err := mgr.Set("conv-1", 10*time.Second, "check")
+		_, err := mgr.Set(setReq("conv-1", 10*time.Second, "check"))
 		if err == nil {
 			t.Fatal("expected error after shutdown")
 		}
@@ -159,7 +173,7 @@ func TestCallbackManagerCancel(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, _ := mgr.Set("conv-1", 30*time.Second, "check")
+		info, _ := mgr.Set(setReq("conv-1", 30*time.Second, "check"))
 		canceled, err := mgr.Cancel(info.ID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -185,7 +199,7 @@ func TestCallbackManagerCancel(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, _ := mgr.Set("conv-1", 30*time.Second, "check")
+		info, _ := mgr.Set(setReq("conv-1", 30*time.Second, "check"))
 		mgr.Cancel(info.ID)
 
 		_, err := mgr.Cancel(info.ID)
@@ -212,9 +226,9 @@ func TestCallbackManagerList(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		mgr.Set("conv-1", 10*time.Second, "check 1")
-		mgr.Set("conv-1", 20*time.Second, "check 2")
-		mgr.Set("conv-2", 10*time.Second, "check 3") // different conv
+		mgr.Set(setReq("conv-1", 10*time.Second, "check 1"))
+		mgr.Set(setReq("conv-1", 20*time.Second, "check 2"))
+		mgr.Set(setReq("conv-2", 10*time.Second, "check 3")) // different conv
 
 		callbacks := mgr.List("conv-1")
 		if len(callbacks) != 2 {
@@ -235,7 +249,7 @@ func TestCallbackManagerFire(t *testing.T) {
 		mgr.now = func() time.Time { return time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC) }
 		defer mgr.Shutdown()
 
-		info, err := mgr.Set("conv-1", 5*time.Second, "check deployment")
+		info, err := mgr.Set(setReq("conv-1", 5*time.Second, "check deployment"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -273,7 +287,7 @@ func TestCallbackManagerFire(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, _ := mgr.Set("conv-1", 5*time.Second, "check")
+		info, _ := mgr.Set(setReq("conv-1", 5*time.Second, "check"))
 
 		mgr.mu.Lock()
 		mgr.callbacks[info.ID].timer.Stop()
@@ -294,7 +308,7 @@ func TestCallbackManagerFire(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, _ := mgr.Set("conv-1", 5*time.Second, "check")
+		info, _ := mgr.Set(setReq("conv-1", 5*time.Second, "check"))
 
 		mgr.mu.Lock()
 		mgr.callbacks[info.ID].timer.Stop()
@@ -314,7 +328,7 @@ func TestCallbackManagerFire(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, _ := mgr.Set("conv-1", 5*time.Second, "check")
+		info, _ := mgr.Set(setReq("conv-1", 5*time.Second, "check"))
 
 		mgr.mu.Lock()
 		mgr.callbacks[info.ID].timer.Stop()
@@ -334,7 +348,7 @@ func TestCallbackManagerFire(t *testing.T) {
 		defer mgr.Shutdown()
 
 		// Use minimum delay so it fires quickly
-		_, err := mgr.Set("conv-1", 5*time.Second, "check")
+		_, err := mgr.Set(setReq("conv-1", 5*time.Second, "check"))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -364,8 +378,8 @@ func TestCallbackManagerShutdown(t *testing.T) {
 		starter := &mockRunStarter{}
 		mgr := NewCallbackManager(starter)
 
-		mgr.Set("conv-1", 30*time.Second, "check 1")
-		mgr.Set("conv-1", 30*time.Second, "check 2")
+		mgr.Set(setReq("conv-1", 30*time.Second, "check 1"))
+		mgr.Set(setReq("conv-1", 30*time.Second, "check 2"))
 
 		mgr.Shutdown()
 
@@ -399,7 +413,7 @@ func TestCallbackManagerConcurrent(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			convID := fmt.Sprintf("conv-%d", i%3)
-			_, err := mgr.Set(convID, 30*time.Second, fmt.Sprintf("check %d", i))
+			_, err := mgr.Set(setReq(convID, 30*time.Second, fmt.Sprintf("check %d", i)))
 			if err == nil {
 				atomic.AddInt32(&setCount, 1)
 			}
@@ -507,7 +521,7 @@ func TestCancelDelayedCallbackTool(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, _ := mgr.Set("conv-1", 30*time.Second, "check")
+		info, _ := mgr.Set(setReq("conv-1", 30*time.Second, "check"))
 
 		tool := cancelDelayedCallbackTool(mgr)
 		ctx := testContextWithConversation("conv-1")
@@ -558,8 +572,8 @@ func TestListDelayedCallbacksTool(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		mgr.Set("conv-1", 10*time.Second, "check 1")
-		mgr.Set("conv-1", 20*time.Second, "check 2")
+		mgr.Set(setReq("conv-1", 10*time.Second, "check 1"))
+		mgr.Set(setReq("conv-1", 20*time.Second, "check 2"))
 
 		tool := listDelayedCallbacksTool(mgr)
 		ctx := testContextWithConversation("conv-1")
@@ -599,7 +613,7 @@ func TestRegression_ConcurrentFireAndCancel(t *testing.T) {
 	mgr := NewCallbackManager(starter)
 	defer mgr.Shutdown()
 
-	info, err := mgr.Set("conv-1", 10*time.Second, "check deploy")
+	info, err := mgr.Set(setReq("conv-1", 10*time.Second, "check deploy"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -648,7 +662,7 @@ func TestRegression_ConcurrentShutdownAndSet(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, err := mgr.Set("conv-1", 30*time.Second, fmt.Sprintf("check %d", i))
+			_, err := mgr.Set(setReq("conv-1", 30*time.Second, fmt.Sprintf("check %d", i)))
 			if err != nil {
 				atomic.AddInt32(&errCount, 1)
 			} else {
@@ -703,7 +717,7 @@ func TestRegression_HighConcurrency(t *testing.T) {
 
 			switch i % 4 {
 			case 0: // Set
-				info, err := mgr.Set(convID, 30*time.Second, fmt.Sprintf("check %d", i))
+				info, err := mgr.Set(setReq(convID, 30*time.Second, fmt.Sprintf("check %d", i)))
 				if err == nil {
 					idMu.Lock()
 					ids = append(ids, info.ID)
@@ -765,7 +779,7 @@ func TestRegression_HighConcurrency(t *testing.T) {
 
 func TestRegression_FireWithSlowStartRun(t *testing.T) {
 	starter := &mockRunStarter{
-		startFn: func(prompt, convID string) error {
+		startFn: func(prompt, convID, tenantID, agentID string) error {
 			time.Sleep(100 * time.Millisecond)
 			return nil
 		},
@@ -776,7 +790,7 @@ func TestRegression_FireWithSlowStartRun(t *testing.T) {
 	const count = 5
 	infos := make([]CallbackInfo, count)
 	for i := 0; i < count; i++ {
-		info, err := mgr.Set("conv-1", 30*time.Second, fmt.Sprintf("check %d", i))
+		info, err := mgr.Set(setReq("conv-1", 30*time.Second, fmt.Sprintf("check %d", i)))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -821,7 +835,7 @@ func TestRegression_CancelDuringFire(t *testing.T) {
 	// StartRun that takes 200ms, giving us time to attempt Cancel
 	fireDone := make(chan struct{})
 	starter := &mockRunStarter{
-		startFn: func(prompt, convID string) error {
+		startFn: func(prompt, convID, tenantID, agentID string) error {
 			time.Sleep(200 * time.Millisecond)
 			return nil
 		},
@@ -829,7 +843,7 @@ func TestRegression_CancelDuringFire(t *testing.T) {
 	mgr := NewCallbackManager(starter)
 	defer mgr.Shutdown()
 
-	info, err := mgr.Set("conv-1", 30*time.Second, "check deploy")
+	info, err := mgr.Set(setReq("conv-1", 30*time.Second, "check deploy"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -875,7 +889,7 @@ func TestRegression_ExactBoundaryDelays(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		_, err := mgr.Set("conv-1", MinCallbackDelay, "check")
+		_, err := mgr.Set(setReq("conv-1", MinCallbackDelay, "check"))
 		if err != nil {
 			t.Errorf("expected success at exact minimum delay, got: %v", err)
 		}
@@ -885,7 +899,7 @@ func TestRegression_ExactBoundaryDelays(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, err := mgr.Set("conv-1", MaxCallbackDelay, "check")
+		info, err := mgr.Set(setReq("conv-1", MaxCallbackDelay, "check"))
 		if err != nil {
 			t.Errorf("expected success at exact maximum delay, got: %v", err)
 		}
@@ -900,7 +914,7 @@ func TestRegression_ExactBoundaryDelays(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		_, err := mgr.Set("conv-1", MinCallbackDelay-1*time.Nanosecond, "check")
+		_, err := mgr.Set(setReq("conv-1", MinCallbackDelay-1*time.Nanosecond, "check"))
 		if err == nil {
 			t.Error("expected error for delay just below minimum")
 		}
@@ -910,7 +924,7 @@ func TestRegression_ExactBoundaryDelays(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		_, err := mgr.Set("conv-1", MaxCallbackDelay+1*time.Nanosecond, "check")
+		_, err := mgr.Set(setReq("conv-1", MaxCallbackDelay+1*time.Nanosecond, "check"))
 		if err == nil {
 			t.Error("expected error for delay just above maximum")
 		}
@@ -923,7 +937,7 @@ func TestRegression_EmptyConversationID(t *testing.T) {
 	defer mgr.Shutdown()
 
 	// Empty conversation ID should still work — no validation on conv ID
-	info, err := mgr.Set("", 10*time.Second, "check")
+	info, err := mgr.Set(setReq("", 10*time.Second, "check"))
 	if err != nil {
 		t.Fatalf("expected empty conv ID to work, got error: %v", err)
 	}
@@ -959,33 +973,53 @@ func TestRegression_MaxCallbacksBoundary(t *testing.T) {
 	mgr := NewCallbackManager(starter)
 	defer mgr.Shutdown()
 
-	// Set exactly MaxCallbacksPerConv callbacks — should all succeed
+	// Set exactly MaxCallbacksPerConv callbacks — should all succeed.
 	ids := make([]string, MaxCallbacksPerConv)
 	for i := 0; i < MaxCallbacksPerConv; i++ {
-		info, err := mgr.Set("conv-1", 30*time.Second, fmt.Sprintf("check %d", i))
+		info, err := mgr.Set(setReq("conv-1", 30*time.Second, fmt.Sprintf("check %d", i)))
 		if err != nil {
 			t.Fatalf("unexpected error on callback %d: %v", i, err)
 		}
 		ids[i] = info.ID
 	}
 
-	// One more should fail
-	_, err := mgr.Set("conv-1", 30*time.Second, "one too many")
+	// One more should fail — slot is full.
+	_, err := mgr.Set(setReq("conv-1", 30*time.Second, "one too many"))
 	if err == nil {
 		t.Fatal("expected error exceeding max callbacks")
 	}
 
-	// Cancel one callback
+	// Cancel one callback — this must free the slot.
 	_, err = mgr.Cancel(ids[0])
 	if err != nil {
 		t.Fatalf("unexpected cancel error: %v", err)
 	}
 
-	// Try to set another — should still fail because canceled callbacks
-	// still count in the byConv slice (IDs are never removed)
-	_, err = mgr.Set("conv-1", 30*time.Second, "after cancel")
-	if err == nil {
-		t.Fatal("expected error: canceled callbacks still count in byConv slice")
+	// After canceling, a new Set for the same conversation MUST succeed (slot freed).
+	_, err = mgr.Set(setReq("conv-1", 30*time.Second, "after cancel"))
+	if err != nil {
+		t.Fatalf("expected Set to succeed after cancel freed a slot, got: %v", err)
+	}
+
+	// Fire one of the remaining pending callbacks manually and verify slot is freed.
+	// ids[1] is still pending — stop its real timer then fire it directly.
+	mgr.mu.Lock()
+	mgr.callbacks[ids[1]].timer.Stop()
+	mgr.mu.Unlock()
+	mgr.fire(ids[1])
+
+	// After firing, another new Set must also succeed.
+	_, err = mgr.Set(setReq("conv-1", 30*time.Second, "after fire"))
+	if err != nil {
+		t.Fatalf("expected Set to succeed after fire freed a slot, got: %v", err)
+	}
+
+	// List must still show only non-pruned entries for this conversation.
+	listed := mgr.List("conv-1")
+	// ids[0] was canceled (pruned from byConv), ids[1] was fired (pruned from byConv);
+	// remaining entries are ids[2..9] (8 pending) + "after cancel" + "after fire" = 10 total.
+	if len(listed) != MaxCallbacksPerConv {
+		t.Errorf("expected List to return %d callbacks after prune, got %d", MaxCallbacksPerConv, len(listed))
 	}
 }
 
@@ -1009,7 +1043,7 @@ func TestRegression_MultiConversationConcurrentFire(t *testing.T) {
 	for i := 0; i < convCount; i++ {
 		convID := fmt.Sprintf("conv-%d", i)
 		prompt := fmt.Sprintf("check deployment %d", i)
-		info, err := mgr.Set(convID, 10*time.Second, prompt)
+		info, err := mgr.Set(setReq(convID, 10*time.Second, prompt))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1066,7 +1100,7 @@ func TestRegression_MultiConversationConcurrentFire(t *testing.T) {
 func TestRegression_ListDuringFire(t *testing.T) {
 	// Use slow StartRun so fire() is still in progress when we call List()
 	starter := &mockRunStarter{
-		startFn: func(prompt, convID string) error {
+		startFn: func(prompt, convID, tenantID, agentID string) error {
 			time.Sleep(200 * time.Millisecond)
 			return nil
 		},
@@ -1074,7 +1108,7 @@ func TestRegression_ListDuringFire(t *testing.T) {
 	mgr := NewCallbackManager(starter)
 	defer mgr.Shutdown()
 
-	info, err := mgr.Set("conv-1", 30*time.Second, "check deploy")
+	info, err := mgr.Set(setReq("conv-1", 30*time.Second, "check deploy"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1092,15 +1126,23 @@ func TestRegression_ListDuringFire(t *testing.T) {
 	// Wait a bit for fire() to acquire lock and set state
 	time.Sleep(20 * time.Millisecond)
 
-	// List while fire() is still calling StartRun (but after it released the lock)
+	// P3 (BUG A fix): fire() removes the id from byConv before releasing the
+	// lock, so List returns 0 entries — the slot is freed immediately.
 	callbacks := mgr.List("conv-1")
-	if len(callbacks) != 1 {
-		t.Fatalf("expected 1 callback, got %d", len(callbacks))
+	if len(callbacks) != 0 {
+		t.Fatalf("expected 0 callbacks after fire() removed from byConv, got %d", len(callbacks))
 	}
 
-	// fire() sets state to "fired" before releasing lock, so List should see "fired"
-	if callbacks[0].State != CallbackStateFired {
-		t.Errorf("expected fired during ongoing StartRun, got %s", callbacks[0].State)
+	// The callbacks map entry is still present with state "fired" (for state
+	// querying) until it is explicitly garbage-collected in a future pass.
+	mgr.mu.Lock()
+	cb := mgr.callbacks[info.ID]
+	mgr.mu.Unlock()
+	if cb == nil {
+		t.Fatal("callbacks map entry should still exist after fire")
+	}
+	if cb.info.State != CallbackStateFired {
+		t.Errorf("expected fired state in callbacks map, got %s", cb.info.State)
 	}
 
 	<-fireDone
@@ -1161,7 +1203,7 @@ func TestRegression_StateTransitions(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, _ := mgr.Set("conv-1", 30*time.Second, "check")
+		info, _ := mgr.Set(setReq("conv-1", 30*time.Second, "check"))
 		mgr.mu.Lock()
 		mgr.callbacks[info.ID].timer.Stop()
 		mgr.mu.Unlock()
@@ -1181,7 +1223,7 @@ func TestRegression_StateTransitions(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, _ := mgr.Set("conv-1", 30*time.Second, "check")
+		info, _ := mgr.Set(setReq("conv-1", 30*time.Second, "check"))
 		canceled, err := mgr.Cancel(info.ID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -1196,7 +1238,7 @@ func TestRegression_StateTransitions(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, _ := mgr.Set("conv-1", 30*time.Second, "check")
+		info, _ := mgr.Set(setReq("conv-1", 30*time.Second, "check"))
 		mgr.mu.Lock()
 		mgr.callbacks[info.ID].timer.Stop()
 		mgr.mu.Unlock()
@@ -1214,7 +1256,7 @@ func TestRegression_StateTransitions(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, _ := mgr.Set("conv-1", 30*time.Second, "check")
+		info, _ := mgr.Set(setReq("conv-1", 30*time.Second, "check"))
 		mgr.Cancel(info.ID)
 
 		_, err := mgr.Cancel(info.ID)
@@ -1228,7 +1270,7 @@ func TestRegression_StateTransitions(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, _ := mgr.Set("conv-1", 30*time.Second, "check")
+		info, _ := mgr.Set(setReq("conv-1", 30*time.Second, "check"))
 		mgr.mu.Lock()
 		mgr.callbacks[info.ID].timer.Stop()
 		mgr.mu.Unlock()
@@ -1247,7 +1289,7 @@ func TestRegression_StateTransitions(t *testing.T) {
 		mgr := NewCallbackManager(starter)
 		defer mgr.Shutdown()
 
-		info, _ := mgr.Set("conv-1", 30*time.Second, "check")
+		info, _ := mgr.Set(setReq("conv-1", 30*time.Second, "check"))
 		mgr.mu.Lock()
 		mgr.callbacks[info.ID].timer.Stop()
 		mgr.mu.Unlock()
@@ -1271,7 +1313,7 @@ func TestRegression_ShutdownDuringActiveFire(t *testing.T) {
 	startRunStarted := make(chan struct{})
 
 	starter := &mockRunStarter{
-		startFn: func(prompt, convID string) error {
+		startFn: func(prompt, convID, tenantID, agentID string) error {
 			close(startRunStarted) // signal that fire() is now inside StartRun
 			time.Sleep(500 * time.Millisecond)
 			return nil
@@ -1280,13 +1322,13 @@ func TestRegression_ShutdownDuringActiveFire(t *testing.T) {
 	mgr := NewCallbackManager(starter)
 
 	// Create one callback that will be fired (with slow StartRun)
-	firedInfo, err := mgr.Set("conv-1", 30*time.Second, "fired callback")
+	firedInfo, err := mgr.Set(setReq("conv-1", 30*time.Second, "fired callback"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Create another callback that should be canceled by shutdown
-	pendingInfo, err := mgr.Set("conv-1", 30*time.Second, "pending callback")
+	pendingInfo, err := mgr.Set(setReq("conv-1", 30*time.Second, "pending callback"))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1336,7 +1378,7 @@ func TestRegression_ShutdownWithManyCallbacks(t *testing.T) {
 	for c := 0; c < convCount; c++ {
 		convID := fmt.Sprintf("conv-%d", c)
 		for i := 0; i < perConv; i++ {
-			_, err := mgr.Set(convID, 30*time.Second, fmt.Sprintf("check %d-%d", c, i))
+			_, err := mgr.Set(setReq(convID, 30*time.Second, fmt.Sprintf("check %d-%d", c, i)))
 			if err != nil {
 				t.Fatalf("unexpected error on conv-%d callback %d: %v", c, i, err)
 			}
@@ -1379,7 +1421,7 @@ func TestRegression_ResourceExhaustion(t *testing.T) {
 	for c := 0; c < convCount; c++ {
 		convID := fmt.Sprintf("conv-%d", c)
 		for i := 0; i < perConv; i++ {
-			_, err := mgr.Set(convID, 30*time.Second, fmt.Sprintf("check %d-%d", c, i))
+			_, err := mgr.Set(setReq(convID, 30*time.Second, fmt.Sprintf("check %d-%d", c, i)))
 			if err != nil {
 				t.Fatalf("unexpected error on conv-%d callback %d: %v", c, i, err)
 			}
@@ -1482,6 +1524,98 @@ func TestDelayedCallbackCatalogIntegration(t *testing.T) {
 			if tool.Definition.Name == "set_delayed_callback" {
 				t.Error("unexpected set_delayed_callback tool when manager is nil")
 			}
+		}
+	})
+}
+
+// --- T5: tenant + agent threaded through fire -> StartRun ---
+
+// testContextWithScope builds a tool context carrying the full run scope
+// (tenant + conversation + agent) so callbacks scheduled inside a tenant-scoped
+// conversation can be exercised end to end.
+func testContextWithScope(tenantID, convID, agentID string) context.Context {
+	return context.WithValue(context.Background(), ContextKeyRunMetadata, RunMetadata{
+		TenantID:       tenantID,
+		ConversationID: convID,
+		AgentID:        agentID,
+	})
+}
+
+// TestCallbackFireCarriesTenantAndAgent is the BUG B regression (T5): a callback
+// scheduled from a tenant+agent-scoped conversation MUST fire its follow-up run
+// on the SAME tenant and agent. Before the fix, fire() called StartRun with an
+// empty tenant+agent, so a tenant-scoped conversation got access-denied at fire
+// time — a direct autonomy breaker.
+func TestCallbackFireCarriesTenantAndAgent(t *testing.T) {
+	t.Run("fire via Set captures tenant+agent from run metadata", func(t *testing.T) {
+		starter := &mockRunStarter{}
+		mgr := NewCallbackManager(starter)
+		defer mgr.Shutdown()
+
+		// Schedule the callback through the real tool handler so it reads the
+		// tenant + agent from the originating run's metadata (the only place
+		// they are available at Set time).
+		tool := setDelayedCallbackTool(mgr)
+		ctx := testContextWithScope("tenant-x", "conv-1", "agent-y")
+		args, _ := json.Marshal(map[string]string{"delay": "5s", "prompt": "wake up"})
+		result, err := tool.Handler(ctx, args)
+		if err != nil {
+			t.Fatalf("unexpected error scheduling callback: %v", err)
+		}
+
+		var info CallbackInfo
+		if err := json.Unmarshal([]byte(result), &info); err != nil {
+			t.Fatalf("failed to unmarshal result: %v", err)
+		}
+
+		// Stop the real timer and fire directly.
+		mgr.mu.Lock()
+		mgr.callbacks[info.ID].timer.Stop()
+		mgr.mu.Unlock()
+		mgr.fire(info.ID)
+
+		calls := starter.getCalls()
+		if len(calls) != 1 {
+			t.Fatalf("expected 1 StartRun call, got %d", len(calls))
+		}
+		if calls[0].TenantID != "tenant-x" {
+			t.Errorf("StartRun tenant = %q, want tenant-x", calls[0].TenantID)
+		}
+		if calls[0].AgentID != "agent-y" {
+			t.Errorf("StartRun agent = %q, want agent-y", calls[0].AgentID)
+		}
+		if calls[0].ConversationID != "conv-1" {
+			t.Errorf("StartRun conv = %q, want conv-1", calls[0].ConversationID)
+		}
+		if calls[0].Prompt != "wake up" {
+			t.Errorf("StartRun prompt = %q, want 'wake up'", calls[0].Prompt)
+		}
+	})
+
+	t.Run("empty tenant+agent preserved for default case", func(t *testing.T) {
+		starter := &mockRunStarter{}
+		mgr := NewCallbackManager(starter)
+		defer mgr.Shutdown()
+
+		info, err := mgr.Set(setReq("conv-1", 5*time.Second, "check"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		mgr.mu.Lock()
+		mgr.callbacks[info.ID].timer.Stop()
+		mgr.mu.Unlock()
+		mgr.fire(info.ID)
+
+		calls := starter.getCalls()
+		if len(calls) != 1 {
+			t.Fatalf("expected 1 StartRun call, got %d", len(calls))
+		}
+		if calls[0].TenantID != "" {
+			t.Errorf("StartRun tenant = %q, want empty", calls[0].TenantID)
+		}
+		if calls[0].AgentID != "" {
+			t.Errorf("StartRun agent = %q, want empty", calls[0].AgentID)
 		}
 	})
 }

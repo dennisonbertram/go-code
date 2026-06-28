@@ -1,0 +1,22 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+Runs
+ID                        STATUS              MODEL                PROMPT
+run_daily_1               completed           gpt-4.1              fix terminal 
+run_daily_2               running             claude-sonnet-4      continue trus
+
+────────────────────────────────────────────────────────────────────────────────
+❯  
+────────────────────────────────────────────────────────────────────────────────
+Loaded 2 run(s)

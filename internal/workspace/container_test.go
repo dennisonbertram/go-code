@@ -5,10 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // Compile-time interface check — fails to build if ContainerWorkspace stops
@@ -131,6 +136,74 @@ func TestContainerWorkspace_Destroy_NotProvisioned(t *testing.T) {
 	}
 }
 
+func TestContainerWorkspace_ProvisionStartErrorCleansContainerAndWorkspaceDir(t *testing.T) {
+	baseDir := t.TempDir()
+	id := containerWorkspaceTestID(t, "start-error")
+	fake := &fakeContainerDockerClient{
+		containerID: "fake-container",
+		startErr:    errors.New("start failed"),
+	}
+	w := NewContainer("")
+	w.dockerClient = fake
+
+	err := w.Provision(context.Background(), Options{
+		ID:      id,
+		BaseDir: baseDir,
+	})
+	if err == nil || !strings.Contains(err.Error(), "start failed") {
+		t.Fatalf("Provision error = %v, want start failed", err)
+	}
+	if !fake.stopCalled {
+		t.Fatal("ContainerStop was not called after start failure")
+	}
+	if !fake.removeCalled {
+		t.Fatal("ContainerRemove was not called after start failure")
+	}
+	if _, statErr := os.Stat(filepath.Join(baseDir, id)); !os.IsNotExist(statErr) {
+		t.Fatalf("workspace dir should be removed after start failure, stat err=%v", statErr)
+	}
+}
+
+func TestContainerWorkspace_DestroyRemovesWorkspaceDir(t *testing.T) {
+	workspacePath := t.TempDir()
+	fake := &fakeContainerDockerClient{containerID: "fake-container"}
+	w := NewContainer("")
+	w.dockerClient = fake
+	w.containerID = fake.containerID
+	w.workspacePath = workspacePath
+
+	if err := w.Destroy(context.Background()); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if !fake.stopCalled || !fake.removeCalled {
+		t.Fatalf("expected stop and remove calls, got stop=%v remove=%v", fake.stopCalled, fake.removeCalled)
+	}
+	if _, err := os.Stat(workspacePath); !os.IsNotExist(err) {
+		t.Fatalf("workspace dir should be removed after Destroy, stat err=%v", err)
+	}
+}
+
+func TestContainerWorkspace_DestroyUsesForceContextWhenCallerContextCancelled(t *testing.T) {
+	workspacePath := t.TempDir()
+	fake := &fakeContainerDockerClient{containerID: "fake-container"}
+	w := NewContainer("")
+	w.dockerClient = fake
+	w.containerID = fake.containerID
+	w.workspacePath = workspacePath
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := w.Destroy(ctx); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if fake.stopCtxCanceled {
+		t.Fatal("ContainerStop received the caller's already-cancelled context")
+	}
+	if fake.removeCtxCanceled {
+		t.Fatal("ContainerRemove received the caller's already-cancelled context")
+	}
+}
+
 func TestContainerWorkspace_HarnessURL_BeforeProvision(t *testing.T) {
 	w := NewContainer("")
 	if got := w.HarnessURL(); got != "" {
@@ -178,4 +251,53 @@ func TestGetFreePort(t *testing.T) {
 	if port <= 0 || port > 65535 {
 		t.Fatalf("expected valid port in range 1-65535, got %d", port)
 	}
+}
+
+type fakeContainerDockerClient struct {
+	containerID       string
+	createErr         error
+	startErr          error
+	inspectErr        error
+	removeErr         error
+	createCalled      bool
+	startCalled       bool
+	inspectCalled     bool
+	stopCalled        bool
+	removeCalled      bool
+	stopCtxCanceled   bool
+	removeCtxCanceled bool
+}
+
+func (f *fakeContainerDockerClient) ContainerCreate(context.Context, *container.Config, *container.HostConfig, *network.NetworkingConfig, *ocispec.Platform, string) (container.CreateResponse, error) {
+	f.createCalled = true
+	if f.containerID == "" {
+		f.containerID = "fake-container"
+	}
+	return container.CreateResponse{ID: f.containerID}, f.createErr
+}
+
+func (f *fakeContainerDockerClient) ContainerStart(context.Context, string, container.StartOptions) error {
+	f.startCalled = true
+	return f.startErr
+}
+
+func (f *fakeContainerDockerClient) ContainerInspect(context.Context, string) (container.InspectResponse, error) {
+	f.inspectCalled = true
+	return container.InspectResponse{
+		ContainerJSONBase: &container.ContainerJSONBase{
+			State: &container.State{Running: true},
+		},
+	}, f.inspectErr
+}
+
+func (f *fakeContainerDockerClient) ContainerStop(ctx context.Context, _ string, _ container.StopOptions) error {
+	f.stopCalled = true
+	f.stopCtxCanceled = ctx.Err() != nil
+	return nil
+}
+
+func (f *fakeContainerDockerClient) ContainerRemove(ctx context.Context, _ string, _ container.RemoveOptions) error {
+	f.removeCalled = true
+	f.removeCtxCanceled = ctx.Err() != nil
+	return f.removeErr
 }

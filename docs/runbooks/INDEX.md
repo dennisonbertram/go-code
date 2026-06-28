@@ -18,3 +18,4 @@
 - `profile-authoring.md`: TOML schema reference, resolution tiers, built-in profile catalog, and step-by-step guide for creating and validating custom profiles.
 - `profile-operations.md`: How to choose, start with, and operate profiles — recommendation tool, run request field, API lifecycle management, and efficiency reports.
 - `subagent-debugging.md`: How to find a child run's ID, read its status and events, interpret ChildResult, and diagnose common failures (profile not found, tool not allowed, max_steps exceeded, cost limit, workspace provision).
+- `benchmark-smoke.md`: Key-free deterministic smokes (in-process Go test + shell script), the grounded result schema (`internal/benchresult`), the comparison-harness shape (`benchmarks/comparison/`), and the real Python benchmark paths with their deps and honesty caveats.

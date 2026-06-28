@@ -74,7 +74,11 @@ func TestScope_ReadOnly_CannotCancelRun(t *testing.T) {
 		Store:  ms,
 	})
 
-	run, err := runner.StartRun(harness.RunRequest{Prompt: "hello"})
+	// Stamp the run with the same tenant the API keys belong to. This test
+	// exercises scope enforcement (read-only vs write), not tenant isolation;
+	// without a matching tenant the by-ID tenant-ownership gate would 404 the
+	// write key's cancel before scope even mattered.
+	run, err := runner.StartRun(harness.RunRequest{Prompt: "hello", TenantID: "tenant-cancel-scope"})
 	if err != nil {
 		t.Fatalf("StartRun: %v", err)
 	}

@@ -130,23 +130,48 @@ func (j *eventJournal) prepareLocked(state *runState, runID string, eventType Ev
 		}
 	}
 
-	// Capture the recorder channel under lock for non-terminal events.
-	if !isTerminal {
-		delivery.recorderCh = state.recorderCh
+	// Queue non-terminal recorder events while still holding the runner lock.
+	// Otherwise a terminal emit can close the recorder channel after this event
+	// has been appended to state.events but before dispatch() queues it, leaving
+	// the JSONL ledger shorter than the canonical in-memory history.
+	if !isTerminal && state.recorderCh != nil {
+		rev := rollout.RecordableEvent{
+			ID:        event.ID,
+			RunID:     event.RunID,
+			Type:      string(event.Type),
+			Timestamp: event.Timestamp,
+			Payload:   event.Payload,
+			Seq:       eventSeq,
+		}
+		if !safeRecorderSend(state.recorderCh, rev) {
+			if j.runner.config.Logger != nil {
+				j.runner.config.Logger.Error("rollout recorder: channel full, event dropped",
+					"run_id", runID, "event_type", string(eventType), "seq", eventSeq)
+			}
+			dropMarker := rollout.RecordableEvent{
+				ID:        fmt.Sprintf("%s:drop:%d", runID, eventSeq),
+				RunID:     runID,
+				Type:      string(EventRecorderDropDetected),
+				Timestamp: time.Now().UTC(),
+				Seq:       eventSeq,
+				Payload: map[string]any{
+					"dropped_event_id":   event.ID,
+					"dropped_event_type": string(eventType),
+					"dropped_seq":        eventSeq,
+				},
+			}
+			safeRecorderSend(state.recorderCh, dropMarker)
+		}
 	}
 
 	return delivery, true
 }
 
-func (j *eventJournal) publishTerminalLocked(delivery eventDispatch) {
+func (j *eventJournal) publishTerminal(delivery eventDispatch) {
 	j.runner.storeAppendEvent(delivery.event, delivery.eventSeq)
 
 	for _, sub := range delivery.subscribers {
-		select {
-		case sub.ch <- sub.event:
-		default:
-			// Drop if subscriber is too slow; event is still persisted in run history.
-		}
+		j.runner.sendTerminalSubscriberEvent(sub.ch, sub.event)
 	}
 }
 
@@ -200,25 +225,6 @@ func (j *eventJournal) dispatch(delivery eventDispatch) {
 		return
 	}
 
-	if delivery.recorderCh != nil {
-		if !safeRecorderSend(delivery.recorderCh, rev) {
-			if j.runner.config.Logger != nil {
-				j.runner.config.Logger.Error("rollout recorder: channel full, event dropped",
-					"run_id", delivery.runID, "event_type", string(delivery.eventType), "seq", delivery.eventSeq)
-			}
-			dropMarker := rollout.RecordableEvent{
-				ID:        fmt.Sprintf("%s:drop:%d", delivery.runID, delivery.eventSeq),
-				RunID:     delivery.runID,
-				Type:      string(EventRecorderDropDetected),
-				Timestamp: time.Now().UTC(),
-				Seq:       delivery.eventSeq,
-				Payload: map[string]any{
-					"dropped_event_id":   delivery.event.ID,
-					"dropped_event_type": string(delivery.eventType),
-					"dropped_seq":        delivery.eventSeq,
-				},
-			}
-			safeRecorderSend(delivery.recorderCh, dropMarker)
-		}
-	}
+	// Non-terminal recorder events are queued in prepareLocked while the runner
+	// lock is held so terminal close cannot overtake them.
 }

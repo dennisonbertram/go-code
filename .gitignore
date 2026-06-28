@@ -26,6 +26,7 @@ __pycache__/
 *.py[cod]
 
 # Compiled binaries (root-level)
+/forensics
 /harnesscli
 /harnessd
 /symphd

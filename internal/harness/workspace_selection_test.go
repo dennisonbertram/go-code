@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,8 @@ type alwaysFailProviderWS struct{}
 func (p *alwaysFailProviderWS) Complete(_ context.Context, _ CompletionRequest) (CompletionResult, error) {
 	return CompletionResult{}, errors.New("provider always fails")
 }
+
+var initGitRepoForWSMu sync.Mutex
 
 // drainRunEventsWS subscribes to a run and collects all events until a
 // terminal event is received or the deadline elapses.
@@ -72,11 +75,21 @@ func drainRunEventsWS(t *testing.T, runner *Runner, runID string) []Event {
 // initGitRepoForWS creates a temp directory with a minimal git repo.
 func initGitRepoForWS(t *testing.T) string {
 	t.Helper()
+
+	// The race detector and macOS fork/exec can interact poorly when many
+	// parallel tests create git repositories at once. Serializing this test
+	// setup keeps the workspace tests deterministic without changing the
+	// production worktree paths they exercise.
+	initGitRepoForWSMu.Lock()
+	defer initGitRepoForWSMu.Unlock()
+
 	dir := t.TempDir()
 
 	runGitWS := func(args ...string) {
 		t.Helper()
-		cmd := exec.Command("git", args...)
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", args...)
 		cmd.Dir = dir
 		if out, err := cmd.CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v\n%s", args, err, out)
@@ -725,5 +738,637 @@ allow = []
 				t.Errorf("workspace.provisioned type = worktree, want local — explicit WorkspaceType should win")
 			}
 		}
+	}
+}
+
+// T-PFIX-1: when workspace provisioning fails AFTER git worktree add (partial
+// success), the runner must Destroy the partial workspace before emitting
+// workspace.provision_failed so no orphaned worktree dir or git branch remains.
+//
+// Failure is induced by committing a harness.toml directory into the source
+// repository. The worktree is created successfully, then ConfigTOML writing
+// fails because the target path is a directory. This deterministically triggers
+// the partial-failure cleanup path after git worktree add has succeeded.
+func TestWorktreePartialProvisionFailure_NoOrphan(t *testing.T) {
+	t.Parallel()
+
+	repoDir := initGitRepoForWS(t)
+	worktreeRootDir := t.TempDir()
+	blockingDir := filepath.Join(repoDir, "harness.toml")
+	if err := os.Mkdir(blockingDir, 0o755); err != nil {
+		t.Fatalf("mkdir harness.toml blocker: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(blockingDir, "placeholder"), []byte("block"), 0o644); err != nil {
+		t.Fatalf("write harness.toml blocker: %v", err)
+	}
+	for _, args := range [][]string{
+		{"add", "harness.toml"},
+		{"commit", "-m", "add harness toml directory blocker"},
+	} {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "git", append([]string{"-C", repoDir}, args...)...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+
+	runner := NewRunner(
+		&staticProviderWS{result: CompletionResult{Content: "done"}},
+		NewRegistry(),
+		RunnerConfig{
+			MaxSteps: 1,
+			WorkspaceBaseOptions: WorkspaceProvisionOptions{
+				RepoPath:        repoDir,
+				WorktreeRootDir: worktreeRootDir,
+				ConfigTOML:      "[runner]\nmax_steps = 1\n",
+			},
+		},
+	)
+
+	run, err := runner.StartRun(RunRequest{
+		Prompt:        "hello",
+		WorkspaceType: "worktree",
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	events := drainRunEventsWS(t, runner, run.ID)
+
+	// Verify the run failed (provision_failed → run.failed).
+	var gotProvisionFailed, gotRunFailed bool
+	for _, ev := range events {
+		switch ev.Type {
+		case EventWorkspaceProvisionFailed:
+			gotProvisionFailed = true
+		case EventRunFailed:
+			gotRunFailed = true
+		}
+	}
+	if !gotProvisionFailed {
+		t.Error("expected workspace.provision_failed event")
+	}
+	if !gotRunFailed {
+		t.Error("expected run.failed event")
+	}
+
+	// Give Destroy a moment to run (it's called before workspace.provision_failed
+	// is emitted in the fixed code, but just in case).
+	time.Sleep(50 * time.Millisecond)
+
+	// Assert no orphaned worktree directory remains.
+	entries, err := os.ReadDir(worktreeRootDir)
+	if err != nil {
+		t.Fatalf("ReadDir worktreeRootDir: %v", err)
+	}
+	// After restore (cleanup fn runs later), we may still have the dir, so
+	// check using git worktree list which is definitive.
+	_ = entries
+
+	// Assert no leftover git worktree entry (other than the main worktree).
+	cmd := exec.CommandContext(context.Background(), "git", "-C", repoDir, "worktree", "list", "--porcelain")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git worktree list: %v: %s", err, out)
+	}
+	worktreeEntries := strings.Count(string(out), "worktree ")
+	if worktreeEntries > 1 {
+		t.Errorf("orphaned git worktree entry found after partial provision failure:\n%s", string(out))
+	}
+
+	// Assert no orphan branch remains.
+	branchCmd := exec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", "--list", "workspace-*")
+	branchOut, err := branchCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git branch --list: %v: %s", err, branchOut)
+	}
+	if strings.TrimSpace(string(branchOut)) != "" {
+		t.Errorf("orphaned git branch found after partial provision failure: %s", strings.TrimSpace(string(branchOut)))
+	}
+}
+
+// ---- Deliverable A: worktree containment ----
+
+// evalSymlinksWS resolves a path through symlinks for robust path comparison.
+// macOS t.TempDir() lives under /var/folders, a symlink to /private/var, and the
+// bash `pwd` builtin reports the logical (unresolved) cwd, so a raw string compare
+// against workspace_path can spuriously differ. Resolving both sides removes that
+// noise without weakening the assertion (both must still name the same directory).
+func evalSymlinksWS(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		// Fall back to the raw path if the target no longer exists (e.g. after
+		// Destroy). The caller decides whether a missing path is acceptable.
+		return path
+	}
+	return resolved
+}
+
+// worktreeContainmentProvider issues, on its first turn, a bash tool call that
+// writes two files using paths RELATIVE to the tool's cwd:
+//   - `pwd > marker.txt` records the shell's working directory, and
+//   - `echo hi > out.txt` writes a sentinel file.
+//
+// Because relative paths resolve against the bash tool's cwd, both files must
+// land inside the provisioned worktree (not the daemon startup cwd) if tool
+// routing is wired to the workspace. The second turn terminates the run.
+func worktreeContainmentProvider() *stubProvider {
+	return &stubProvider{turns: []CompletionResult{
+		{
+			ToolCalls: []ToolCall{{
+				ID:        "call-write-marker",
+				Name:      "bash",
+				Arguments: `{"command":"pwd > marker.txt && echo hi > out.txt","timeout_seconds":30}`,
+			}},
+		},
+		{Content: "done"},
+	}}
+}
+
+// TestWorktreeContainment_ToolCwdIsWorktree (Deliverable A) proves that file/shell
+// tools in a workspace_type="worktree" run operate INSIDE the provisioned worktree,
+// not the daemon's startup cwd. A real bash tool call writes out.txt and marker.txt
+// via cwd-relative paths; the test asserts:
+//   - out.txt exists at <workspace_path>/out.txt,
+//   - out.txt does NOT exist at the daemon startup cwd, and
+//   - marker.txt (containing `pwd`) names <workspace_path>, proving the tool's cwd
+//     was the worktree.
+//
+// The worktree is destroyed on run completion (git worktree remove), so the
+// in-worktree filesystem assertions must run BEFORE the terminal event. We
+// subscribe to the live event stream and perform them the moment
+// tool.call.completed arrives — the worktree is still on disk at that point.
+func TestWorktreeContainment_ToolCwdIsWorktree(t *testing.T) {
+	t.Parallel()
+
+	repoDir := initGitRepoForWS(t)
+	worktreeRootDir := t.TempDir()
+
+	// Use a dedicated temp directory as the simulated daemon startup cwd rather
+	// than os.Getwd(). os.Getwd() returns the shared process cwd; under t.Parallel
+	// another test could coincidentally create "out.txt" there, making the negative
+	// assertion ("file must NOT appear in daemon cwd") spuriously pass or flap.
+	// A test-private temp dir guarantees isolation: no other test writes there.
+	daemonCwd := t.TempDir()
+
+	// NewDefaultRegistryWithOptions wires the real bash tool; BaseRegistryOptions
+	// (ApprovalMode empty → FullAuto in NewDefaultRegistryWithOptions) means the
+	// per-run registry the runner builds at the worktree path runs bash ungated.
+	runner := NewRunner(
+		worktreeContainmentProvider(),
+		NewDefaultRegistryWithOptions(daemonCwd, DefaultRegistryOptions{
+			ApprovalMode: ToolApprovalModeFullAuto,
+		}),
+		RunnerConfig{
+			MaxSteps:     3,
+			DefaultModel: "test-model",
+			WorkspaceBaseOptions: WorkspaceProvisionOptions{
+				RepoPath:        repoDir,
+				WorktreeRootDir: worktreeRootDir,
+			},
+		},
+	)
+
+	run, err := runner.StartRun(RunRequest{
+		Prompt:        "write files relative to cwd",
+		WorkspaceType: "worktree",
+		AllowedTools:  []string{"bash"},
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	history, stream, cancelSub, subErr := runner.Subscribe(run.ID)
+	if subErr != nil {
+		t.Fatalf("Subscribe: %v", subErr)
+	}
+	defer cancelSub()
+
+	// assertContainment runs the in-worktree filesystem checks while the worktree
+	// is still on disk (before workspace.destroyed). wsPath is the captured
+	// provisioned path. It is called exactly once, on tool.call.completed.
+	assertContainment := func(wsPath string) {
+		t.Helper()
+		if wsPath == "" {
+			t.Error("workspace.provisioned event missing non-empty workspace_path")
+			return
+		}
+
+		// out.txt must exist inside the worktree.
+		wsOut := filepath.Join(wsPath, "out.txt")
+		if _, statErr := os.Stat(wsOut); statErr != nil {
+			t.Errorf("expected out.txt inside worktree at %s: %v", wsOut, statErr)
+		}
+
+		// out.txt must NOT exist at the daemon startup cwd (no leak outside worktree).
+		daemonOut := filepath.Join(daemonCwd, "out.txt")
+		if _, statErr := os.Stat(daemonOut); statErr == nil {
+			// Remove the leaked file so we don't pollute the repo tree, then fail.
+			_ = os.Remove(daemonOut)
+			t.Errorf("out.txt leaked to daemon cwd at %s — tool cwd was not the worktree", daemonOut)
+		}
+
+		// marker.txt's contents (the bash `pwd`) must name the worktree path.
+		markerBytes, readErr := os.ReadFile(filepath.Join(wsPath, "marker.txt"))
+		if readErr != nil {
+			t.Errorf("read marker.txt inside worktree: %v", readErr)
+			return
+		}
+		markerPath := strings.TrimSpace(string(markerBytes))
+		if evalSymlinksWS(t, markerPath) != evalSymlinksWS(t, wsPath) {
+			t.Errorf("bash pwd = %q (resolved %q), want worktree %q (resolved %q) — tool cwd was not the worktree",
+				markerPath, evalSymlinksWS(t, markerPath), wsPath, evalSymlinksWS(t, wsPath))
+		}
+	}
+
+	var (
+		wsPath         string
+		gotProvisioned bool
+		gotToolDone    bool
+		gotCompleted   bool
+	)
+	process := func(ev Event) {
+		switch ev.Type {
+		case EventWorkspaceProvisioned:
+			wsPath, _ = ev.Payload["workspace_path"].(string)
+			gotProvisioned = true
+		case EventToolCallCompleted:
+			// Run filesystem assertions while the worktree still exists.
+			if !gotToolDone {
+				gotToolDone = true
+				assertContainment(wsPath)
+			}
+		case EventRunCompleted:
+			gotCompleted = true
+		}
+	}
+
+	for _, ev := range history {
+		process(ev)
+	}
+
+	deadline := time.After(15 * time.Second)
+	for !gotCompleted {
+		select {
+		case ev, ok := <-stream:
+			if !ok {
+				t.Fatal("event stream closed before run.completed")
+			}
+			process(ev)
+			if IsTerminalEvent(ev.Type) && ev.Type != EventRunCompleted {
+				t.Fatalf("run reached non-success terminal %s; events so far provisioned=%v toolDone=%v",
+					ev.Type, gotProvisioned, gotToolDone)
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for run.completed")
+		}
+	}
+
+	if !gotProvisioned {
+		t.Error("expected workspace.provisioned event")
+	}
+	if !gotToolDone {
+		t.Error("expected tool.call.completed event (bash never ran)")
+	}
+
+	if err := runner.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+}
+
+// ---- Deliverable B: full workspace lifecycle across success / failure / cancel ----
+
+// eventTypesWS returns the ordered list of event types, for diagnostics.
+func eventTypesWS(events []Event) []EventType {
+	types := make([]EventType, len(events))
+	for i, ev := range events {
+		types[i] = ev.Type
+	}
+	return types
+}
+
+// indexOfEventWS returns the index of the first event of the given type, or -1.
+func indexOfEventWS(events []Event, t EventType) int {
+	for i, ev := range events {
+		if ev.Type == t {
+			return i
+		}
+	}
+	return -1
+}
+
+// assertNoWorktreeOrphanWS asserts that the repo at repoDir has no extra git
+// worktree entry (beyond the main checkout) and no leftover workspace-* branch.
+func assertNoWorktreeOrphanWS(t *testing.T, repoDir string) {
+	t.Helper()
+
+	listCmd := exec.CommandContext(context.Background(), "git", "-C", repoDir, "worktree", "list", "--porcelain")
+	out, err := listCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git worktree list: %v: %s", err, out)
+	}
+	if n := strings.Count(string(out), "worktree "); n > 1 {
+		t.Errorf("orphaned git worktree entry remains:\n%s", string(out))
+	}
+
+	branchCmd := exec.CommandContext(context.Background(), "git", "-C", repoDir, "branch", "--list", "workspace-*")
+	branchOut, err := branchCmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git branch --list: %v: %s", err, branchOut)
+	}
+	if strings.TrimSpace(string(branchOut)) != "" {
+		t.Errorf("orphaned workspace-* branch remains: %s", strings.TrimSpace(string(branchOut)))
+	}
+}
+
+// TestWorkspaceLifecycle_Success (Deliverable B, scenario 1) verifies that a
+// normal worktree run emits workspace.provisioned and then, after the run
+// completes, workspace.destroyed — and that cleanup leaves no orphan worktree
+// or branch behind.
+func TestWorkspaceLifecycle_Success(t *testing.T) {
+	t.Parallel()
+
+	repoDir := initGitRepoForWS(t)
+	worktreeRootDir := t.TempDir()
+
+	runner := NewRunner(
+		&staticProviderWS{result: CompletionResult{Content: "done"}},
+		NewRegistry(),
+		RunnerConfig{
+			MaxSteps:     1,
+			DefaultModel: "test-model",
+			WorkspaceBaseOptions: WorkspaceProvisionOptions{
+				RepoPath:        repoDir,
+				WorktreeRootDir: worktreeRootDir,
+			},
+		},
+	)
+
+	run, err := runner.StartRun(RunRequest{
+		Prompt:        "hello",
+		WorkspaceType: "worktree",
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	events := drainRunEventsWS(t, runner, run.ID)
+
+	provIdx := indexOfEventWS(events, EventWorkspaceProvisioned)
+	destIdx := indexOfEventWS(events, EventWorkspaceDestroyed)
+	complIdx := indexOfEventWS(events, EventRunCompleted)
+
+	if provIdx < 0 {
+		t.Fatalf("expected workspace.provisioned; events=%v", eventTypesWS(events))
+	}
+	if destIdx < 0 {
+		t.Fatalf("expected workspace.destroyed on success; events=%v", eventTypesWS(events))
+	}
+	if complIdx < 0 {
+		t.Fatalf("expected run.completed; events=%v", eventTypesWS(events))
+	}
+	if !(provIdx < destIdx) {
+		t.Errorf("workspace.provisioned (%d) must precede workspace.destroyed (%d)", provIdx, destIdx)
+	}
+	if !(destIdx < complIdx) {
+		t.Errorf("workspace.destroyed (%d) must precede run.completed (%d)", destIdx, complIdx)
+	}
+
+	assertNoWorktreeOrphanWS(t, repoDir)
+}
+
+// TestWorkspaceLifecycle_ProvisionFailure (Deliverable B, scenario 2) verifies
+// that a run whose provisioning fails emits workspace.provision_failed, fails the
+// run, and leaves no orphan worktree/branch.
+//
+// Failure is induced deterministically by placing a regular file at the path that
+// WorktreeRootDir resolves to. os.MkdirAll fails immediately ("not a directory")
+// before git worktree add is ever invoked, so there is no timing race and no
+// partial worktree to clean up. The runner's event contract (provision_failed →
+// run.failed, no workspace.provisioned) is what this test exercises; the partial-
+// provision + Destroy cleanup path is covered by TestWorktreePartialProvisionFailure_NoOrphan.
+func TestWorkspaceLifecycle_ProvisionFailure(t *testing.T) {
+	t.Parallel()
+
+	repoDir := initGitRepoForWS(t)
+
+	// Create a regular file where WorktreeRootDir would be.  os.MkdirAll returns
+	// "not a directory" when any path component is a plain file, so Provision
+	// fails immediately, deterministically, without any goroutine racing.
+	base := t.TempDir()
+	blockerFile := filepath.Join(base, "blocker")
+	if err := os.WriteFile(blockerFile, []byte("block"), 0o644); err != nil {
+		t.Fatalf("create blocker file: %v", err)
+	}
+	// WorktreeRootDir points inside the regular file — MkdirAll always fails here.
+	worktreeRootDir := filepath.Join(blockerFile, "nested")
+
+	runner := NewRunner(
+		&staticProviderWS{result: CompletionResult{Content: "done"}},
+		NewRegistry(),
+		RunnerConfig{
+			MaxSteps: 1,
+			WorkspaceBaseOptions: WorkspaceProvisionOptions{
+				RepoPath:        repoDir,
+				WorktreeRootDir: worktreeRootDir,
+				ConfigTOML:      "[runner]\nmax_steps = 1\n",
+			},
+		},
+	)
+
+	run, err := runner.StartRun(RunRequest{
+		Prompt:        "hello",
+		WorkspaceType: "worktree",
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	events := drainRunEventsWS(t, runner, run.ID)
+
+	if indexOfEventWS(events, EventWorkspaceProvisionFailed) < 0 {
+		t.Errorf("expected workspace.provision_failed; events=%v", eventTypesWS(events))
+	}
+	if indexOfEventWS(events, EventRunFailed) < 0 {
+		t.Errorf("expected run.failed; events=%v", eventTypesWS(events))
+	}
+	// A failed provisioning must never report a successful provisioned/destroyed
+	// pair — provisioning never reached the success path.
+	if indexOfEventWS(events, EventWorkspaceProvisioned) >= 0 {
+		t.Errorf("unexpected workspace.provisioned on a provision failure; events=%v", eventTypesWS(events))
+	}
+
+	// No git worktree was created, so no orphan can remain.
+	assertNoWorktreeOrphanWS(t, repoDir)
+}
+
+// hangingBashWorktreeProvider returns a bash tool call that sleeps far longer
+// than the test budget on its first turn, then blocks until the run context is
+// cancelled. It lets the test cancel a worktree run mid-tool-execution.
+type hangingBashWorktreeProvider struct {
+	mu        sync.Mutex
+	calls     int
+	firstCall chan struct{}
+}
+
+func newHangingBashWorktreeProvider() *hangingBashWorktreeProvider {
+	return &hangingBashWorktreeProvider{firstCall: make(chan struct{})}
+}
+
+func (p *hangingBashWorktreeProvider) Complete(ctx context.Context, _ CompletionRequest) (CompletionResult, error) {
+	p.mu.Lock()
+	idx := p.calls
+	p.calls++
+	p.mu.Unlock()
+
+	if idx == 0 {
+		select {
+		case <-p.firstCall:
+		default:
+			close(p.firstCall)
+		}
+		return CompletionResult{
+			ToolCalls: []ToolCall{{
+				ID:        "call-hang",
+				Name:      "bash",
+				Arguments: `{"command":"sleep 30","timeout_seconds":60}`,
+			}},
+		}, nil
+	}
+	<-ctx.Done()
+	return CompletionResult{}, ctx.Err()
+}
+
+// TestWorkspaceLifecycle_CancelMidFlight (Deliverable B, scenario 3) verifies
+// that a worktree run cancelled while a tool is executing still cleans up its
+// workspace: workspace.destroyed is emitted, the run reaches RunStatusCancelled,
+// and no orphan worktree/branch remains.
+func TestWorkspaceLifecycle_CancelMidFlight(t *testing.T) {
+	t.Parallel()
+
+	repoDir := initGitRepoForWS(t)
+	worktreeRootDir := t.TempDir()
+
+	prov := newHangingBashWorktreeProvider()
+
+	runner := NewRunner(
+		prov,
+		NewDefaultRegistryWithOptions(t.TempDir(), DefaultRegistryOptions{
+			ApprovalMode: ToolApprovalModeFullAuto,
+		}),
+		RunnerConfig{
+			MaxSteps:     5,
+			DefaultModel: "test-model",
+			WorkspaceBaseOptions: WorkspaceProvisionOptions{
+				RepoPath:        repoDir,
+				WorktreeRootDir: worktreeRootDir,
+			},
+		},
+	)
+
+	run, err := runner.StartRun(RunRequest{
+		Prompt:        "run a long sleep in the worktree",
+		WorkspaceType: "worktree",
+		AllowedTools:  []string{"bash"},
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	history, stream, cancelSub, subErr := runner.Subscribe(run.ID)
+	if subErr != nil {
+		t.Fatalf("Subscribe: %v", subErr)
+	}
+	defer cancelSub()
+
+	toolStarted := make(chan struct{})
+	terminal := make(chan struct{})
+	closeOnce := func(ch chan struct{}) {
+		select {
+		case <-ch:
+		default:
+			close(ch)
+		}
+	}
+	inspect := func(ev Event) {
+		if ev.Type == EventToolCallStarted {
+			closeOnce(toolStarted)
+		}
+		if IsTerminalEvent(ev.Type) {
+			closeOnce(terminal)
+		}
+	}
+	for _, ev := range history {
+		inspect(ev)
+	}
+	go func() {
+		for {
+			ev, ok := <-stream
+			if !ok {
+				closeOnce(terminal)
+				return
+			}
+			inspect(ev)
+			if IsTerminalEvent(ev.Type) {
+				closeOnce(terminal)
+				return
+			}
+		}
+	}()
+
+	// Wait until the bash tool is actually executing inside the worktree.
+	select {
+	case <-toolStarted:
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for tool.call.started (bash never started in worktree)")
+	}
+
+	// Cancel mid-flight; the sleep must be killed (run terminates well under 30s).
+	if err := runner.CancelRun(run.ID); err != nil {
+		t.Fatalf("CancelRun: %v", err)
+	}
+
+	select {
+	case <-terminal:
+	case <-time.After(10 * time.Second):
+		state, _ := runner.GetRun(run.ID)
+		t.Fatalf("timed out waiting for terminal event after cancel; last status: %q", state.Status)
+	}
+
+	// The run must be cancelled, not completed/failed.
+	state, ok := runner.GetRun(run.ID)
+	if !ok {
+		t.Fatal("run missing from store after cancel")
+	}
+	if state.Status != RunStatusCancelled {
+		t.Errorf("status = %q, want %q", state.Status, RunStatusCancelled)
+	}
+
+	// Collect the full event history and assert workspace cleanup happened.
+	full := drainRunEventsWS(t, runner, run.ID)
+	provIdx := indexOfEventWS(full, EventWorkspaceProvisioned)
+	destIdx := indexOfEventWS(full, EventWorkspaceDestroyed)
+	cancelIdx := indexOfEventWS(full, EventRunCancelled)
+
+	if provIdx < 0 {
+		t.Fatalf("expected workspace.provisioned; events=%v", eventTypesWS(full))
+	}
+	if destIdx < 0 {
+		t.Fatalf("expected workspace.destroyed after cancel; events=%v", eventTypesWS(full))
+	}
+	if cancelIdx < 0 {
+		t.Fatalf("expected run.cancelled; events=%v", eventTypesWS(full))
+	}
+	if !(destIdx < cancelIdx) {
+		t.Errorf("workspace.destroyed (%d) must precede run.cancelled (%d)", destIdx, cancelIdx)
+	}
+
+	// No orphan worktree directory or branch may remain after cancel cleanup.
+	assertNoWorktreeOrphanWS(t, repoDir)
+
+	if err := runner.Shutdown(context.Background()); err != nil {
+		t.Fatalf("Shutdown: %v", err)
 	}
 }

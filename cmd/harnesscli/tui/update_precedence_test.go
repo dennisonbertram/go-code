@@ -188,43 +188,48 @@ func TestEscapePrecedence(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestCtrlCPrecedence covers the Ctrl+C / Quit key behaviour.
+// Updated for ticket #669: ctrl+c during an active run now uses a two-stage
+// confirmation (first ctrl+c shows banner; second ctrl+c cancels). The table
+// test reflects this: after ONE ctrl+c, a run is still active (banner shown);
+// cancellation requires a SECOND ctrl+c.
 func TestCtrlCPrecedence(t *testing.T) {
 	t.Parallel()
 
 	ctrlC := tea.KeyMsg{Type: tea.KeyCtrlC}
 
 	cases := []struct {
-		name          string
-		setup         func(m tui.Model) tui.Model
-		wantCancelled bool
-		wantRunActive bool
+		name                  string
+		setup                 func(m tui.Model) tui.Model
+		wantBannerAfterFirst  bool // banner visible after ONE ctrl+c
+		wantRunActiveAfterOne bool // run still active after ONE ctrl+c
 	}{
 		{
-			name: "ctrl_c_with_active_run_cancels",
+			// Two-stage (#669): first ctrl+c shows banner; run stays active.
+			name: "ctrl_c_with_active_run_shows_banner",
 			setup: func(m tui.Model) tui.Model {
 				cancelFn := func() {}
 				m = m.WithCancelRun(cancelFn)
 				return applyMsgs(m, tui.RunStartedMsg{RunID: "r1"})
 			},
-			wantCancelled: true,
-			wantRunActive: false,
+			wantBannerAfterFirst:  true,
+			wantRunActiveAfterOne: true,
 		},
 		{
-			name: "ctrl_c_without_run_does_not_cancel",
+			name: "ctrl_c_without_run_does_not_show_banner",
 			setup: func(m tui.Model) tui.Model {
 				// Set cancel func but do NOT start a run.
 				return m.WithCancelRun(func() {})
 			},
-			wantCancelled: false,
-			wantRunActive: false,
+			wantBannerAfterFirst:  false,
+			wantRunActiveAfterOne: false,
 		},
 		{
 			name: "ctrl_c_no_cancel_func_idle",
 			setup: func(m tui.Model) tui.Model {
 				return m // no cancelFunc, no run
 			},
-			wantCancelled: false,
-			wantRunActive: false,
+			wantBannerAfterFirst:  false,
+			wantRunActiveAfterOne: false,
 		},
 	}
 
@@ -235,28 +240,30 @@ func TestCtrlCPrecedence(t *testing.T) {
 			m := newInitialised()
 			before := tc.setup(m)
 
-			var cancelled bool
 			if before.RunActive() {
-				// We need to track cancellation; reset with a tracking cancel.
-				cancelFn := func() { cancelled = true }
-				before = before.WithCancelRun(cancelFn)
+				// Re-wire with a no-op cancel so value semantics don't lose the func.
+				before = before.WithCancelRun(func() {})
 			}
 
 			after, _ := before.Update(ctrlC)
 			afterModel := after.(tui.Model)
 
-			if tc.wantCancelled && !cancelled {
-				// For the "no-run" cases, cancellation is not expected.
+			if afterModel.InterruptBannerVisible() != tc.wantBannerAfterFirst {
+				t.Errorf("InterruptBannerVisible() = %v, want %v", afterModel.InterruptBannerVisible(), tc.wantBannerAfterFirst)
 			}
-			if afterModel.RunActive() != tc.wantRunActive {
-				t.Errorf("RunActive() = %v, want %v", afterModel.RunActive(), tc.wantRunActive)
+			if afterModel.RunActive() != tc.wantRunActiveAfterOne {
+				t.Errorf("RunActive() = %v, want %v", afterModel.RunActive(), tc.wantRunActiveAfterOne)
 			}
 		})
 	}
 }
 
-// TestCtrlC_ActiveRunCallsCancel verifies the cancel func is called when
-// Ctrl+C is pressed with an active run.
+// TestCtrlC_ActiveRunCallsCancel verifies the cancel func is called after the
+// TWO-STAGE confirmation (ticket #669): the first Ctrl+C shows a banner; the
+// second Ctrl+C calls the cancel func.
+//
+// Changed from original assertion (first ctrl+c cancels immediately) to the
+// new two-stage semantics: cancel is only called on the SECOND ctrl+c.
 func TestCtrlC_ActiveRunCallsCancel(t *testing.T) {
 	t.Parallel()
 
@@ -267,10 +274,16 @@ func TestCtrlC_ActiveRunCallsCancel(t *testing.T) {
 	m = m.WithCancelRun(cancelFn)
 	m = applyMsgs(m, tui.RunStartedMsg{RunID: "run-cancel-001"})
 
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	// First ctrl+c: shows banner only, does NOT cancel.
+	m2, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cancelled {
+		t.Error("cancel func must NOT be called on the FIRST Ctrl+C (two-stage required)")
+	}
 
+	// Second ctrl+c: confirms cancel.
+	_, _ = m2.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	if !cancelled {
-		t.Error("cancel func must be called when Ctrl+C pressed with active run")
+		t.Error("cancel func must be called on the SECOND Ctrl+C with active run")
 	}
 }
 
@@ -413,8 +426,9 @@ func TestEnterPrecedence(t *testing.T) {
 
 // TestAPIKeysOverlayEscapePrecedence verifies the two-level Escape priority
 // inside the apikeys overlay:
-//   Level 0 (input mode active): Escape exits input mode but keeps overlay.
-//   Level 1 (list mode): Escape closes overlay entirely.
+//
+//	Level 0 (input mode active): Escape exits input mode but keeps overlay.
+//	Level 1 (list mode): Escape closes overlay entirely.
 func TestAPIKeysOverlayEscapePrecedence(t *testing.T) {
 	t.Parallel()
 
@@ -451,8 +465,9 @@ func TestAPIKeysOverlayEscapePrecedence(t *testing.T) {
 
 // TestModelOverlayEscapePrecedence verifies the two-level Escape inside the
 // model overlay:
-//   Level-0 with search text: Escape clears search, overlay stays open.
-//   Level-0 no search:        Escape closes overlay entirely.
+//
+//	Level-0 with search text: Escape clears search, overlay stays open.
+//	Level-0 no search:        Escape closes overlay entirely.
 func TestModelOverlayEscapePrecedence(t *testing.T) {
 	t.Parallel()
 

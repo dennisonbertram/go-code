@@ -172,7 +172,7 @@ func (m *contractMockConversationStore) DeleteConversation(_ context.Context, _ 
 func (m *contractMockConversationStore) UpdateConversationMeta(_ context.Context, _, _, _ string) error {
 	return nil
 }
-func (m *contractMockConversationStore) SearchMessages(_ context.Context, _ string, _ int) ([]MessageSearchResult, error) {
+func (m *contractMockConversationStore) SearchMessages(_ context.Context, _ string, _ string, _ int) ([]MessageSearchResult, error) {
 	return []MessageSearchResult{}, nil
 }
 func (m *contractMockConversationStore) DeleteOldConversations(_ context.Context, _ time.Time) (int, error) {

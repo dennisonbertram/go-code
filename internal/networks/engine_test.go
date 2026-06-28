@@ -122,3 +122,32 @@ func TestCompileDefinitionIncludesStructuredResultInstructions(t *testing.T) {
 		t.Fatal("expected compiled run step")
 	}
 }
+
+func TestEngineGetDefinition(t *testing.T) {
+	t.Parallel()
+
+	engine := NewEngine(Options{Definitions: []Definition{{
+		Name:        "planner",
+		Description: "plan work",
+		Roles: []RoleDefinition{{
+			ID:     "lead",
+			Prompt: "Plan",
+			Model:  "gpt-test",
+		}},
+	}}})
+
+	def, ok := engine.GetDefinition("planner")
+	if !ok {
+		t.Fatal("expected planner definition")
+	}
+	if def.Description != "plan work" {
+		t.Fatalf("description = %q, want plan work", def.Description)
+	}
+	if len(def.Roles) != 1 || def.Roles[0].ID != "lead" {
+		t.Fatalf("roles = %+v, want lead role", def.Roles)
+	}
+
+	if _, ok := engine.GetDefinition("missing"); ok {
+		t.Fatal("missing definition returned ok=true")
+	}
+}

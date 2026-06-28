@@ -54,7 +54,13 @@ func SetDelayedCallbackTool(mgr *tools.CallbackManager) tools.Tool {
 			return "", fmt.Errorf("set_delayed_callback: no run metadata in context")
 		}
 
-		info, err := mgr.Set(md.ConversationID, delay, args.Prompt)
+		info, err := mgr.Set(tools.SetRequest{
+			ConversationID: md.ConversationID,
+			Delay:          delay,
+			Prompt:         args.Prompt,
+			TenantID:       md.TenantID,
+			AgentID:        md.AgentID,
+		})
 		if err != nil {
 			return "", fmt.Errorf("set_delayed_callback failed: %w", err)
 		}

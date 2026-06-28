@@ -10,12 +10,13 @@ type Suggestion struct {
 // All methods return a new Model (value semantics — safe for concurrent use
 // when each goroutine holds its own copy).
 type Model struct {
-	suggestions []Suggestion
-	filtered    []Suggestion // current filtered+ranked results
-	query       string       // current filter query (without leading /)
-	selected    int          // cursor index in filtered
-	active      bool
-	maxVisible  int // max rows to show (default 8)
+	suggestions  []Suggestion
+	filtered     []Suggestion // current filtered+ranked results
+	query        string       // current filter query (without leading /)
+	selected     int          // cursor index in filtered
+	scrollOffset int          // index of the first visible item in the scroll window
+	active       bool
+	maxVisible   int // max rows to show (default 8)
 }
 
 // New creates a new Model seeded with the given suggestions.
@@ -48,6 +49,42 @@ func (m Model) IsActive() bool {
 	return m.active
 }
 
+// ScrollOffset returns the index of the first item in the current scroll window.
+// This is exported for testing purposes.
+func (m Model) ScrollOffset() int {
+	return m.scrollOffset
+}
+
+// clampScrollWindow adjusts scrollOffset so that m.selected is always within
+// the visible window [scrollOffset, scrollOffset+maxVisible).
+func (m Model) clampScrollWindow() Model {
+	maxVis := m.maxVisible
+	if maxVis <= 0 {
+		maxVis = 8
+	}
+	n := len(m.filtered)
+	if n == 0 {
+		m.scrollOffset = 0
+		return m
+	}
+	// Scroll down if selected has moved past the bottom of the window.
+	if m.selected >= m.scrollOffset+maxVis {
+		m.scrollOffset = m.selected - maxVis + 1
+	}
+	// Scroll up if selected has moved above the top of the window.
+	if m.selected < m.scrollOffset {
+		m.scrollOffset = m.selected
+	}
+	// Clamp offset to valid range.
+	if m.scrollOffset < 0 {
+		m.scrollOffset = 0
+	}
+	if m.scrollOffset > n-1 {
+		m.scrollOffset = n - 1
+	}
+	return m
+}
+
 // SetQuery updates the filter query and resets the cursor to position 0.
 // query should NOT include the leading '/'.
 // Uses FuzzyFilter for ranked, fuzzy matching.
@@ -59,6 +96,7 @@ func (m Model) SetQuery(query string) Model {
 		m.filtered = FuzzyFilter(m.suggestions, query)
 	}
 	m.selected = 0
+	m.scrollOffset = 0
 	return m
 }
 
@@ -68,7 +106,7 @@ func (m Model) Down() Model {
 		return m
 	}
 	m.selected = (m.selected + 1) % len(m.filtered)
-	return m
+	return m.clampScrollWindow()
 }
 
 // Up moves the cursor up by one, wrapping to the bottom when past the first item.
@@ -77,7 +115,7 @@ func (m Model) Up() Model {
 		return m
 	}
 	m.selected = (m.selected - 1 + len(m.filtered)) % len(m.filtered)
-	return m
+	return m.clampScrollWindow()
 }
 
 // Selected returns the currently highlighted suggestion.

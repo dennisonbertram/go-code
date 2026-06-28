@@ -12,6 +12,7 @@ import (
 	"go-agent-harness/internal/mcpserver"
 	"go-agent-harness/internal/networks"
 	"go-agent-harness/internal/provider/catalog"
+	"go-agent-harness/internal/relay"
 	"go-agent-harness/internal/server"
 	istore "go-agent-harness/internal/store"
 	"go-agent-harness/internal/subagents"
@@ -67,8 +68,10 @@ type httpRuntimeOptions struct {
 	modelCatalog         *catalog.Catalog
 	providerRegistry     *catalog.ProviderRegistry
 	runStore             istore.Store
+	relayWorkerStore     relay.WorkerStore
 	triggers             triggerRuntime
 	callbackStarter      *callbackRunStarter
+	callbackBridge       *harness.CallbackEventBridge
 	msgSummarizer        *lazySummarizer
 	skillManager         server.SkillManager
 	subagentBaseRef      string
@@ -122,6 +125,10 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		opts.callbackStarter.mu.Unlock()
 	}
 
+	if opts.callbackBridge != nil {
+		opts.callbackBridge.BindRunner(runner)
+	}
+
 	if opts.msgSummarizer != nil {
 		opts.msgSummarizer.mu.Lock()
 		opts.msgSummarizer.summarizer = runner.NewMessageSummarizer()
@@ -140,7 +147,9 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		networks:         networkEngine,
 		providerRegistry: opts.providerRegistry,
 		runStore:         opts.runStore,
+		relayWorkerStore: opts.relayWorkerStore,
 		triggers:         opts.triggers,
+		rolloutDir:       opts.runnerCfg.RolloutDir,
 	}))
 
 	// Mount the MCP server at /mcp so external MCP clients can drive the harness.
@@ -153,7 +162,10 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 	httpServer := &http.Server{
 		Addr:              opts.addr,
 		Handler:           topMux,
+		ReadTimeout:       60 * time.Second,
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
 
 	return httpRuntime{

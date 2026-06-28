@@ -24,33 +24,33 @@ type OperatorWorkerSummary struct {
 
 // OperatorRunSummary is an operator-facing view of a relayed run.
 type OperatorRunSummary struct {
-	RunID            string            `json:"run_id"`
-	Status           string            `json:"status"`
-	SelectedWorker   string            `json:"selected_worker,omitempty"`
-	PlacementReason  string            `json:"placement_reason,omitempty"`
-	CapabilityView   *CapabilityPack   `json:"capability_view,omitempty"`
-	ArtifactRefs     []ArtifactRef     `json:"artifact_refs,omitempty"`
-	Mobility         MobilityClass     `json:"mobility"`
-	HandoffStatus    string            `json:"handoff_status,omitempty"`
-	PendingApprovals []string          `json:"pending_approvals,omitempty"`
-	Source           string            `json:"source"`
-	CreatedAt        time.Time         `json:"created_at"`
+	RunID            string          `json:"run_id"`
+	Status           string          `json:"status"`
+	SelectedWorker   string          `json:"selected_worker,omitempty"`
+	PlacementReason  string          `json:"placement_reason,omitempty"`
+	CapabilityView   *CapabilityPack `json:"capability_view,omitempty"`
+	ArtifactRefs     []ArtifactRef   `json:"artifact_refs,omitempty"`
+	Mobility         MobilityClass   `json:"mobility"`
+	HandoffStatus    string          `json:"handoff_status,omitempty"`
+	PendingApprovals []string        `json:"pending_approvals,omitempty"`
+	Source           string          `json:"source"`
+	CreatedAt        time.Time       `json:"created_at"`
 }
 
 // ArtifactRef is a lightweight reference to an artifact for UX display.
 type ArtifactRef struct {
-	ID        string       `json:"id"`
-	Type      ArtifactType `json:"type"`
-	URL       string       `json:"url,omitempty"`
-	Redacted  bool         `json:"redacted"`
+	ID       string       `json:"id"`
+	Type     ArtifactType `json:"type"`
+	URL      string       `json:"url,omitempty"`
+	Redacted bool         `json:"redacted"`
 }
 
 // OperatorUX provides the operator-facing visibility surface.
 type OperatorUX struct {
-	workerStore          WorkerStore
-	capabilityStore      CapabilityStore
-	transportMgr         *TransportManager
-	eventArtifactStore   EventAndArtifactStore
+	workerStore        WorkerStore
+	capabilityStore    CapabilityStore
+	transportMgr       *TransportManager
+	eventArtifactStore EventAndArtifactStore
 }
 
 // NewOperatorUX creates a new operator UX service.
@@ -133,6 +133,7 @@ func (ux *OperatorUX) GetRunSummary(ctx context.Context, runID string) (*Operato
 		RunID:  runID,
 		Status: "unknown",
 	}
+	locationType := LocationLocal
 
 	// Get placement record.
 	if ux.eventArtifactStore != nil {
@@ -140,6 +141,11 @@ func (ux *OperatorUX) GetRunSummary(ctx context.Context, runID string) (*Operato
 		if err == nil {
 			summary.SelectedWorker = record.SelectedWorker
 			summary.PlacementReason = record.RoutingReason
+			if ux.workerStore != nil && record.SelectedWorker != "" {
+				if worker, err := ux.workerStore.GetWorker(ctx, record.SelectedWorker); err == nil {
+					locationType = worker.LocationType
+				}
+			}
 		}
 	}
 
@@ -147,7 +153,7 @@ func (ux *OperatorUX) GetRunSummary(ctx context.Context, runID string) (*Operato
 	if ux.capabilityStore != nil {
 		pack, err := ux.capabilityStore.GetPack(ctx, runID)
 		if err == nil {
-			summary.CapabilityView = SanitizePackForDisplay(pack, LocationLocal)
+			summary.CapabilityView = SanitizePackForDisplay(pack, locationType)
 		}
 	}
 

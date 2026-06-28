@@ -13,6 +13,7 @@ import (
 
 	"go-agent-harness/internal/relay"
 	"go-agent-harness/internal/server"
+	istore "go-agent-harness/internal/store"
 )
 
 // mockWorkerStore is an in-memory mock for relay.WorkerStore.
@@ -139,6 +140,38 @@ func newRelayServer(store relay.WorkerStore) http.Handler {
 		AuthDisabled:     true,
 		RelayWorkerStore: store,
 	})
+}
+
+func newAuthenticatedRelayServer(t *testing.T, workerStore relay.WorkerStore) (http.Handler, map[string]string) {
+	t.Helper()
+
+	runStore := istore.NewMemoryStore()
+	tokens := make(map[string]string)
+	for _, tc := range []struct {
+		name     string
+		tenantID string
+		scopes   []string
+	}{
+		{"t1_read", "t1", []string{istore.ScopeRunsRead}},
+		{"t1_write", "t1", []string{istore.ScopeRunsWrite}},
+		{"t2_read", "t2", []string{istore.ScopeRunsRead}},
+		{"t2_write", "t2", []string{istore.ScopeRunsWrite}},
+	} {
+		raw, key := generateFastAPIKey(t, tc.tenantID, tc.name, tc.scopes)
+		if err := runStore.CreateAPIKey(context.Background(), key); err != nil {
+			t.Fatalf("CreateAPIKey(%s): %v", tc.name, err)
+		}
+		tokens[tc.name] = raw
+	}
+
+	return server.NewWithOptions(server.ServerOptions{
+		Store:            runStore,
+		RelayWorkerStore: workerStore,
+	}), tokens
+}
+
+func addBearer(req *http.Request, token string) {
+	req.Header.Set("Authorization", "Bearer "+token)
 }
 
 func TestRelayRegisterWorker(t *testing.T) {
@@ -273,6 +306,128 @@ func TestRelayListWorkers(t *testing.T) {
 			if rw.TenantID != "t1" {
 				t.Errorf("cross-tenant leak: worker %s has tenant %q", rw.ID, rw.TenantID)
 			}
+		}
+	})
+}
+
+func TestRelayWorkersUseAuthenticatedTenant(t *testing.T) {
+	workerStore := newMockWorkerStore()
+	h, tokens := newAuthenticatedRelayServer(t, workerStore)
+
+	now := time.Now()
+	for _, w := range []*relay.Worker{
+		{ID: "w-t1", TenantID: "t1", Name: "Tenant 1", LocationType: relay.LocationLocal, Status: relay.WorkerStatusOnline, TrustTier: relay.TrustTierStandard, LastHeartbeat: now, CreatedAt: now, UpdatedAt: now},
+		{ID: "w-t2", TenantID: "t2", Name: "Tenant 2", LocationType: relay.LocationLocal, Status: relay.WorkerStatusOnline, TrustTier: relay.TrustTierStandard, LastHeartbeat: now, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := workerStore.RegisterWorker(context.Background(), w); err != nil {
+			t.Fatalf("RegisterWorker %s: %v", w.ID, err)
+		}
+	}
+
+	t.Run("list defaults to auth tenant", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/relay/workers", nil)
+		addBearer(req, tokens["t1_read"])
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		var resp struct {
+			Workers []*relay.Worker `json:"workers"`
+		}
+		if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+			t.Fatalf("decode: %v", err)
+		}
+		if len(resp.Workers) != 1 || resp.Workers[0].TenantID != "t1" {
+			t.Fatalf("expected only tenant t1 workers, got %#v", resp.Workers)
+		}
+	})
+
+	t.Run("list rejects mismatched tenant query", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/relay/workers?tenant_id=t2", nil)
+		addBearer(req, tokens["t1_read"])
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("get hides other tenant worker", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/relay/workers/w-t2", nil)
+		addBearer(req, tokens["t1_read"])
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("register assigns auth tenant by default", func(t *testing.T) {
+		body := `{"id":"w-new","name":"New Worker","location_type":"local"}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/relay/workers", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		addBearer(req, tokens["t1_write"])
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+		}
+
+		got, err := workerStore.GetWorker(context.Background(), "w-new")
+		if err != nil {
+			t.Fatalf("GetWorker: %v", err)
+		}
+		if got.TenantID != "t1" {
+			t.Fatalf("tenant: got %q, want t1", got.TenantID)
+		}
+	})
+
+	t.Run("register rejects mismatched tenant body", func(t *testing.T) {
+		body := `{"id":"w-bad-tenant","name":"Bad Tenant","tenant_id":"t2","location_type":"local"}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/relay/workers", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		addBearer(req, tokens["t1_write"])
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("update hides other tenant worker", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/v1/relay/workers/w-t2", strings.NewReader(`{"name":"cross"}`))
+		req.Header.Set("Content-Type", "application/json")
+		addBearer(req, tokens["t1_write"])
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("delete hides other tenant worker", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodDelete, "/v1/relay/workers/w-t2", nil)
+		addBearer(req, tokens["t1_write"])
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+		}
+		if _, err := workerStore.GetWorker(context.Background(), "w-t2"); err != nil {
+			t.Fatalf("other tenant worker should remain: %v", err)
+		}
+	})
+
+	t.Run("heartbeat hides other tenant worker", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/relay/workers/w-t2/heartbeat", strings.NewReader(`{"load":1,"status":"online"}`))
+		req.Header.Set("Content-Type", "application/json")
+		addBearer(req, tokens["t1_write"])
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
 		}
 	})
 }

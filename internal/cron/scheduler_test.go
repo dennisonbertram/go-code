@@ -673,3 +673,74 @@ func TestJitter_SameJobSameSchedule_SameJitter(t *testing.T) {
 		t.Fatalf("same inputs should produce same jitter: %v vs %v", j1, j2)
 	}
 }
+
+// TestFireJobAdvancesNextRunAt (T1) — fireJob must recompute NextRunAt after execution.
+// Before P1, fireJob never sets NextRunAt, so the stored job keeps the stale original value.
+func TestFireJobAdvancesNextRunAt(t *testing.T) {
+	var updatedJob Job
+	var mu sync.Mutex
+
+	store := &mockStore{
+		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
+			return exec, nil
+		},
+		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
+			return nil
+		},
+		UpdateJobFunc: func(ctx context.Context, job Job) error {
+			mu.Lock()
+			updatedJob = job
+			mu.Unlock()
+			return nil
+		},
+	}
+
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {
+			return "ok", nil
+		},
+	}
+
+	// Use a fixed clock so endTime is deterministic.
+	fireTime := time.Date(2025, 6, 1, 12, 0, 0, 0, time.UTC)
+	clock := newMockClock(fireTime)
+
+	// Disable jitter so sleepFn is not called and no extra complexity.
+	cfg := SchedulerConfig{
+		MaxConcurrent: 1,
+		Jitter:        JitterConfig{Enabled: false},
+	}
+	s := NewScheduler(store, executor, clock, cfg)
+	s.sleepFn = func(d time.Duration) {} // no-op
+
+	job := testJob("advance-next-run-at")
+	job.Schedule = "*/5 * * * *"
+	// Set an obviously stale NextRunAt so we can detect if it is unchanged.
+	job.NextRunAt = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	// Pre-populate the jitter cache so fireJob does not panic on a missing key.
+	s.mu.Lock()
+	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = 0
+	s.mu.Unlock()
+
+	s.fireJob(job)
+	s.wg.Wait()
+
+	mu.Lock()
+	got := updatedJob
+	mu.Unlock()
+
+	// Compute the expected NextRunAt: first occurrence of "*/5 * * * *" after fireTime.
+	want, err := NextRunTime(job.Schedule, fireTime)
+	if err != nil {
+		t.Fatalf("NextRunTime: %v", err)
+	}
+
+	if got.NextRunAt.IsZero() {
+		t.Fatal("NextRunAt was not set on updated job")
+	}
+	if !got.NextRunAt.Equal(want) {
+		t.Fatalf("NextRunAt = %v, want %v (schedule %q, fire time %v)",
+			got.NextRunAt, want, job.Schedule, fireTime)
+	}
+}

@@ -140,6 +140,75 @@ func TestHetznerProvider_Create_APIError(t *testing.T) {
 	}
 }
 
+func TestHetznerProvider_CreateDeletesServerAfterPollingError(t *testing.T) {
+	mux := http.NewServeMux()
+	deleted := false
+
+	mux.HandleFunc("/servers", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		resp := map[string]interface{}{
+			"server": map[string]interface{}{
+				"id":     float64(123),
+				"name":   "leaky-server",
+				"status": "starting",
+				"public_net": map[string]interface{}{
+					"ipv4": map[string]interface{}{"ip": "1.2.3.4"},
+					"ipv6": map[string]interface{}{"ip": "2001:db8::/64"},
+				},
+			},
+			"action": map[string]interface{}{
+				"id":     float64(10),
+				"status": "running",
+			},
+			"next_actions": []interface{}{},
+		}
+		_ = json.NewEncoder(w).Encode(resp)
+	})
+
+	mux.HandleFunc("/servers/123", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": map[string]interface{}{
+					"code":    "service_error",
+					"message": "poll failed",
+				},
+			})
+		case http.MethodDelete:
+			deleted = true
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"action": map[string]interface{}{"id": float64(11), "status": "success"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	})
+
+	p, closeServer := hetznerTestProvider(mux)
+	defer closeServer()
+
+	_, err := p.Create(context.Background(), VMCreateOpts{
+		Name:       "leaky-server",
+		ImageName:  "ubuntu-24.04",
+		ServerType: "cx22",
+	})
+	if err == nil {
+		t.Fatal("expected polling error")
+	}
+	if !deleted {
+		t.Fatal("expected server delete after post-create polling error")
+	}
+}
+
 // TestHetznerProvider_Delete_NotFound verifies that Delete treats a 404 as success.
 func TestHetznerProvider_Delete_NotFound(t *testing.T) {
 	mux := http.NewServeMux()

@@ -72,14 +72,14 @@ type PlacementRecord struct {
 
 // PlacementRouter selects the best eligible worker for a run contract.
 type PlacementRouter struct {
-	workerStore    WorkerStore
+	workerStore     WorkerStore
 	capabilityStore CapabilityStore
 }
 
 // NewPlacementRouter creates a new placement router.
 func NewPlacementRouter(ws WorkerStore, cs CapabilityStore) *PlacementRouter {
 	return &PlacementRouter{
-		workerStore:    ws,
+		workerStore:     ws,
 		capabilityStore: cs,
 	}
 }
@@ -109,7 +109,10 @@ func (pr *PlacementRouter) Place(ctx context.Context, req PlacementRequest) (*Pl
 	// Phase 1: Apply hard constraints. Workers that fail any constraint are rejected.
 	var eligible []*Worker
 	for _, w := range workers {
-		rejections := pr.checkHardConstraints(w, req)
+		rejections, err := pr.checkHardConstraints(ctx, w, req)
+		if err != nil {
+			return nil, err
+		}
 		if len(rejections) > 0 {
 			record.RejectedWorkers = append(record.RejectedWorkers, rejections...)
 			continue
@@ -139,7 +142,7 @@ func (pr *PlacementRouter) Place(ctx context.Context, req PlacementRequest) (*Pl
 }
 
 // checkHardConstraints returns rejection reasons if the worker fails any constraint.
-func (pr *PlacementRouter) checkHardConstraints(w *Worker, req PlacementRequest) []RejectionReason {
+func (pr *PlacementRouter) checkHardConstraints(ctx context.Context, w *Worker, req PlacementRequest) ([]RejectionReason, error) {
 	var rejections []RejectionReason
 
 	// Reject offline or stale workers.
@@ -198,7 +201,121 @@ func (pr *PlacementRouter) checkHardConstraints(w *Worker, req PlacementRequest)
 		}
 	}
 
-	return rejections
+	capabilityRejections, err := pr.checkCapabilityConstraints(ctx, w, req)
+	if err != nil {
+		return nil, err
+	}
+	rejections = append(rejections, capabilityRejections...)
+
+	return rejections, nil
+}
+
+func (pr *PlacementRouter) checkCapabilityConstraints(ctx context.Context, w *Worker, req PlacementRequest) ([]RejectionReason, error) {
+	if !hasCapabilityRequirements(req) {
+		return nil, nil
+	}
+	if pr.capabilityStore == nil {
+		return []RejectionReason{{
+			WorkerID: w.ID,
+			Reason:   "capability requirements cannot be evaluated without a capability store",
+			Category: "capability",
+		}}, nil
+	}
+
+	inv, err := pr.capabilityStore.GetInventory(ctx, w.ID)
+	if err != nil {
+		if err == ErrCapabilityNotFound {
+			return []RejectionReason{{
+				WorkerID: w.ID,
+				Reason:   "worker has no capability inventory",
+				Category: "capability",
+			}}, nil
+		}
+		return nil, fmt.Errorf("relay: get capability inventory for %s: %w", w.ID, err)
+	}
+
+	missing := missingCapabilities(inv, req)
+	if len(missing) == 0 {
+		return nil, nil
+	}
+	sort.Strings(missing)
+	return []RejectionReason{{
+		WorkerID: w.ID,
+		Reason:   "missing required capabilities: " + strings.Join(missing, ", "),
+		Category: "capability",
+	}}, nil
+}
+
+func hasCapabilityRequirements(req PlacementRequest) bool {
+	cp := req.RequiredCapabilities
+	return req.RequiredRepoURL != "" ||
+		req.RequireBrowser ||
+		req.RequireDocker ||
+		len(cp.Tools) > 0 ||
+		len(cp.MCPServers) > 0 ||
+		len(cp.Memories) > 0 ||
+		len(cp.Repos) > 0 ||
+		len(cp.Secrets) > 0 ||
+		len(cp.OutputSurfaces) > 0 ||
+		cp.Browser != nil ||
+		cp.Docker != nil
+}
+
+func missingCapabilities(inv *CapabilityInventory, req PlacementRequest) []string {
+	var missing []string
+	cp := req.RequiredCapabilities
+
+	for _, tool := range cp.Tools {
+		if !inventoryHasTool(inv, tool.Name) {
+			missing = append(missing, "tool:"+tool.Name)
+		}
+	}
+	for _, mcp := range cp.MCPServers {
+		if !inventoryHasMCPServer(inv, mcp.Name) {
+			missing = append(missing, "mcp_server:"+mcp.Name)
+		}
+	}
+	for _, memory := range cp.Memories {
+		if !inventoryHasMemory(inv, memory.Name) {
+			missing = append(missing, "memory:"+memory.Name)
+		}
+	}
+	for _, repo := range cp.Repos {
+		if !inventoryHasRepo(inv, repo.RepoURL) {
+			missing = append(missing, "repo:"+repo.RepoURL)
+		}
+	}
+	if req.RequiredRepoURL != "" && !inventoryHasRepo(inv, req.RequiredRepoURL) {
+		missing = append(missing, "repo:"+req.RequiredRepoURL)
+	}
+	for _, secret := range cp.Secrets {
+		if !inventoryHasSecret(inv, secret) {
+			if secret.Ref != "" {
+				missing = append(missing, "secret:"+secret.Ref)
+			} else {
+				missing = append(missing, "secret:"+secret.Name)
+			}
+		}
+	}
+	for _, surface := range cp.OutputSurfaces {
+		if !inventoryHasOutputSurface(inv, surface.Type) {
+			missing = append(missing, "output_surface:"+surface.Type)
+		}
+	}
+	if req.RequireBrowser && (inv.Browser == nil || !inv.Browser.Available) {
+		missing = append(missing, "browser")
+	}
+	if cp.Browser != nil && cp.Browser.Available && (inv.Browser == nil || !inv.Browser.Available) {
+		missing = append(missing, "browser")
+	}
+	if req.RequireDocker && (inv.Docker == nil || !inv.Docker.Available) {
+		missing = append(missing, "docker")
+	}
+	if cp.Docker != nil && cp.Docker.Available && (inv.Docker == nil || !inv.Docker.Available) {
+		missing = append(missing, "docker")
+	}
+
+	return missing
 }
 
 // scoreWorkers assigns a soft-preference score to each eligible worker.
@@ -337,6 +454,63 @@ func hasAnyWorkspaceMode(supported, required []string) bool {
 	}
 	for _, m := range required {
 		if supportedSet[m] {
+			return true
+		}
+	}
+	return false
+}
+
+func inventoryHasTool(inv *CapabilityInventory, name string) bool {
+	for _, tool := range inv.Tools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func inventoryHasMCPServer(inv *CapabilityInventory, name string) bool {
+	for _, server := range inv.MCPServers {
+		if server.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func inventoryHasMemory(inv *CapabilityInventory, name string) bool {
+	for _, memory := range inv.Memories {
+		if memory.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func inventoryHasRepo(inv *CapabilityInventory, repoURL string) bool {
+	for _, repo := range inv.Repos {
+		if repo.RepoURL == repoURL {
+			return true
+		}
+	}
+	return false
+}
+
+func inventoryHasSecret(inv *CapabilityInventory, required SecretCapability) bool {
+	for _, secret := range inv.Secrets {
+		if required.Ref != "" && secret.Ref == required.Ref {
+			return true
+		}
+		if required.Ref == "" && required.Name != "" && secret.Name == required.Name {
+			return true
+		}
+	}
+	return false
+}
+
+func inventoryHasOutputSurface(inv *CapabilityInventory, surfaceType string) bool {
+	for _, surface := range inv.OutputSurfaces {
+		if surface.Type == surfaceType {
 			return true
 		}
 	}

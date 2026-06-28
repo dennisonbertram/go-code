@@ -121,6 +121,12 @@ type ExportTranscriptMsg struct{ FilePath string }
 
 // ─── Plan Mode Messages ───────────────────────────────────────────────────────
 
+// PlanProposedMsg is sent (by tests or by the SSE stub) to display a plan in
+// the plan overlay without requiring a live server event.
+type PlanProposedMsg struct {
+	Plan string // plan content (plain text / markdown)
+}
+
 // PlanApprovedMsg is emitted when the user approves the current plan.
 type PlanApprovedMsg struct{}
 
@@ -140,6 +146,21 @@ type ModelSelectedMsg struct {
 type SubagentsLoadedMsg struct{ Subagents []RemoteSubagent }
 
 type SubagentsLoadFailedMsg struct{ Err string }
+
+// RunsFetchedMsg carries recent run metadata fetched by /runs.
+type RunsFetchedMsg struct {
+	Runs []tuiRunRecord
+	Err  string
+}
+
+// RunControlResultMsg carries a one-shot run control result for commands such
+// as /cancel and /replay.
+type RunControlResultMsg struct {
+	Kind   string
+	RunID  string
+	Output string
+	Err    string
+}
 
 // statusTickMsg is sent after statusMsgDuration to clear the transient status bar message.
 type statusTickMsg struct{}

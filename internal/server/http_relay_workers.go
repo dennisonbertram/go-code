@@ -91,8 +91,13 @@ func (s *Server) handleRelayWorkerByID(w http.ResponseWriter, r *http.Request) {
 // handleRelayListWorkers handles GET /v1/relay/workers.
 func (s *Server) handleRelayListWorkers(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	tenantID, err := s.effectiveTenantID(r, q.Get("tenant_id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
 	filter := relay.WorkerFilter{
-		TenantID:     q.Get("tenant_id"),
+		TenantID:     tenantID,
 		Status:       relay.WorkerStatus(q.Get("status")),
 		LocationType: relay.LocationType(q.Get("location_type")),
 		TrustTier:    relay.TrustTier(q.Get("trust_tier")),
@@ -133,8 +138,13 @@ func (s *Server) handleRelayRegisterWorker(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid_request", "name is required")
 		return
 	}
-	if req.TenantID == "" {
-		req.TenantID = "default"
+	tenantID, err := s.effectiveTenantID(r, strings.TrimSpace(req.TenantID))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if tenantID == "" {
+		tenantID = "default"
 	}
 
 	locationType := relay.LocationType(req.LocationType)
@@ -158,7 +168,7 @@ func (s *Server) handleRelayRegisterWorker(w http.ResponseWriter, r *http.Reques
 	now := time.Now()
 	worker := &relay.Worker{
 		ID:                      req.ID,
-		TenantID:                req.TenantID,
+		TenantID:                tenantID,
 		Name:                    req.Name,
 		LocationType:            locationType,
 		Status:                  relay.WorkerStatusOnline,
@@ -201,6 +211,9 @@ func (s *Server) handleRelayGetWorker(w http.ResponseWriter, r *http.Request, id
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
 		return
 	}
+	if !s.relayWorkerVisibleToRequest(w, r, worker, id) {
+		return
+	}
 	writeJSON(w, http.StatusOK, worker)
 }
 
@@ -213,6 +226,9 @@ func (s *Server) handleRelayUpdateWorker(w http.ResponseWriter, r *http.Request,
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	if !s.relayWorkerVisibleToRequest(w, r, existing, id) {
 		return
 	}
 
@@ -277,6 +293,19 @@ func (s *Server) handleRelayUpdateWorker(w http.ResponseWriter, r *http.Request,
 
 // handleRelayDeleteWorker handles DELETE /v1/relay/workers/{id}.
 func (s *Server) handleRelayDeleteWorker(w http.ResponseWriter, r *http.Request, id string) {
+	existing, err := s.relayWorkerStore.GetWorker(r.Context(), id)
+	if err != nil {
+		if err == relay.ErrWorkerNotFound {
+			writeError(w, http.StatusNotFound, "worker_not_found", "worker not found: "+id)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	if !s.relayWorkerVisibleToRequest(w, r, existing, id) {
+		return
+	}
+
 	if err := s.relayWorkerStore.DeleteWorker(r.Context(), id); err != nil {
 		if err == relay.ErrWorkerNotFound {
 			writeError(w, http.StatusNotFound, "worker_not_found", "worker not found: "+id)
@@ -310,6 +339,19 @@ func (s *Server) handleRelayWorkerHeartbeat(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	existing, err := s.relayWorkerStore.GetWorker(r.Context(), id)
+	if err != nil {
+		if err == relay.ErrWorkerNotFound {
+			writeError(w, http.StatusNotFound, "worker_not_found", "worker not found: "+id)
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	if !s.relayWorkerVisibleToRequest(w, r, existing, id) {
+		return
+	}
+
 	hb := relay.Heartbeat{
 		WorkerID:  id,
 		Timestamp: time.Now(),
@@ -327,4 +369,15 @@ func (s *Server) handleRelayWorkerHeartbeat(w http.ResponseWriter, r *http.Reque
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) relayWorkerVisibleToRequest(w http.ResponseWriter, r *http.Request, worker *relay.Worker, id string) bool {
+	if s.authDisabled || s.runStore == nil {
+		return true
+	}
+	if worker != nil && worker.TenantID == TenantIDFromContext(r.Context()) {
+		return true
+	}
+	writeError(w, http.StatusNotFound, "worker_not_found", "worker not found: "+id)
+	return false
 }

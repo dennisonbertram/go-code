@@ -71,9 +71,7 @@ func TestEventJournalDispatch_TerminalStoreAppendPrecedesSubscriberNotification(
 	}()
 
 	go func() {
-		runner.mu.Lock()
-		journal.publishTerminalLocked(delivery)
-		runner.mu.Unlock()
+		journal.publishTerminal(delivery)
 		journal.dispatch(delivery)
 	}()
 

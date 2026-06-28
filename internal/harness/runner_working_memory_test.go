@@ -9,6 +9,61 @@ import (
 	"go-agent-harness/internal/workingmemory"
 )
 
+// TestScopeKeyNormalization_EmptyRun verifies that scopeKey normalises empty
+// TenantID / ConversationID / AgentID on a run to the same defaults that
+// workingMemoryScopeFromContext uses in the working_memory WRITE tool.
+// Before the fix, the runner READ side used raw empty strings while the tool
+// WRITE side normalised to "default" / runID / "default", so a tool-written
+// entry was never recalled during injection.
+func TestScopeKeyNormalization_EmptyRun(t *testing.T) {
+	t.Parallel()
+
+	provider := &capturingProvider{
+		turns: []CompletionResult{{Content: "done"}},
+	}
+	registry := NewRegistry()
+	memStore := workingmemory.NewMemoryStore()
+
+	runner := NewRunner(provider, registry, RunnerConfig{
+		DefaultModel:       "test-model",
+		MaxSteps:           1,
+		WorkingMemoryStore: memStore,
+	})
+
+	// Start a run with NO explicit ConversationID / TenantID / AgentID so all
+	// three fields are empty on state.run; scopeKey must normalise them.
+	run, err := runner.StartRun(RunRequest{Prompt: "hi"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	waitForStatus(t, runner, run.ID, RunStatusCompleted, RunStatusFailed)
+
+	// scopeKey must resolve to the normalised defaults.
+	sk := runner.scopeKey(run.ID)
+	if sk.TenantID != "default" {
+		t.Errorf("TenantID = %q, want \"default\"", sk.TenantID)
+	}
+	if sk.ConversationID == "" {
+		t.Errorf("ConversationID is empty; want the run ID %q", run.ID)
+	}
+	if sk.AgentID != "default" {
+		t.Errorf("AgentID = %q, want \"default\"", sk.AgentID)
+	}
+
+	// An entry written under the normalised scope must be recalled.
+	writeScope := om.ScopeKey{TenantID: "default", ConversationID: sk.ConversationID, AgentID: "default"}
+	if err := memStore.Set(context.Background(), writeScope, "key1", "value1"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	snippet, snippetErr := memStore.Snippet(context.Background(), sk)
+	if snippetErr != nil {
+		t.Fatalf("Snippet: %v", snippetErr)
+	}
+	if !strings.Contains(snippet, "key1") {
+		t.Errorf("working memory snippet = %q, want it to contain \"key1\"", snippet)
+	}
+}
+
 func TestRunnerInjectsWorkingMemoryBeforeObservationalMemory(t *testing.T) {
 	t.Parallel()
 
