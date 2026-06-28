@@ -66,6 +66,85 @@ func TestOperatorRunSummaryRedactsNonLocalCapabilityPack(t *testing.T) {
 	}
 }
 
+func TestOperatorUXWorkerViewsAndPlacementExplanation(t *testing.T) {
+	ctx := context.Background()
+	workerStore := newTestWorkerStore()
+	capStore := newTestCapabilityStore()
+	events := newTestEventArtifactStore()
+	now := time.Now().UTC().Add(-2 * time.Hour)
+
+	if err := workerStore.RegisterWorker(ctx, &relay.Worker{
+		ID: "w-local", TenantID: "t1", Name: "Local",
+		LocationType: relay.LocationLocal, Status: relay.WorkerStatusOnline,
+		TrustTier:               relay.TrustTierStandard,
+		SupportedWorkspaceModes: []string{"local"},
+		Labels:                  map[string]string{"role": "primary"},
+		LastHeartbeat:           time.Now().UTC(), CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("RegisterWorker local: %v", err)
+	}
+	if err := workerStore.RegisterWorker(ctx, &relay.Worker{
+		ID: "w-offline", TenantID: "t1", Name: "Offline",
+		LocationType: relay.LocationVM, Status: relay.WorkerStatusOffline,
+		TrustTier:               relay.TrustTierStandard,
+		SupportedWorkspaceModes: []string{"vm"},
+		LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("RegisterWorker offline: %v", err)
+	}
+	if err := capStore.SetInventory(ctx, &relay.CapabilityInventory{
+		WorkerID: "w-local",
+		Repos: []relay.RepoCapability{{
+			RepoURL:  "https://github.com/dennisonbertram/go-code.git",
+			RepoPath: "/Users/dennison/go-code",
+		}},
+	}); err != nil {
+		t.Fatalf("SetInventory: %v", err)
+	}
+	if err := events.SavePlacementRecord(ctx, &relay.PlacementRecord{
+		RunID: "run-explain", SelectedWorker: "w-local",
+		RoutingReason: "selected local worker", Timestamp: time.Now().UTC(),
+	}); err != nil {
+		t.Fatalf("SavePlacementRecord: %v", err)
+	}
+
+	ux := relay.NewOperatorUX(workerStore, capStore, nil, events)
+	summaries, err := ux.ListWorkerSummaries(ctx, "t1")
+	if err != nil {
+		t.Fatalf("ListWorkerSummaries: %v", err)
+	}
+	if len(summaries) != 2 || summaries[0].ID != "w-local" {
+		t.Fatalf("unexpected summaries: %#v", summaries)
+	}
+	if summaries[0].Uptime == "" {
+		t.Fatal("expected uptime to be formatted")
+	}
+
+	detail, err := ux.GetWorkerDetail(ctx, "w-local")
+	if err != nil {
+		t.Fatalf("GetWorkerDetail: %v", err)
+	}
+	if detail.Name != "Local" || detail.Labels["role"] != "primary" {
+		t.Fatalf("unexpected detail: %#v", detail)
+	}
+
+	explanation, err := ux.GetPlacementExplanation(ctx, "run-explain")
+	if err != nil {
+		t.Fatalf("GetPlacementExplanation: %v", err)
+	}
+	if explanation != "selected local worker" {
+		t.Fatalf("explanation: got %q", explanation)
+	}
+
+	caps, err := ux.GetWorkerCapabilities(ctx, "w-local")
+	if err != nil {
+		t.Fatalf("GetWorkerCapabilities: %v", err)
+	}
+	if len(caps.Repos) != 1 || caps.Repos[0].RepoPath == "" {
+		t.Fatalf("unexpected capabilities: %#v", caps)
+	}
+}
+
 type testEventArtifactStore struct {
 	placements map[string]*relay.PlacementRecord
 	artifacts  map[string][]*relay.Artifact

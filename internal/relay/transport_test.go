@@ -2,6 +2,7 @@ package relay_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -204,6 +205,28 @@ func TestEventBusUnsubscribe(t *testing.T) {
 	default:
 		// Channel is closed and empty.
 	}
+}
+
+func TestEventBusConcurrentPublishAndUnsubscribe(t *testing.T) {
+	eb := relay.NewEventBus()
+	ctx := context.Background()
+	var wg sync.WaitGroup
+
+	for i := 0; i < 100; i++ {
+		ch := eb.Subscribe("run-concurrent")
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			eb.Publish(ctx, relay.TransportEvent{
+				RunID: "run-concurrent", EventType: "test", Timestamp: time.Now(),
+			})
+		}()
+		go func(ch chan relay.TransportEvent) {
+			defer wg.Done()
+			eb.Unsubscribe("run-concurrent", ch)
+		}(ch)
+	}
+	wg.Wait()
 }
 
 func TestCommandQueueEnqueueDequeue(t *testing.T) {

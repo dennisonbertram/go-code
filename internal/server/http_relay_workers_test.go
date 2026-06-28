@@ -154,6 +154,7 @@ func newAuthenticatedRelayServer(t *testing.T, workerStore relay.WorkerStore) (h
 	}{
 		{"t1_read", "t1", []string{istore.ScopeRunsRead}},
 		{"t1_write", "t1", []string{istore.ScopeRunsWrite}},
+		{"t1_admin", "t1", []string{istore.ScopeAdmin}},
 		{"t2_read", "t2", []string{istore.ScopeRunsRead}},
 		{"t2_write", "t2", []string{istore.ScopeRunsWrite}},
 	} {
@@ -428,6 +429,69 @@ func TestRelayWorkersUseAuthenticatedTenant(t *testing.T) {
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNotFound {
 			t.Fatalf("expected 404, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+}
+
+func TestRelayWorkersPrivilegedTrustRequiresAdmin(t *testing.T) {
+	workerStore := newMockWorkerStore()
+	h, tokens := newAuthenticatedRelayServer(t, workerStore)
+
+	t.Run("register privileged rejected for runs write", func(t *testing.T) {
+		body := `{"id":"w-priv-write","name":"Privileged","location_type":"local","trust_tier":"privileged"}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/relay/workers", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		addBearer(req, tokens["t1_write"])
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+		}
+	})
+
+	t.Run("register privileged allowed for admin", func(t *testing.T) {
+		body := `{"id":"w-priv-admin","name":"Privileged","location_type":"local","trust_tier":"privileged"}`
+		req := httptest.NewRequest(http.MethodPost, "/v1/relay/workers", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		addBearer(req, tokens["t1_admin"])
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusCreated {
+			t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+		}
+		got, err := workerStore.GetWorker(context.Background(), "w-priv-admin")
+		if err != nil {
+			t.Fatalf("GetWorker: %v", err)
+		}
+		if got.TrustTier != relay.TrustTierPrivileged {
+			t.Fatalf("trust tier: got %q, want privileged", got.TrustTier)
+		}
+	})
+
+	t.Run("update to privileged rejected for runs write", func(t *testing.T) {
+		now := time.Now()
+		if err := workerStore.RegisterWorker(context.Background(), &relay.Worker{
+			ID: "w-standard", TenantID: "t1", Name: "Standard",
+			LocationType: relay.LocationLocal, Status: relay.WorkerStatusOnline,
+			TrustTier: relay.TrustTierStandard, LastHeartbeat: now, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			t.Fatalf("RegisterWorker: %v", err)
+		}
+
+		req := httptest.NewRequest(http.MethodPut, "/v1/relay/workers/w-standard", strings.NewReader(`{"trust_tier":"privileged"}`))
+		req.Header.Set("Content-Type", "application/json")
+		addBearer(req, tokens["t1_write"])
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("expected 403, got %d: %s", rec.Code, rec.Body.String())
+		}
+		got, err := workerStore.GetWorker(context.Background(), "w-standard")
+		if err != nil {
+			t.Fatalf("GetWorker: %v", err)
+		}
+		if got.TrustTier != relay.TrustTierStandard {
+			t.Fatalf("trust tier changed: got %q", got.TrustTier)
 		}
 	})
 }

@@ -12,10 +12,10 @@ import (
 type MobilityClass string
 
 const (
-	MobilityPinned     MobilityClass = "pinned"
-	MobilityResumable  MobilityClass = "resumable"
-	MobilityCloneable  MobilityClass = "cloneable"
-	MobilityEphemeral  MobilityClass = "ephemeral"
+	MobilityPinned    MobilityClass = "pinned"
+	MobilityResumable MobilityClass = "resumable"
+	MobilityCloneable MobilityClass = "cloneable"
+	MobilityEphemeral MobilityClass = "ephemeral"
 )
 
 // ValidMobilityClasses is the set of recognized mobility classes.
@@ -26,9 +26,34 @@ var ValidMobilityClasses = map[MobilityClass]bool{
 	MobilityEphemeral: true,
 }
 
+var validSourceTypes = map[string]bool{
+	"api":    true,
+	"cron":   true,
+	"github": true,
+	"linear": true,
+	"slack":  true,
+}
+
+var validWorkspaceModes = map[string]bool{
+	"local":     true,
+	"worktree":  true,
+	"container": true,
+	"vm":        true,
+	"sandbox":   true,
+}
+
+var validOutputTypes = map[string]bool{
+	"artifact": true,
+	"approval": true,
+	"comment":  true,
+	"patch":    true,
+	"pr":       true,
+	"summary":  true,
+}
+
 // OutputExpectation describes what the run should produce.
 type OutputExpectation struct {
-	Type   string `json:"type"`   // "patch", "pr", "comment", "summary", "artifact", "approval"
+	Type   string `json:"type"`             // "patch", "pr", "comment", "summary", "artifact", "approval"
 	Format string `json:"format,omitempty"` // "diff", "markdown", "text", "json"
 	Target string `json:"target,omitempty"` // "github:pr", "slack:reply", "linear:update"
 }
@@ -42,9 +67,9 @@ type TriggerSource struct {
 
 // WorkspaceTarget specifies where and how the workspace should be provisioned.
 type WorkspaceTarget struct {
-	Mode    string `json:"mode"`              // "local", "worktree", "container", "vm", "sandbox"
+	Mode    string `json:"mode"` // "local", "worktree", "container", "vm", "sandbox"
 	RepoURL string `json:"repo_url,omitempty"`
-	Clean   bool   `json:"clean"`             // true = provision fresh workspace
+	Clean   bool   `json:"clean"` // true = provision fresh workspace
 }
 
 // RunLimits sets bounds on execution.
@@ -118,16 +143,70 @@ func (rc *RunContract) Validate() error {
 	if strings.TrimSpace(rc.Metadata.TenantID) == "" {
 		return errors.New("run contract: tenant_id is required")
 	}
+	if strings.TrimSpace(rc.Source.Type) == "" {
+		rc.Source.Type = "api"
+	}
+	if !validSourceTypes[rc.Source.Type] {
+		return fmt.Errorf("run contract: invalid source type %q", rc.Source.Type)
+	}
+	if strings.TrimSpace(rc.Workspace.Mode) == "" {
+		rc.Workspace.Mode = "local"
+	}
+	if !validWorkspaceModes[rc.Workspace.Mode] {
+		return fmt.Errorf("run contract: invalid workspace mode %q", rc.Workspace.Mode)
+	}
 	if rc.Mobility == "" {
 		rc.Mobility = MobilityResumable
 	}
 	if !ValidMobilityClasses[rc.Mobility] {
 		return fmt.Errorf("run contract: invalid mobility class %q", rc.Mobility)
 	}
+	if rc.Limits.MaxTurns < 0 || rc.Limits.BudgetTokens < 0 || rc.Limits.TimeoutSeconds < 0 {
+		return errors.New("run contract: limits must be nonnegative")
+	}
+	for _, output := range rc.Outputs {
+		if err := validateOutputExpectation(output); err != nil {
+			return err
+		}
+	}
+	if rc.Capabilities.hasEntries() {
+		if strings.TrimSpace(rc.Capabilities.RunID) == "" {
+			return errors.New("run contract: capability pack run_id is required when capabilities are present")
+		}
+		if rc.Capabilities.RunID != rc.ID {
+			return fmt.Errorf("run contract: capability pack run_id %q does not match contract id %q", rc.Capabilities.RunID, rc.ID)
+		}
+	}
 	if rc.Metadata.CreatedAt.IsZero() {
 		rc.Metadata.CreatedAt = time.Now()
 	}
 	return nil
+}
+
+func validateOutputExpectation(output OutputExpectation) error {
+	if strings.TrimSpace(output.Type) == "" {
+		return errors.New("run contract: output type is required")
+	}
+	if validOutputTypes[output.Type] {
+		return nil
+	}
+	parts := strings.Split(output.Type, ":")
+	if len(parts) == 2 && parts[0] != "" && parts[1] != "" {
+		return nil
+	}
+	return fmt.Errorf("run contract: invalid output type %q", output.Type)
+}
+
+func (cp CapabilityPack) hasEntries() bool {
+	return len(cp.Tools) > 0 ||
+		len(cp.MCPServers) > 0 ||
+		len(cp.Memories) > 0 ||
+		len(cp.Repos) > 0 ||
+		len(cp.WorkspaceModes) > 0 ||
+		len(cp.Secrets) > 0 ||
+		len(cp.OutputSurfaces) > 0 ||
+		cp.Browser != nil ||
+		cp.Docker != nil
 }
 
 // ToJSON marshals the run contract to JSON.

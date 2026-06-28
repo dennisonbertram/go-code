@@ -513,6 +513,35 @@ func TestPlacementDrainingWorkerPenalized(t *testing.T) {
 	}
 }
 
+func TestPlacementRejectsDrainingWorkersForNewRuns(t *testing.T) {
+	store := newTestWorkerStore()
+	now := time.Now().UTC()
+	if err := store.RegisterWorker(context.Background(), &relay.Worker{
+		ID: "w-draining-only", TenantID: "t1", Name: "Draining",
+		LocationType: relay.LocationLocal, Status: relay.WorkerStatusDraining,
+		TrustTier: relay.TrustTierStandard, Load: 0,
+		SupportedWorkspaceModes: []string{"local"},
+		LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("RegisterWorker: %v", err)
+	}
+
+	router := relay.NewPlacementRouter(store, nil)
+	record, err := router.Place(context.Background(), relay.PlacementRequest{
+		RunID:    "run-draining-rejected",
+		TenantID: "t1",
+	})
+	if err != nil {
+		t.Fatalf("Place: %v", err)
+	}
+	if record.SelectedWorker != "" {
+		t.Fatalf("expected no selected worker, got %q", record.SelectedWorker)
+	}
+	if !hasRejection(record, "w-draining-only", "offline") {
+		t.Fatalf("expected draining worker rejection, got %#v", record.RejectedWorkers)
+	}
+}
+
 // newTestWorkerStore is an in-memory worker store for router tests.
 type testWorkerStore struct {
 	workers map[string]*relay.Worker

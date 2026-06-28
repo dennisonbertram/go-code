@@ -37,6 +37,7 @@ use profiles/tools/MCP, and select workspace backends. The missing product layer
 ### Go Relay Owns
 
 - Registered execution locations and worker heartbeats.
+- Stale-worker marking is currently an explicit store operation for callers/operators; this PR does not add a `harnessd` background sweeper.
 - Worker capability inventory: repos, workspace modes, tools, MCP, memory scopes, connector tools, runtime limits, availability.
 - Routing policy and explainable placement decisions.
 - Workflow composition from connector/user intent into a concrete `go-code` run contract.

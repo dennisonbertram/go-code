@@ -174,9 +174,11 @@ func (p *CapabilityPolicy) checkMCPServer(mcp MCPServerCapability, pctx PolicyCo
 func (p *CapabilityPolicy) checkMemory(mem MemoryCapability, pctx PolicyContext) PolicyDecision {
 	// Cross-tenant memory access is denied.
 	if p.DenyCrossTenantMemory {
-		if strings.HasPrefix(mem.Scope, "team:") || strings.HasPrefix(mem.Scope, "org:") {
-			// Team/org memory is allowed if from the same tenant.
-			// For now, we simply allow scoped memory through.
+		if tenantID, ok := memoryScopeTenant(mem.Scope); ok && pctx.TenantID != "" && tenantID != pctx.TenantID {
+			return PolicyDecision{
+				Allowed: false,
+				Reason:  fmt.Sprintf("memory %q belongs to tenant %q, not %q", mem.Name, tenantID, pctx.TenantID),
+			}
 		}
 		// Personal memory is always tenant-scoped implicitly.
 	}
@@ -213,7 +215,7 @@ func (p *CapabilityPolicy) checkOutputSurface(out OutputSurfaceCapability, pctx 
 		// GitHub-sourced runs can write to GitHub surfaces.
 		// Slack-sourced runs can write to Slack surfaces, etc.
 		surfaceSource := strings.SplitN(out.Type, ":", 2)[0]
-		if surfaceSource != pctx.ConnectorSource && surfaceSource != "github" {
+		if surfaceSource != pctx.ConnectorSource {
 			// Allow cross-posting only for privileged workers.
 			if pctx.WorkerTrustTier != TrustTierPrivileged {
 				return PolicyDecision{
@@ -224,6 +226,19 @@ func (p *CapabilityPolicy) checkOutputSurface(out OutputSurfaceCapability, pctx 
 		}
 	}
 	return PolicyDecision{Allowed: true, Reason: "output surface allowed"}
+}
+
+func memoryScopeTenant(scope string) (string, bool) {
+	const prefix = "tenant:"
+	if !strings.HasPrefix(scope, prefix) {
+		return "", false
+	}
+	rest := strings.TrimPrefix(scope, prefix)
+	tenantID, _, _ := strings.Cut(rest, ":")
+	if tenantID == "" {
+		return "", false
+	}
+	return tenantID, true
 }
 
 // matchesScope checks if any of the tool scopes match the denied pattern.

@@ -265,7 +265,17 @@ func (s *SQLiteWorkerStore) ListWorkers(ctx context.Context, filter WorkerFilter
 
 // DeleteWorker removes a worker record.
 func (s *SQLiteWorkerStore) DeleteWorker(ctx context.Context, id string) error {
-	result, err := s.db.ExecContext(ctx, `DELETE FROM relay_workers WHERE id = ?`, id)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("relay: begin delete worker: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.ExecContext(ctx, `DELETE FROM relay_capability_inventory WHERE worker_id = ?`, id); err != nil && !isNoSuchTableError(err) {
+		return fmt.Errorf("relay: delete worker capability inventory: %w", err)
+	}
+
+	result, err := tx.ExecContext(ctx, `DELETE FROM relay_workers WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("relay: delete worker: %w", err)
 	}
@@ -275,6 +285,9 @@ func (s *SQLiteWorkerStore) DeleteWorker(ctx context.Context, id string) error {
 	}
 	if rows == 0 {
 		return ErrWorkerNotFound
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("relay: commit delete worker: %w", err)
 	}
 	return nil
 }
@@ -289,12 +302,14 @@ SET last_heartbeat = ?,
     status         = ?,
     updated_at     = ?
 WHERE id = ?
+  AND last_heartbeat <= ?
 `,
 		timeString(hb.Timestamp),
 		hb.Load,
 		string(hb.Status),
 		timeString(time.Now()),
 		hb.WorkerID,
+		timeString(hb.Timestamp),
 	)
 	if err != nil {
 		return fmt.Errorf("relay: record heartbeat: %w", err)
@@ -304,7 +319,9 @@ WHERE id = ?
 		return fmt.Errorf("relay: record heartbeat rows affected: %w", err)
 	}
 	if rows == 0 {
-		return ErrWorkerNotFound
+		if _, err := s.GetWorker(ctx, hb.WorkerID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -403,4 +420,8 @@ func isDuplicateKeyError(err error) bool {
 	}
 	return strings.Contains(err.Error(), "UNIQUE constraint failed") ||
 		strings.Contains(err.Error(), "constraint failed")
+}
+
+func isNoSuchTableError(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "no such table")
 }

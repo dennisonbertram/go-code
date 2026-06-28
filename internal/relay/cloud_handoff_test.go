@@ -80,6 +80,47 @@ func TestCostRiskSummary(t *testing.T) {
 	}
 }
 
+func TestCloudWorkerPoolStoresRegisteredConfig(t *testing.T) {
+	store := newTestWorkerStore()
+	pool := relay.NewCloudWorkerPool(store)
+
+	cfg := relay.CloudWorkerConfig{
+		WorkerID:     "w-cloud",
+		LocationType: relay.LocationVM,
+		Provider:     "hetzner",
+		Region:       "fsn1",
+	}
+	if err := pool.RegisterCloudWorker(cfg); err != nil {
+		t.Fatalf("RegisterCloudWorker: %v", err)
+	}
+
+	got, ok := pool.Config("w-cloud")
+	if !ok {
+		t.Fatal("expected stored config")
+	}
+	if got.MaxConcurrentRuns != 5 {
+		t.Fatalf("MaxConcurrentRuns: got %d, want 5", got.MaxConcurrentRuns)
+	}
+	if got.LocationType != relay.LocationVM {
+		t.Fatalf("LocationType: got %q, want vm", got.LocationType)
+	}
+	if _, err := store.GetWorker(context.Background(), "w-cloud"); err != nil {
+		t.Fatalf("expected worker registered in store: %v", err)
+	}
+}
+
+func TestCloudWorkerPoolRejectsLocalLocation(t *testing.T) {
+	pool := relay.NewCloudWorkerPool(newTestWorkerStore())
+	err := pool.RegisterCloudWorker(relay.CloudWorkerConfig{
+		WorkerID:     "w-local",
+		LocationType: relay.LocationLocal,
+		Provider:     "local",
+	})
+	if err == nil {
+		t.Fatal("expected local cloud worker registration to fail")
+	}
+}
+
 // Handoff tests.
 func TestHandoffCanHandoff(t *testing.T) {
 	hm := relay.NewHandoffManager(nil)
@@ -144,9 +185,9 @@ func TestHandoffValidateTarget(t *testing.T) {
 	store.RegisterWorker(context.Background(), &relay.Worker{
 		ID: "w-target", TenantID: "t1", Name: "Target",
 		LocationType: relay.LocationContainer, Status: relay.WorkerStatusOnline,
-		TrustTier: relay.TrustTierStandard,
+		TrustTier:               relay.TrustTierStandard,
 		SupportedWorkspaceModes: []string{"container"},
-		LastHeartbeat: now, CreatedAt: now, UpdatedAt: now,
+		LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
 	})
 
 	hm := relay.NewHandoffManager(store)
@@ -154,8 +195,8 @@ func TestHandoffValidateTarget(t *testing.T) {
 	contract := &relay.RunContract{
 		ID: "rc-h2", Prompt: "test",
 		Workspace: relay.WorkspaceTarget{Mode: "container"},
-		Mobility: relay.MobilityResumable,
-		Metadata: relay.RunMetadata{CreatedAt: now},
+		Mobility:  relay.MobilityResumable,
+		Metadata:  relay.RunMetadata{CreatedAt: now},
 	}
 
 	pkg, _ := hm.CreateHandoffPackage(contract, "w-1", relay.HandoffCheckpoint{Boundary: "after_llm_turn"}, "test")
@@ -170,6 +211,36 @@ func TestHandoffValidateTarget(t *testing.T) {
 	err = hm.ValidateHandoffTarget(context.Background(), "w-1", pkg)
 	if err == nil {
 		t.Error("same worker should be rejected")
+	}
+}
+
+func TestHandoffValidateTargetRejectsCrossTenantWorker(t *testing.T) {
+	store := newTestWorkerStore()
+	now := time.Now().UTC()
+	if err := store.RegisterWorker(context.Background(), &relay.Worker{
+		ID: "w-other-tenant", TenantID: "t2", Name: "Other Tenant",
+		LocationType: relay.LocationContainer, Status: relay.WorkerStatusOnline,
+		TrustTier:               relay.TrustTierStandard,
+		SupportedWorkspaceModes: []string{"container"},
+		LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("RegisterWorker: %v", err)
+	}
+
+	hm := relay.NewHandoffManager(store)
+	contract := &relay.RunContract{
+		ID: "rc-cross-tenant", Prompt: "test",
+		Workspace: relay.WorkspaceTarget{Mode: "container"},
+		Mobility:  relay.MobilityResumable,
+		Metadata:  relay.RunMetadata{TenantID: "t1", CreatedAt: now},
+	}
+	pkg, err := hm.CreateHandoffPackage(contract, "w-source", relay.HandoffCheckpoint{Boundary: "after_llm_turn"}, "test")
+	if err != nil {
+		t.Fatalf("CreateHandoffPackage: %v", err)
+	}
+
+	if err := hm.ValidateHandoffTarget(context.Background(), "w-other-tenant", pkg); err == nil {
+		t.Fatal("expected cross-tenant handoff target to be rejected")
 	}
 }
 
@@ -199,5 +270,43 @@ func TestHandoffStatusTracking(t *testing.T) {
 
 	if len(pkg.Lineage) != 2 {
 		t.Errorf("lineage after complete: got %d, want 2", len(pkg.Lineage))
+	}
+}
+
+func TestHandoffAssignTargetAndGetPackage(t *testing.T) {
+	store := newTestWorkerStore()
+	now := time.Now().UTC()
+	if err := store.RegisterWorker(context.Background(), &relay.Worker{
+		ID: "w-target", TenantID: "t1", Name: "Target",
+		LocationType: relay.LocationContainer, Status: relay.WorkerStatusOnline,
+		TrustTier:               relay.TrustTierStandard,
+		SupportedWorkspaceModes: []string{"container"},
+		LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("RegisterWorker: %v", err)
+	}
+
+	hm := relay.NewHandoffManager(store)
+	contract := &relay.RunContract{
+		ID: "rc-assign", Prompt: "test",
+		Workspace: relay.WorkspaceTarget{Mode: "container"},
+		Mobility:  relay.MobilityResumable,
+		Metadata:  relay.RunMetadata{TenantID: "t1", CreatedAt: now},
+	}
+	if _, err := hm.CreateHandoffPackage(contract, "w-source", relay.HandoffCheckpoint{Boundary: "after_llm_turn"}, "test"); err != nil {
+		t.Fatalf("CreateHandoffPackage: %v", err)
+	}
+	if err := hm.AssignTarget(context.Background(), "rc-assign", "w-target"); err != nil {
+		t.Fatalf("AssignTarget: %v", err)
+	}
+	pkg, err := hm.GetHandoffPackage("rc-assign")
+	if err != nil {
+		t.Fatalf("GetHandoffPackage: %v", err)
+	}
+	if pkg.TargetWorker != "w-target" || pkg.Status != relay.HandoffInProgress {
+		t.Fatalf("package not updated: %#v", pkg)
+	}
+	if _, err := hm.GetHandoffPackage("missing"); err == nil {
+		t.Fatal("expected missing package error")
 	}
 }

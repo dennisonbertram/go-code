@@ -115,7 +115,8 @@ type EventAndArtifactStore interface {
 
 // Sentinel errors.
 var (
-	ErrArtifactNotFound = errors.New("relay: artifact not found")
+	ErrArtifactNotFound      = errors.New("relay: artifact not found")
+	ErrArtifactAlreadyExists = errors.New("relay: artifact already exists")
 )
 
 // PlacementRecordToJSON marshals a placement record.

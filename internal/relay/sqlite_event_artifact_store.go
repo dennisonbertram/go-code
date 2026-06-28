@@ -164,12 +164,13 @@ func (s *SQLiteEventArtifactStore) SaveArtifact(ctx context.Context, a *Artifact
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO relay_artifacts (id, run_id, type, worker_id, mime_type, data, ref, url, visibility, redacted, created_at)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(id) DO UPDATE SET data = ?, ref = ?, url = ?, visibility = ?, redacted = ?
 `,
 		a.ID, a.RunID, string(a.Type), a.WorkerID, a.MIMEType, a.Data, a.Ref, a.URL, a.Visibility, redacted, timeString(a.CreatedAt),
-		a.Data, a.Ref, a.URL, a.Visibility, redacted,
 	)
 	if err != nil {
+		if isDuplicateKeyError(err) {
+			return ErrArtifactAlreadyExists
+		}
 		return fmt.Errorf("relay: save artifact: %w", err)
 	}
 	return nil

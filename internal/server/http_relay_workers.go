@@ -164,6 +164,10 @@ func (s *Server) handleRelayRegisterWorker(w http.ResponseWriter, r *http.Reques
 		writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 		return
 	}
+	if !s.relayTrustTierAllowed(r, trustTier) {
+		writeScopeError(w, store.ScopeAdmin)
+		return
+	}
 
 	now := time.Now()
 	worker := &relay.Worker{
@@ -260,6 +264,10 @@ func (s *Server) handleRelayUpdateWorker(w http.ResponseWriter, r *http.Request,
 		tt := relay.TrustTier(*req.TrustTier)
 		if err := relay.ValidateTrustTier(tt); err != nil {
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		if !s.relayTrustTierAllowed(r, tt) {
+			writeScopeError(w, store.ScopeAdmin)
 			return
 		}
 		existing.TrustTier = tt
@@ -380,4 +388,14 @@ func (s *Server) relayWorkerVisibleToRequest(w http.ResponseWriter, r *http.Requ
 	}
 	writeError(w, http.StatusNotFound, "worker_not_found", "worker not found: "+id)
 	return false
+}
+
+func (s *Server) relayTrustTierAllowed(r *http.Request, trustTier relay.TrustTier) bool {
+	if trustTier != relay.TrustTierPrivileged {
+		return true
+	}
+	if s.authDisabled || s.runStore == nil {
+		return true
+	}
+	return hasScope(r.Context(), store.ScopeAdmin)
 }

@@ -1,11 +1,28 @@
 package relay
 
 import (
+	"context"
 	"fmt"
+	"time"
 )
 
 // CloudWorkerConfig is the configuration for a cloud/sandbox worker.
 type CloudWorkerConfig struct {
+	// WorkerID is the stable worker identity for this cloud/sandbox worker.
+	WorkerID string `json:"worker_id"`
+
+	// TenantID scopes the worker when it is registered in the worker store.
+	TenantID string `json:"tenant_id,omitempty"`
+
+	// Name is the display name used when the worker is registered.
+	Name string `json:"name,omitempty"`
+
+	// LocationType is the non-local location type for this worker.
+	LocationType LocationType `json:"location_type"`
+
+	// TrustTier is the trust tier assigned to this worker.
+	TrustTier TrustTier `json:"trust_tier,omitempty"`
+
 	// Provider identifies the cloud provider (e.g. "hetzner", "aws", "gcp", "sandbox").
 	Provider string `json:"provider"`
 
@@ -54,13 +71,49 @@ func NewCloudWorkerPool(ws WorkerStore) *CloudWorkerPool {
 // RegisterCloudWorker registers a worker with cloud-specific configuration.
 // It validates that the worker has a non-local location type and stores the config.
 func (p *CloudWorkerPool) RegisterCloudWorker(cfg CloudWorkerConfig) error {
+	if cfg.WorkerID == "" {
+		return fmt.Errorf("cloud worker: worker ID is required")
+	}
 	if cfg.Provider == "" {
 		return fmt.Errorf("cloud worker: provider is required")
+	}
+	if !IsCloudWorker(cfg.LocationType) {
+		return fmt.Errorf("cloud worker: location type %q is not a cloud worker type", cfg.LocationType)
 	}
 	if cfg.MaxConcurrentRuns <= 0 {
 		cfg.MaxConcurrentRuns = 5
 	}
+	if cfg.Name == "" {
+		cfg.Name = cfg.WorkerID
+	}
+	if cfg.TrustTier == "" {
+		cfg.TrustTier = TrustTierStandard
+	}
+	if err := ValidateTrustTier(cfg.TrustTier); err != nil {
+		return err
+	}
+
+	p.configs[cfg.WorkerID] = cfg
+	if p.workerStore != nil {
+		now := time.Now().UTC()
+		if err := p.workerStore.RegisterWorker(context.Background(), &Worker{
+			ID: cfg.WorkerID, TenantID: cfg.TenantID, Name: cfg.Name,
+			LocationType: cfg.LocationType, Status: WorkerStatusOnline,
+			TrustTier: cfg.TrustTier, Load: 0,
+			SupportedWorkspaceModes: []string{WorkspaceModeForLocation(cfg.LocationType)},
+			LastHeartbeat:           now, CreatedAt: now, UpdatedAt: now,
+		}); err != nil {
+			delete(p.configs, cfg.WorkerID)
+			return fmt.Errorf("cloud worker: register worker: %w", err)
+		}
+	}
 	return nil
+}
+
+// Config returns the stored cloud configuration for a worker.
+func (p *CloudWorkerPool) Config(workerID string) (CloudWorkerConfig, bool) {
+	cfg, ok := p.configs[workerID]
+	return cfg, ok
 }
 
 // IsCloudWorker returns true if the location type is a cloud/sandbox type.

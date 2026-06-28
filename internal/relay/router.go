@@ -145,11 +145,11 @@ func (pr *PlacementRouter) Place(ctx context.Context, req PlacementRequest) (*Pl
 func (pr *PlacementRouter) checkHardConstraints(ctx context.Context, w *Worker, req PlacementRequest) ([]RejectionReason, error) {
 	var rejections []RejectionReason
 
-	// Reject offline or stale workers.
-	if w.Status != WorkerStatusOnline && w.Status != WorkerStatusDraining {
+	// Reject workers that are not accepting new runs.
+	if w.Status != WorkerStatusOnline {
 		rejections = append(rejections, RejectionReason{
 			WorkerID: w.ID,
-			Reason:   fmt.Sprintf("worker status is %s (must be online or draining)", w.Status),
+			Reason:   fmt.Sprintf("worker status is %s (must be online)", w.Status),
 			Category: "offline",
 		})
 	}
@@ -359,11 +359,6 @@ func (pr *PlacementRouter) scoreWorkers(workers []*Worker, req PlacementRequest)
 		// Prefer privileged workers for capability-rich tasks.
 		if w.TrustTier == TrustTierPrivileged {
 			score += 5
-		}
-
-		// Small bonus for draining workers to complete remaining work faster.
-		if w.Status == WorkerStatusDraining {
-			score -= 15
 		}
 
 		scores[w.ID] = score

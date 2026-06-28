@@ -269,10 +269,9 @@ func (eb *EventBus) Unsubscribe(runID string, ch chan TransportEvent) {
 // Publish sends an event to all subscribers for a run.
 func (eb *EventBus) Publish(ctx context.Context, event TransportEvent) {
 	eb.mu.RLock()
-	subs := eb.subscribers[event.RunID]
-	eb.mu.RUnlock()
+	defer eb.mu.RUnlock()
 
-	for _, ch := range subs {
+	for _, ch := range eb.subscribers[event.RunID] {
 		select {
 		case ch <- event:
 		case <-ctx.Done():

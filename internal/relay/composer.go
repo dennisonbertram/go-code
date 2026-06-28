@@ -92,6 +92,7 @@ func (c *Composer) Compose(req ComposeRequest) (*RunContract, error) {
 
 	// Build the capability pack from requested items.
 	capPack := c.buildCapabilityPack(req)
+	capPack.RunID = contractID
 
 	// Build output expectations.
 	outputs := c.buildOutputs(req)
@@ -125,7 +126,7 @@ func (c *Composer) Compose(req ComposeRequest) (*RunContract, error) {
 			BudgetTokens:   req.BudgetTokens,
 			TimeoutSeconds: req.TimeoutSeconds,
 		},
-		Outputs: outputs,
+		Outputs:  outputs,
 		Mobility: MobilityResumable,
 		Metadata: RunMetadata{
 			TenantID:  tenantID,

@@ -16,11 +16,11 @@ func TestRunContractValidate(t *testing.T) {
 		{
 			name: "valid contract",
 			rc: &relay.RunContract{
-				ID:     "rc-1",
-				Prompt: "Fix the bug",
-				Source: relay.TriggerSource{Type: "api", TriggerID: "t1"},
+				ID:        "rc-1",
+				Prompt:    "Fix the bug",
+				Source:    relay.TriggerSource{Type: "api", TriggerID: "t1"},
 				Workspace: relay.WorkspaceTarget{Mode: "local"},
-				Mobility: relay.MobilityResumable,
+				Mobility:  relay.MobilityResumable,
 				Metadata: relay.RunMetadata{
 					TenantID:  "t1",
 					CreatedBy: "user:alice",
@@ -47,8 +47,10 @@ func TestRunContractValidate(t *testing.T) {
 		{
 			name: "defaults mobility",
 			rc: &relay.RunContract{
-				ID:     "rc-1",
-				Prompt: "test",
+				ID:        "rc-1",
+				Prompt:    "test",
+				Source:    relay.TriggerSource{Type: "api"},
+				Workspace: relay.WorkspaceTarget{Mode: "local"},
 				Metadata: relay.RunMetadata{
 					TenantID: "t1",
 				},
@@ -79,8 +81,10 @@ func TestRunContractValidate(t *testing.T) {
 
 func TestRunContractDefaults(t *testing.T) {
 	rc := &relay.RunContract{
-		ID:     "rc-1",
-		Prompt: "test",
+		ID:        "rc-1",
+		Prompt:    "test",
+		Source:    relay.TriggerSource{Type: "api"},
+		Workspace: relay.WorkspaceTarget{Mode: "local"},
 		Metadata: relay.RunMetadata{
 			TenantID: "t1",
 		},
@@ -93,6 +97,68 @@ func TestRunContractDefaults(t *testing.T) {
 	}
 	if rc.Metadata.CreatedAt.IsZero() {
 		t.Error("CreatedAt should be set when zero")
+	}
+}
+
+func TestRunContractValidateControlPlaneFields(t *testing.T) {
+	base := func() *relay.RunContract {
+		return &relay.RunContract{
+			ID:        "rc-validate",
+			Prompt:    "test",
+			Source:    relay.TriggerSource{Type: "api"},
+			Workspace: relay.WorkspaceTarget{Mode: "local"},
+			Mobility:  relay.MobilityResumable,
+			Metadata:  relay.RunMetadata{TenantID: "t1"},
+		}
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*relay.RunContract)
+	}{
+		{
+			name: "invalid source type",
+			mutate: func(rc *relay.RunContract) {
+				rc.Source.Type = "email"
+			},
+		},
+		{
+			name: "invalid workspace mode",
+			mutate: func(rc *relay.RunContract) {
+				rc.Workspace.Mode = "teleport"
+			},
+		},
+		{
+			name: "negative max turns",
+			mutate: func(rc *relay.RunContract) {
+				rc.Limits.MaxTurns = -1
+			},
+		},
+		{
+			name: "invalid output surface",
+			mutate: func(rc *relay.RunContract) {
+				rc.Outputs = []relay.OutputExpectation{{Type: "github"}}
+			},
+		},
+		{
+			name: "capability pack run id mismatch",
+			mutate: func(rc *relay.RunContract) {
+				rc.Capabilities = relay.CapabilityPack{
+					RunID: "other-run",
+					Tools: []relay.ToolCapability{{Name: "bash"}},
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rc := base()
+			tt.mutate(rc)
+			if err := rc.Validate(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
 	}
 }
 
@@ -112,7 +178,7 @@ func TestRunContractJSON(t *testing.T) {
 			Clean:   true,
 		},
 		Capabilities: relay.CapabilityPack{
-			Tools: []relay.ToolCapability{{Name: "bash"}, {Name: "write"}},
+			Tools:      []relay.ToolCapability{{Name: "bash"}, {Name: "write"}},
 			MCPServers: []relay.MCPServerCapability{{Name: "context7"}},
 		},
 		Outputs: []relay.OutputExpectation{
@@ -190,6 +256,9 @@ func TestComposerComposeValid(t *testing.T) {
 	}
 	if contract.ID == "" {
 		t.Error("contract ID should not be empty")
+	}
+	if contract.Capabilities.RunID != contract.ID {
+		t.Errorf("capability pack RunID: got %q, want %q", contract.Capabilities.RunID, contract.ID)
 	}
 	if contract.Prompt != req.Prompt {
 		t.Errorf("Prompt: got %q, want %q", contract.Prompt, req.Prompt)

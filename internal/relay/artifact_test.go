@@ -127,6 +127,32 @@ func TestSQLiteEventArtifactStore(t *testing.T) {
 		}
 	})
 
+	t.Run("artifact id collision is rejected", func(t *testing.T) {
+		first := &relay.Artifact{
+			ID: "art-collision", RunID: "run-one", Type: relay.ArtifactPatch,
+			WorkerID: "w-1", MIMEType: "text/plain", Data: "first",
+			Visibility: "tenant", CreatedAt: time.Now(),
+		}
+		if err := store.SaveArtifact(ctx, first); err != nil {
+			t.Fatalf("SaveArtifact first: %v", err)
+		}
+		second := &relay.Artifact{
+			ID: "art-collision", RunID: "run-two", Type: relay.ArtifactSummary,
+			WorkerID: "w-2", MIMEType: "text/markdown", Data: "second",
+			Visibility: "tenant", CreatedAt: time.Now(),
+		}
+		if err := store.SaveArtifact(ctx, second); err == nil {
+			t.Fatal("expected duplicate artifact ID to be rejected")
+		}
+		got, err := store.GetArtifact(ctx, "art-collision")
+		if err != nil {
+			t.Fatalf("GetArtifact: %v", err)
+		}
+		if got.RunID != "run-one" || got.Data != "first" || got.Type != relay.ArtifactPatch {
+			t.Fatalf("original artifact was mutated: %#v", got)
+		}
+	})
+
 	t.Run("artifact not found", func(t *testing.T) {
 		_, err := store.GetArtifact(ctx, "nonexistent")
 		if err != relay.ErrArtifactNotFound {
@@ -139,6 +165,22 @@ func TestSQLiteEventArtifactStoreRejectsNilDB(t *testing.T) {
 	_, err := relay.NewSQLiteEventArtifactStore(nil)
 	if err == nil {
 		t.Fatal("expected error for nil database")
+	}
+}
+
+func TestSQLiteEventArtifactStoreClose(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "relay_ea_close.db")
+	ws, err := relay.NewSQLiteWorkerStore(path)
+	if err != nil {
+		t.Fatalf("NewSQLiteWorkerStore: %v", err)
+	}
+	defer ws.Close()
+	store, err := relay.NewSQLiteEventArtifactStore(ws.DB())
+	if err != nil {
+		t.Fatalf("NewSQLiteEventArtifactStore: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 

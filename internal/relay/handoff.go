@@ -135,6 +135,9 @@ func (hm *HandoffManager) ValidateHandoffTarget(ctx context.Context, targetWorke
 
 	// Target must support required workspace modes.
 	if pkg.RunContract != nil {
+		if pkg.RunContract.Metadata.TenantID != "" && target.TenantID != pkg.RunContract.Metadata.TenantID {
+			return fmt.Errorf("handoff: target worker %q belongs to tenant %q, not %q", targetWorkerID, target.TenantID, pkg.RunContract.Metadata.TenantID)
+		}
 		requiredMode := pkg.RunContract.Workspace.Mode
 		if requiredMode != "" && !hasString(target.SupportedWorkspaceModes, requiredMode) {
 			return fmt.Errorf("handoff: target worker %q does not support workspace mode %q", targetWorkerID, requiredMode)
@@ -151,12 +154,12 @@ func (hm *HandoffManager) CreateHandoffPackage(contract *RunContract, sourceWork
 	}
 
 	pkg := &HandoffPackage{
-		RunID:         contract.ID,
-		SourceWorker:  sourceWorker,
-		Status:        HandoffPending,
-		Reason:        reason,
-		Checkpoint:    checkpoint,
-		RunContract:   contract,
+		RunID:        contract.ID,
+		SourceWorker: sourceWorker,
+		Status:       HandoffPending,
+		Reason:       reason,
+		Checkpoint:   checkpoint,
+		RunContract:  contract,
 		Lineage: []HandoffLineageEntry{
 			{
 				WorkerID:  sourceWorker,

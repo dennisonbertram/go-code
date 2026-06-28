@@ -64,8 +64,8 @@ func TestCapabilityPolicyRemoteSecrets(t *testing.T) {
 		},
 	}
 	pctx := relay.PolicyContext{
-		WorkerTrustTier:  relay.TrustTierStandard,
-		IsLocalWorker:    false,
+		WorkerTrustTier: relay.TrustTierStandard,
+		IsLocalWorker:   false,
 	}
 
 	result := p.Check(context.Background(), pack, pctx)
@@ -120,13 +120,50 @@ func TestCapabilityPolicyOutputSurfaceMismatch(t *testing.T) {
 		},
 	}
 	pctx := relay.PolicyContext{
-		ConnectorSource:  "github",
-		WorkerTrustTier:  relay.TrustTierStandard,
+		ConnectorSource: "github",
+		WorkerTrustTier: relay.TrustTierStandard,
 	}
 
 	result := p.Check(context.Background(), pack, pctx)
 	if result.Allowed {
 		t.Error("expected slack output surface denied for github-sourced run")
+	}
+}
+
+func TestCapabilityPolicyGitHubSurfaceMismatchForSlackSource(t *testing.T) {
+	p := relay.NewCapabilityPolicy()
+	pack := &relay.CapabilityPack{
+		RunID: "run-1",
+		OutputSurfaces: []relay.OutputSurfaceCapability{
+			{Type: "github:pr"},
+		},
+	}
+	pctx := relay.PolicyContext{
+		ConnectorSource: "slack",
+		WorkerTrustTier: relay.TrustTierStandard,
+	}
+
+	result := p.Check(context.Background(), pack, pctx)
+	if result.Allowed {
+		t.Error("expected github output surface denied for slack-sourced standard worker")
+	}
+}
+
+func TestCapabilityPolicyCrossTenantMemoryDenied(t *testing.T) {
+	p := relay.NewCapabilityPolicy()
+	pack := &relay.CapabilityPack{
+		RunID: "run-1",
+		Memories: []relay.MemoryCapability{
+			{Name: "other-tenant-memory", Scope: "tenant:t2:repo"},
+		},
+	}
+	pctx := relay.PolicyContext{
+		TenantID: "t1",
+	}
+
+	result := p.Check(context.Background(), pack, pctx)
+	if result.Allowed {
+		t.Error("expected cross-tenant memory to be denied")
 	}
 }
 
@@ -139,8 +176,8 @@ func TestCapabilityPolicyPrivilegedCrossSurface(t *testing.T) {
 		},
 	}
 	pctx := relay.PolicyContext{
-		ConnectorSource:  "github",
-		WorkerTrustTier:  relay.TrustTierPrivileged,
+		ConnectorSource: "github",
+		WorkerTrustTier: relay.TrustTierPrivileged,
 	}
 
 	result := p.Check(context.Background(), pack, pctx)
@@ -168,9 +205,9 @@ func TestCapabilityPolicyFilterPack(t *testing.T) {
 		},
 	}
 	pctx := relay.PolicyContext{
-		WorkerTrustTier:  relay.TrustTierUntrusted,
-		ConnectorSource:  "github",
-		IsLocalWorker:    false,
+		WorkerTrustTier: relay.TrustTierUntrusted,
+		ConnectorSource: "github",
+		IsLocalWorker:   false,
 	}
 
 	filtered, result := p.FilterPack(context.Background(), pack, pctx)
