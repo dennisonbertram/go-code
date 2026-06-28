@@ -7,11 +7,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"go-agent-harness/internal/harness"
+	htools "go-agent-harness/internal/harness/tools"
 	"go-agent-harness/internal/provider/catalog"
 	openai "go-agent-harness/internal/provider/openai"
 	"go-agent-harness/internal/relay"
+	"go-agent-harness/internal/subagents"
+	scriptworkflow "go-agent-harness/internal/workflow"
 )
 
 func TestBuildCatalogBootstrapFallsBackToWorkspaceCatalog(t *testing.T) {
@@ -144,6 +148,7 @@ func TestBuildServerOptionsForwardsBootstrapRuntime(t *testing.T) {
 	opts := buildServerOptions(serverBootstrapOptions{
 		runner:           runner,
 		modelCatalog:     cat,
+		scriptWorkflows:  &scriptWorkflowServiceRef{},
 		providerRegistry: catalog.NewProviderRegistryWithEnv(cat, func(string) string { return "" }),
 		triggers:         runtime,
 		relayWorkerStore: relayStore,
@@ -161,6 +166,9 @@ func TestBuildServerOptionsForwardsBootstrapRuntime(t *testing.T) {
 	if opts.ProviderRegistry == nil {
 		t.Fatal("expected provider registry")
 	}
+	if opts.ScriptWorkflows == nil {
+		t.Fatal("expected script workflows")
+	}
 	if opts.Validators == nil {
 		t.Fatal("expected validators")
 	}
@@ -176,6 +184,235 @@ func TestBuildServerOptionsForwardsBootstrapRuntime(t *testing.T) {
 	if opts.RelayWorkerStore != relayStore {
 		t.Fatal("expected relay worker store")
 	}
+}
+
+func TestScriptWorkflowServiceRefDelegatesAfterBinding(t *testing.T) {
+	t.Parallel()
+
+	engine := scriptworkflow.NewEngine(scriptworkflow.EngineOptions{Subagents: sourceNoopSubagentsForHarnessd{}})
+	manager, err := scriptworkflow.NewSourceManager(scriptworkflow.SourceManagerOptions{
+		Engine:   engine,
+		CacheDir: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("NewSourceManager: %v", err)
+	}
+	ref := &scriptWorkflowServiceRef{}
+	if _, err := ref.Start(t.Context(), "missing", nil); err == nil {
+		t.Fatal("expected unbound ref to reject start")
+	}
+	if err := ref.Reload(t.Context()); err != nil {
+		t.Fatalf("unbound reload should be a no-op: %v", err)
+	}
+	ref.Set(manager)
+	if got := ref.List(); got == nil {
+		t.Fatal("expected delegated list to return a non-nil slice")
+	}
+	if err := ref.Reload(t.Context()); err != nil {
+		t.Fatalf("bound reload: %v", err)
+	}
+}
+
+func TestScriptWorkflowServiceRefDelegatesAllMethods(t *testing.T) {
+	t.Parallel()
+
+	svc := &fakeScriptWorkflowServiceForHarnessd{
+		run: &scriptworkflow.Run{ID: "wf_1", WorkflowName: "daily-review", Status: scriptworkflow.RunStatusCompleted},
+		events: []scriptworkflow.Event{{
+			RunID: "wf_1",
+			Type:  scriptworkflow.EventWorkflowCompleted,
+		}},
+	}
+	ref := &scriptWorkflowServiceRef{}
+	ref.Set(svc)
+
+	if _, err := ref.Resume(t.Context(), "wf_1", map[string]any{"resume": true}); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if _, err := ref.GetRun("wf_1"); err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	history, stream, cancel, err := ref.Subscribe("wf_1")
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	cancel()
+	if len(history) != 1 || stream == nil {
+		t.Fatalf("Subscribe history=%d stream nil=%v", len(history), stream == nil)
+	}
+	if _, _, err := ref.Wait(t.Context(), "wf_1"); err != nil {
+		t.Fatalf("Wait: %v", err)
+	}
+	bundle, err := ref.CreateWorkflow(t.Context(), scriptworkflow.CreateWorkflowRequest{Name: "daily-review"})
+	if err != nil {
+		t.Fatalf("CreateWorkflow: %v", err)
+	}
+	if bundle.Manifest.Name != "daily-review" {
+		t.Fatalf("bundle name = %q", bundle.Manifest.Name)
+	}
+}
+
+func TestScriptSubagentAdapterMapsRequestsAndResults(t *testing.T) {
+	t.Parallel()
+
+	manager := &fakeSubagentManagerForHarnessd{
+		item: subagents.Subagent{
+			ID:     "subagent_1",
+			RunID:  "run_1",
+			Status: harness.RunStatusCompleted,
+			Output: "done",
+		},
+	}
+	adapter := scriptSubagentAdapter{manager: manager}
+	result, err := adapter.Create(t.Context(), scriptworkflow.SubagentRequest{
+		Prompt:        "inspect",
+		Model:         "gpt-5-nano",
+		Provider:      "openai",
+		Profile:       "reviewer",
+		AllowedTools:  []string{"read"},
+		Isolation:     "worktree",
+		CleanupPolicy: "preserve",
+		MaxSteps:      5,
+		MaxCostUSD:    0.5,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if result.ID != "subagent_1" || result.Output != "done" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	if manager.req.Prompt != "inspect" || manager.req.ProviderName != "openai" || manager.req.ProfileName != "reviewer" {
+		t.Fatalf("unexpected mapped request: %#v", manager.req)
+	}
+	if got := manager.req.AllowedTools; len(got) != 1 || got[0] != "read" {
+		t.Fatalf("allowed tools = %#v", got)
+	}
+	if manager.req.Isolation != subagents.IsolationWorktree || manager.req.CleanupPolicy != subagents.CleanupPreserve {
+		t.Fatalf("isolation=%q cleanup=%q", manager.req.Isolation, manager.req.CleanupPolicy)
+	}
+
+	got, err := adapter.Get(t.Context(), "subagent_1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.ID != "subagent_1" || got.Status != string(harness.RunStatusCompleted) {
+		t.Fatalf("unexpected get result: %#v", got)
+	}
+}
+
+func TestWorkflowQuestionResponderUsesAskBroker(t *testing.T) {
+	t.Parallel()
+
+	broker := &fakeAskUserQuestionBrokerForHarnessd{}
+	responder := workflowQuestionResponder{broker: broker, timeout: 2 * time.Second}
+	answer, err := responder.AskWorkflowQuestion(t.Context(), scriptworkflow.QuestionRequest{
+		RunID:  "wf_1",
+		CallID: "call_1",
+		Prompt: "Continue?",
+		Choices: []scriptworkflow.QuestionOption{{
+			Label:       "Continue",
+			Description: "Keep going.",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("AskWorkflowQuestion: %v", err)
+	}
+	if answer != "Continue" {
+		t.Fatalf("answer = %#v", answer)
+	}
+	if broker.req.RunID != "wf_1" || broker.req.CallID != "call_1" || broker.req.Timeout != 2*time.Second {
+		t.Fatalf("broker request = %#v", broker.req)
+	}
+	if len(broker.req.Questions) != 1 || broker.req.Questions[0].Question != "Continue?" {
+		t.Fatalf("questions = %#v", broker.req.Questions)
+	}
+}
+
+type fakeScriptWorkflowServiceForHarnessd struct {
+	run    *scriptworkflow.Run
+	events []scriptworkflow.Event
+}
+
+func (f *fakeScriptWorkflowServiceForHarnessd) List() []scriptworkflow.Meta {
+	return []scriptworkflow.Meta{{Name: "daily-review"}}
+}
+
+func (f *fakeScriptWorkflowServiceForHarnessd) Start(context.Context, string, any) (*scriptworkflow.Run, error) {
+	return f.run, nil
+}
+
+func (f *fakeScriptWorkflowServiceForHarnessd) Resume(context.Context, string, any) (*scriptworkflow.Run, error) {
+	return f.run, nil
+}
+
+func (f *fakeScriptWorkflowServiceForHarnessd) GetRun(string) (*scriptworkflow.Run, error) {
+	return f.run, nil
+}
+
+func (f *fakeScriptWorkflowServiceForHarnessd) Subscribe(string) ([]scriptworkflow.Event, <-chan scriptworkflow.Event, func(), error) {
+	ch := make(chan scriptworkflow.Event)
+	return f.events, ch, func() { close(ch) }, nil
+}
+
+func (f *fakeScriptWorkflowServiceForHarnessd) Wait(context.Context, string) (*scriptworkflow.Run, []scriptworkflow.Event, error) {
+	return f.run, f.events, nil
+}
+
+func (f *fakeScriptWorkflowServiceForHarnessd) CreateWorkflow(_ context.Context, req scriptworkflow.CreateWorkflowRequest) (*scriptworkflow.SourceBundle, error) {
+	return &scriptworkflow.SourceBundle{Manifest: scriptworkflow.SourceBundleManifest{Name: req.Name}}, nil
+}
+
+type fakeSubagentManagerForHarnessd struct {
+	req  subagents.Request
+	item subagents.Subagent
+}
+
+func (f *fakeSubagentManagerForHarnessd) Create(_ context.Context, req subagents.Request) (subagents.Subagent, error) {
+	f.req = req
+	return f.item, nil
+}
+
+func (f *fakeSubagentManagerForHarnessd) Get(context.Context, string) (subagents.Subagent, error) {
+	return f.item, nil
+}
+
+func (f *fakeSubagentManagerForHarnessd) List(context.Context) ([]subagents.Subagent, error) {
+	return nil, nil
+}
+
+func (f *fakeSubagentManagerForHarnessd) Delete(context.Context, string) error {
+	return nil
+}
+
+func (f *fakeSubagentManagerForHarnessd) Cancel(context.Context, string) error {
+	return nil
+}
+
+type fakeAskUserQuestionBrokerForHarnessd struct {
+	req htools.AskUserQuestionRequest
+}
+
+func (f *fakeAskUserQuestionBrokerForHarnessd) Ask(_ context.Context, req htools.AskUserQuestionRequest) (map[string]string, time.Time, error) {
+	f.req = req
+	return map[string]string{req.Questions[0].Question: "Continue"}, time.Unix(1, 0), nil
+}
+
+func (f *fakeAskUserQuestionBrokerForHarnessd) Pending(string) (htools.AskUserQuestionPending, bool) {
+	return htools.AskUserQuestionPending{}, false
+}
+
+func (f *fakeAskUserQuestionBrokerForHarnessd) Submit(string, map[string]string) error {
+	return nil
+}
+
+type sourceNoopSubagentsForHarnessd struct{}
+
+func (sourceNoopSubagentsForHarnessd) Create(context.Context, scriptworkflow.SubagentRequest) (scriptworkflow.SubagentResult, error) {
+	return scriptworkflow.SubagentResult{ID: "subagent_1", Status: "completed"}, nil
+}
+
+func (sourceNoopSubagentsForHarnessd) Get(context.Context, string) (scriptworkflow.SubagentResult, error) {
+	return scriptworkflow.SubagentResult{ID: "subagent_1", Status: "completed"}, nil
 }
 
 func TestBuildPersistenceBootstrapInitializesStoresAndCleaner(t *testing.T) {

@@ -52,6 +52,9 @@ and error recovery chains.
 
 ## Operational Reminder
 
+- Respond concisely but educationally: explain what changed and why it matters.
+  When a blocker or confusing implementation detail is solved, record the
+  symptom, cause, and fix in the relevant durable log or plan note.
 - Keep `docs/logs/long-term-thinking-log.md` in sync with any durable intent or success-criteria changes.
 - Keep `docs/runbooks/` aligned with the current CLI and server behavior.
 - For a new worktree, run `scripts/init.sh <task-slug>` first. `scripts/bootstrap-worktree.sh` is only a compatibility wrapper. `scripts/init.sh` creates the worktree, downloads dependencies, builds local binaries, writes a sourceable env file, and can start `harnessd` in tmux when requested.

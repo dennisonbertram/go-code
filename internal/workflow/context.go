@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+
+	"github.com/google/uuid"
 )
 
 // Context is the execution context passed to workflow scripts.
@@ -26,8 +28,8 @@ type Context struct {
 
 	mu      sync.Mutex
 	wg      sync.WaitGroup
-	sem     chan struct{}  // concurrency semaphore
-	results []AgentResult  // accumulated agent call results
+	sem     chan struct{} // concurrency semaphore
+	results []AgentResult // accumulated agent call results
 }
 
 // newContext creates a Context for a workflow run.
@@ -88,10 +90,16 @@ func (c *Context) Agent(prompt string, opts *AgentOpts) (*AgentResult, error) {
 	})
 
 	req := SubagentRequest{
-		Prompt:    prompt,
-		Model:     opts.Model,
-		Isolation: opts.Isolation,
-		AgentType: opts.AgentType,
+		Prompt:        prompt,
+		Model:         opts.Model,
+		Provider:      opts.Provider,
+		Profile:       opts.Profile,
+		AllowedTools:  append([]string(nil), opts.AllowedTools...),
+		Isolation:     opts.Isolation,
+		CleanupPolicy: opts.CleanupPolicy,
+		AgentType:     opts.AgentType,
+		MaxSteps:      opts.MaxSteps,
+		MaxCostUSD:    opts.MaxCostUSD,
 	}
 
 	result, err := c.engine.subagents.Create(c.ctx, req)
@@ -328,6 +336,54 @@ func (c *Context) Phase(title string) {
 func (c *Context) Log(message string) {
 	c.emit(EventWorkflowLog, map[string]any{
 		"message": message,
+	})
+}
+
+// Feedback emits structured progress, findings, warnings, or debug messages
+// back to the parent agent and API subscribers.
+func (c *Context) Feedback(kind, message string, data map[string]any) {
+	if kind == "" {
+		kind = "progress"
+	}
+	eventType := EventWorkflowFeedback
+	switch kind {
+	case "finding":
+		eventType = EventWorkflowFinding
+	case "warning":
+		eventType = EventWorkflowWarning
+	}
+	payload := map[string]any{
+		"kind":              kind,
+		"message":           message,
+		"requires_response": false,
+	}
+	if data != nil {
+		payload["data"] = data
+	}
+	c.emit(eventType, payload)
+}
+
+// Question emits a structured question and asks the engine's configured
+// responder for an answer. Without a responder the question is visible to
+// subscribers and the workflow receives a clear error.
+func (c *Context) Question(prompt string, choices []QuestionOption) (any, error) {
+	callID := "workflow_question_" + uuid.NewString()
+	payload := map[string]any{
+		"kind":              "question",
+		"message":           prompt,
+		"requires_response": true,
+		"call_id":           callID,
+		"choices":           choices,
+	}
+	c.emit(EventWorkflowQuestion, payload)
+	if c.engine.questions == nil {
+		return nil, fmt.Errorf("workflow question responder is not configured")
+	}
+	return c.engine.questions.AskWorkflowQuestion(c.ctx, QuestionRequest{
+		RunID:   c.runID,
+		CallID:  callID,
+		Prompt:  prompt,
+		Choices: choices,
 	})
 }
 
