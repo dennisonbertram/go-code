@@ -19,6 +19,7 @@ import (
 	"go-agent-harness/internal/provider/catalog"
 	openai "go-agent-harness/internal/provider/openai"
 	"go-agent-harness/internal/provider/pricing"
+	"go-agent-harness/internal/relay"
 	"go-agent-harness/internal/server"
 	slackadapter "go-agent-harness/internal/slack"
 	istore "go-agent-harness/internal/store"
@@ -219,6 +220,7 @@ type persistenceBootstrapOptions struct {
 type persistenceBootstrap struct {
 	runStore          istore.Store
 	conversationStore harness.ConversationStore
+	relayWorkerStore  relay.WorkerStore
 	convCleanerCancel context.CancelFunc
 }
 
@@ -245,6 +247,9 @@ func buildPersistenceBootstrap(opts persistenceBootstrapOptions) (_ persistenceB
 		}
 		if bootstrap.conversationStore != nil {
 			_ = bootstrap.conversationStore.Close()
+		}
+		if bootstrap.relayWorkerStore != nil {
+			_ = bootstrap.relayWorkerStore.Close()
 		}
 		if bootstrap.runStore != nil {
 			_ = bootstrap.runStore.Close()
@@ -292,6 +297,24 @@ func buildPersistenceBootstrap(opts persistenceBootstrapOptions) (_ persistenceB
 			opts.newCleaner(convStore, opts.convRetentionDays).Start(cleanerCtx, 24*time.Hour)
 			bootstrap.convCleanerCancel = cleanerCancel
 		}
+	}
+
+	if relayDBPath := strings.TrimSpace(opts.getenv("HARNESS_RELAY_DB")); relayDBPath != "" {
+		if !filepath.IsAbs(relayDBPath) {
+			relayDBPath = filepath.Join(opts.workspace, relayDBPath)
+		}
+		relayStore, openErr := relay.NewSQLiteWorkerStore(relayDBPath)
+		if openErr != nil {
+			err = fmt.Errorf("create relay worker store: %w", openErr)
+			return persistenceBootstrap{}, err
+		}
+		if migrateErr := relayStore.Migrate(context.Background()); migrateErr != nil {
+			_ = relayStore.Close()
+			err = fmt.Errorf("migrate relay worker store: %w", migrateErr)
+			return persistenceBootstrap{}, err
+		}
+		bootstrap.relayWorkerStore = relayStore
+		opts.logger("relay worker persistence enabled: %s", relayDBPath)
 	}
 
 	return bootstrap, nil
@@ -349,6 +372,7 @@ type serverBootstrapOptions struct {
 	networks         *networks.Engine
 	providerRegistry *catalog.ProviderRegistry
 	runStore         istore.Store
+	relayWorkerStore relay.WorkerStore
 	triggers         triggerRuntime
 	rolloutDir       string
 }
@@ -368,6 +392,7 @@ func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
 		Networks:         opts.networks,
 		ProviderRegistry: opts.providerRegistry,
 		Store:            opts.runStore,
+		RelayWorkerStore: opts.relayWorkerStore,
 		Validators:       opts.triggers.validators,
 		GitHubAdapter:    opts.triggers.github,
 		SlackAdapter:     opts.triggers.slack,

@@ -19,6 +19,7 @@ import (
 	"go-agent-harness/internal/harness/tools/recipe"
 	linearadapter "go-agent-harness/internal/linear"
 	"go-agent-harness/internal/provider/catalog"
+	"go-agent-harness/internal/relay"
 	slackadapter "go-agent-harness/internal/slack"
 	"go-agent-harness/internal/store"
 	"go-agent-harness/internal/subagents"
@@ -117,6 +118,11 @@ type ServerOptions struct {
 	// LinearAdapter is an optional Linear webhook adapter for POST /v1/webhooks/linear.
 	// When nil, the endpoint returns 401 for all requests.
 	LinearAdapter *linearadapter.LinearAdapter
+
+	// RelayWorkerStore is an optional persistence layer for Go Relay worker
+	// registration and heartbeats. When provided, the /v1/relay/workers endpoints
+	// are enabled.
+	RelayWorkerStore relay.WorkerStore
 	// RolloutDir is the configured root directory for JSONL rollout files. When
 	// set (and auth is enabled), POST /v1/runs/replay enforces two-part safety:
 	//  1. Read-safety containment: the caller-supplied rollout_path must resolve
@@ -172,6 +178,7 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		githubAdapter:     opts.GitHubAdapter,
 		slackAdapter:      opts.SlackAdapter,
 		linearAdapter:     opts.LinearAdapter,
+		relayWorkerStore:  opts.RelayWorkerStore,
 		rolloutDir:        opts.RolloutDir,
 		maxBodyBytes:      opts.MaxRequestBodyBytes,
 		replayBodyBytes:   opts.ReplayMaxRequestBodyBytes,
@@ -282,6 +289,11 @@ func (s *Server) buildMux() http.Handler {
 	// so this route also bypasses Bearer auth.
 	mux.HandleFunc("/v1/webhooks/linear", s.handleLinearWebhook)
 
+	// /v1/relay/workers — Go Relay worker registration and heartbeat.
+	// GET requires runs:read; POST/PUT/DELETE require runs:write.
+	mux.Handle("/v1/relay/workers", auth(http.HandlerFunc(s.handleRelayWorkersRoot)))
+	mux.Handle("/v1/relay/workers/", auth(http.HandlerFunc(s.handleRelayWorkerByID)))
+
 	return s.hardenHandler(mux)
 }
 
@@ -350,6 +362,9 @@ type Server struct {
 	// When nil, POST /v1/webhooks/linear returns 401.
 	linearAdapter *linearadapter.LinearAdapter
 
+	// relayWorkerStore is an optional persistence layer for Go Relay worker
+	// registration and heartbeats.
+	relayWorkerStore relay.WorkerStore
 	// rolloutDir is the configured root directory for JSONL rollout files. When
 	// set (and auth is enabled), POST /v1/runs/replay enforces read-safety
 	// containment (rollout_path must resolve under this dir after symlink

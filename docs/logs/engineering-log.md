@@ -1399,3 +1399,18 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
   - `go test ./cmd/harnesscli/tui ./cmd/harnesscli/tui/components/modelswitcher -run 'TestRunControl_|TestTUI_DailyHarnessCommandsSetGuidance|TestTUI041_BuiltinCommandsRegistered|TestTUI364_RegistryCompleteness|TestTUI573_|TestIssue57|TestModelSearch' -count=1`
   - `go test ./internal/store ./internal/harness ./cmd/harnesscli -run 'TestMemoryStore/UpdateRun_PersistsWorkflowRecap|TestSQLiteStore/UpdateRun_PersistsWorkflowRecap|TestRunnerStore_CompletedRunPersistsWorkflowRecap|TestRunSearch_(FiltersRunMetadata|MatchesWorkflowRecap)' -count=1`
   - `go test ./cmd/harnesscli -run 'TestGoCodeScriptRoutesDailyCommands|TestRunImproveDryRunPrintsSelfImprovementPlan|TestDispatchRoutesImprove' -count=1`
+
+## 2026-06-28 (Go Relay PR #689 Review Repair)
+
+- Resolved PR #689 merge conflicts against current `origin/main` while preserving the Go Relay server option and routes plus main's server-hardening fields.
+- Fixed Relay worker HTTP tenant isolation: list/register now derive tenant scope from the authenticated API key, and get/update/delete/heartbeat hide cross-tenant workers as `404`.
+- Made placement routing enforce required capability inventory, repo URL, browser, Docker, secret, memory, MCP, tool, and output-surface constraints before scoring workers.
+- Wired `HARNESS_RELAY_DB` through `harnessd` persistence/bootstrap/runtime so the daemon can enable `/v1/relay/workers` with a real SQLite worker store.
+- Fixed operator run-summary capability redaction by sanitizing with the selected worker's actual location type.
+- Validation:
+  - `go test ./internal/server -run 'TestRelayWorkersUseAuthenticatedTenant' -count=1` failed before implementation and passes after the tenant fix.
+  - `go test ./internal/relay -run 'TestPlacementRequiresCapabilityInventory|TestPlacementRejectsCapabilityRequirementsWithoutCapabilityStore|TestOperatorRunSummaryRedactsNonLocalCapabilityPack' -count=1` failed before implementation and passes after the routing/redaction fixes.
+  - `go test ./cmd/harnessd -run 'TestBuild(ServerOptionsForwardsBootstrapRuntime|PersistenceBootstrapInitializesStoresAndCleaner|HTTPRuntimeAssemblesRunnerSubagentsAndHTTPServer)' -count=1` failed before implementation and passes after the runtime wiring fix.
+  - `go test ./internal/relay -count=1`
+  - `go test ./internal/server -count=1`
+  - `go test ./cmd/harnessd -count=1`

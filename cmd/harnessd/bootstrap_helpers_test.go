@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +13,7 @@ import (
 	htools "go-agent-harness/internal/harness/tools"
 	"go-agent-harness/internal/provider/catalog"
 	openai "go-agent-harness/internal/provider/openai"
+	"go-agent-harness/internal/relay"
 	"go-agent-harness/internal/subagents"
 	scriptworkflow "go-agent-harness/internal/workflow"
 )
@@ -124,6 +126,14 @@ func TestBuildServerOptionsForwardsBootstrapRuntime(t *testing.T) {
 
 	runner := harness.NewRunner(&noopProvider{}, harness.NewDefaultRegistry(t.TempDir()), harness.RunnerConfig{})
 	cat := &catalog.Catalog{}
+	relayStore, err := relay.NewSQLiteWorkerStore(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteWorkerStore: %v", err)
+	}
+	t.Cleanup(func() { _ = relayStore.Close() })
+	if err := relayStore.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate relay store: %v", err)
+	}
 	runtime := buildTriggerRuntime(func(key string) string {
 		switch key {
 		case "GITHUB_WEBHOOK_SECRET":
@@ -141,6 +151,7 @@ func TestBuildServerOptionsForwardsBootstrapRuntime(t *testing.T) {
 		scriptWorkflows:  &scriptWorkflowServiceRef{},
 		providerRegistry: catalog.NewProviderRegistryWithEnv(cat, func(string) string { return "" }),
 		triggers:         runtime,
+		relayWorkerStore: relayStore,
 	})
 
 	if opts.Runner != runner {
@@ -169,6 +180,9 @@ func TestBuildServerOptionsForwardsBootstrapRuntime(t *testing.T) {
 	}
 	if opts.SlackAdapter != nil {
 		t.Fatal("did not expect slack adapter")
+	}
+	if opts.RelayWorkerStore != relayStore {
+		t.Fatal("expected relay worker store")
 	}
 }
 
@@ -411,6 +425,8 @@ func TestBuildPersistenceBootstrapInitializesStoresAndCleaner(t *testing.T) {
 			return ".harness/runs.db"
 		case "HARNESS_CONVERSATION_DB":
 			return ".harness/conversations.db"
+		case "HARNESS_RELAY_DB":
+			return ".harness/relay.db"
 		default:
 			return ""
 		}
@@ -427,6 +443,9 @@ func TestBuildPersistenceBootstrapInitializesStoresAndCleaner(t *testing.T) {
 	defer func() {
 		if bootstrap.convCleanerCancel != nil {
 			bootstrap.convCleanerCancel()
+		}
+		if bootstrap.relayWorkerStore != nil {
+			_ = bootstrap.relayWorkerStore.Close()
 		}
 		if bootstrap.conversationStore != nil {
 			_ = bootstrap.conversationStore.Close()
@@ -445,12 +464,18 @@ func TestBuildPersistenceBootstrapInitializesStoresAndCleaner(t *testing.T) {
 	if bootstrap.convCleanerCancel == nil {
 		t.Fatal("expected conversation cleaner cancel func")
 	}
+	if bootstrap.relayWorkerStore == nil {
+		t.Fatal("expected relay worker store")
+	}
 
 	if _, err := os.Stat(workspace + "/.harness/runs.db"); err != nil {
 		t.Fatalf("expected run db to exist: %v", err)
 	}
 	if _, err := os.Stat(workspace + "/.harness/conversations.db"); err != nil {
 		t.Fatalf("expected conversation db to exist: %v", err)
+	}
+	if _, err := os.Stat(workspace + "/.harness/relay.db"); err != nil {
+		t.Fatalf("expected relay db to exist: %v", err)
 	}
 }
 
