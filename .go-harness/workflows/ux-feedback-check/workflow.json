@@ -1,0 +1,9 @@
+{
+  "name": "ux-feedback-check",
+  "description": "Workflow UX smoke that emits phase, log, finding feedback, and returns args.",
+  "version": 1,
+  "language": "go",
+  "entrypoint": "main.go",
+  "when_to_use": "Use to validate workflow discovery, run, feedback, SSE, and result handling.",
+  "timeout_seconds": 30
+}

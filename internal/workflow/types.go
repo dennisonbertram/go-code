@@ -79,10 +79,22 @@ type AgentOpts struct {
 	Schema map[string]any `json:"schema,omitempty"`
 	// Model overrides the model used for this specific agent call.
 	Model string `json:"model,omitempty"`
+	// Provider overrides the provider used for this specific agent call.
+	Provider string `json:"provider,omitempty"`
+	// Profile selects a named sub-agent profile.
+	Profile string `json:"profile,omitempty"`
+	// AllowedTools constrains the sub-agent tool set.
+	AllowedTools []string `json:"allowed_tools,omitempty"`
 	// Isolation selects the isolation mode: "" (inline) or "worktree".
 	Isolation string `json:"isolation,omitempty"`
+	// CleanupPolicy controls cleanup for isolated sub-agent worktrees.
+	CleanupPolicy string `json:"cleanup_policy,omitempty"`
 	// AgentType selects a custom sub-agent type (e.g. "Explore", "code-reviewer").
 	AgentType string `json:"agent_type,omitempty"`
+	// MaxSteps constrains the child run's maximum step count.
+	MaxSteps int `json:"max_steps,omitempty"`
+	// MaxCostUSD constrains the child run's cost ceiling.
+	MaxCostUSD float64 `json:"max_cost_usd,omitempty"`
 }
 
 // Budget tracks token usage across a workflow run. It is thread-safe.
@@ -142,14 +154,18 @@ func newBudget(total int) *Budget {
 type EventType string
 
 const (
-	EventWorkflowStarted       EventType = "workflow.started"
-	EventWorkflowPhaseStarted  EventType = "workflow.phase.started"
-	EventWorkflowAgentStarted  EventType = "workflow.agent.started"
+	EventWorkflowStarted        EventType = "workflow.started"
+	EventWorkflowPhaseStarted   EventType = "workflow.phase.started"
+	EventWorkflowAgentStarted   EventType = "workflow.agent.started"
 	EventWorkflowAgentCompleted EventType = "workflow.agent.completed"
-	EventWorkflowAgentFailed   EventType = "workflow.agent.failed"
-	EventWorkflowLog           EventType = "workflow.log"
-	EventWorkflowCompleted     EventType = "workflow.completed"
-	EventWorkflowFailed        EventType = "workflow.failed"
+	EventWorkflowAgentFailed    EventType = "workflow.agent.failed"
+	EventWorkflowLog            EventType = "workflow.log"
+	EventWorkflowFeedback       EventType = "workflow.feedback"
+	EventWorkflowFinding        EventType = "workflow.finding"
+	EventWorkflowWarning        EventType = "workflow.warning"
+	EventWorkflowQuestion       EventType = "workflow.question"
+	EventWorkflowCompleted      EventType = "workflow.completed"
+	EventWorkflowFailed         EventType = "workflow.failed"
 )
 
 // Event is emitted during workflow execution.
@@ -163,12 +179,16 @@ type Event struct {
 
 // SubagentRequest mirrors the input needed to create a sub-agent run.
 type SubagentRequest struct {
-	Prompt      string `json:"prompt"`
-	Model       string `json:"model,omitempty"`
-	Isolation   string `json:"isolation,omitempty"`
-	AgentType   string `json:"agent_type,omitempty"`
-	MaxSteps    int    `json:"max_steps,omitempty"`
-	MaxCostUSD  float64 `json:"max_cost_usd,omitempty"`
+	Prompt        string   `json:"prompt"`
+	Model         string   `json:"model,omitempty"`
+	Provider      string   `json:"provider,omitempty"`
+	Profile       string   `json:"profile,omitempty"`
+	AllowedTools  []string `json:"allowed_tools,omitempty"`
+	Isolation     string   `json:"isolation,omitempty"`
+	CleanupPolicy string   `json:"cleanup_policy,omitempty"`
+	AgentType     string   `json:"agent_type,omitempty"`
+	MaxSteps      int      `json:"max_steps,omitempty"`
+	MaxCostUSD    float64  `json:"max_cost_usd,omitempty"`
 }
 
 // SubagentResult is the result of a completed sub-agent run.
@@ -184,6 +204,27 @@ type SubagentResult struct {
 type SubagentManager interface {
 	Create(ctx context.Context, req SubagentRequest) (SubagentResult, error)
 	Get(ctx context.Context, id string) (SubagentResult, error)
+}
+
+// QuestionOption is a single selectable answer for a workflow question.
+type QuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
+}
+
+// QuestionRequest is emitted when a workflow needs input from the parent/user.
+type QuestionRequest struct {
+	RunID   string           `json:"run_id"`
+	CallID  string           `json:"call_id"`
+	Prompt  string           `json:"prompt"`
+	Choices []QuestionOption `json:"choices,omitempty"`
+}
+
+// QuestionResponder handles workflow questions. Implementations may suspend
+// through a checkpoint broker, return a deterministic answer in tests, or
+// decline with an error when questions are unavailable.
+type QuestionResponder interface {
+	AskWorkflowQuestion(ctx context.Context, req QuestionRequest) (any, error)
 }
 
 // PipelineStage is a function that processes one item through one stage.

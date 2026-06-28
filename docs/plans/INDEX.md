@@ -5,6 +5,7 @@
 - `active-plan.md`: Current active plan tracker.
 - `2026-06-26-adapter-first-eval-harness-plan.md`: Implemented adapter-first Terminal-Bench eval harness hardening plan; full regression and real-provider smoke baseline acceptance are green.
 - `2026-06-24-harness-reliability-plan.md`: Active 15-slice TDD plan (T01–T15) hardening `harnessd` against long-session reliability failures from the 2026-06-24 audit; tracked via `.context/harness-reliability/tracker.md`.
+- `2026-06-27-go-source-workflows-plan.md`: Completed implementation plan for Go-authored custom workflow bundles, child-process execution, feedback events, and skill-bundled transfer.
 - `2026-04-05-orchestration-program-plan.md`: Umbrella staged architecture plan for runtime container, checkpoints, workflows, memory layering, and agent networks with documentation/TDD guardrails.
 - `2026-04-05-runtime-container-spec.md`: Stage 1 spec for the internal runtime composition root extraction in `cmd/harnessd`.
 - `2026-04-05-durable-checkpoints-spec.md`: Stage 2 spec for persisted human-in-the-loop checkpoints and compatibility shims.

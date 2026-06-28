@@ -636,6 +636,41 @@ func TestPOC9_SSEEventFormat(t *testing.T) {
 	assert.GreaterOrEqual(t, eventCount, 2, "should have at least started + completed events")
 }
 
+func TestScriptWorkflowSSEIncludesFeedbackHistory(t *testing.T) {
+	mgr := newMockScriptWorkflowMgr()
+	srv := newTestServerWithScriptWorkflows(mgr)
+
+	mux := http.NewServeMux()
+	srv.registerScriptWorkflowRoutes(mux, testAuth)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/script-workflows/test-workflow/runs", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusAccepted, rec.Code)
+	var startResp struct {
+		RunID string `json:"run_id"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &startResp))
+
+	mgr.emit(startResp.RunID, workflow.EventWorkflowFinding, map[string]any{
+		"kind":              "finding",
+		"message":           "found evidence",
+		"data":              map[string]any{"file": "main.go"},
+		"requires_response": false,
+	})
+
+	req = httptest.NewRequest(http.MethodGet, "/v1/script-workflow-runs/"+startResp.RunID+"/events", nil)
+	rec = httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	body := rec.Body.String()
+	require.Contains(t, body, "event: workflow.finding")
+	require.Contains(t, body, `"kind":"finding"`)
+	require.Contains(t, body, `"message":"found evidence"`)
+	require.Contains(t, body, `"requires_response":false`)
+}
+
 // =============================================================================
 // POC 10: Nil manager returns 501 Not Implemented
 // =============================================================================

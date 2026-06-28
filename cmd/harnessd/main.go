@@ -656,7 +656,16 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	approvalBroker := harness.NewCheckpointApprovalBroker(checkpointService)
 	activations := harness.NewActivationTracker()
 	msgSummarizer := &lazySummarizer{}
+	scriptWorkflowRef := &scriptWorkflowServiceRef{}
 	promptBehaviorsDir, promptTalentsDir := promptEngine.ExtensionDirs()
+	globalWorkflowsDir := filepath.Join(globalDir, "workflows")
+	workspaceWorkflowsDir := filepath.Join(workspace, ".go-harness", "workflows")
+	globalSkillsDir := filepath.Join(globalDir, "skills")
+	workspaceSkillsDir := filepath.Join(workspace, ".go-harness", "skills")
+	goWorkflowCacheDir := strings.TrimSpace(getenv("HARNESS_GO_WORKFLOW_CACHE_DIR"))
+	if goWorkflowCacheDir == "" {
+		goWorkflowCacheDir = filepath.Join(workspace, ".harness", "workflow-cache")
+	}
 	baseRegistryOptions := harness.DefaultRegistryOptions{
 		ApprovalMode:       approvalMode,
 		Policy:             nil,
@@ -680,6 +689,7 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 			TalentsDir:   promptTalentsDir,
 		},
 		ScriptToolsDir:    filepath.Join(globalDir, "tools"),
+		WorkflowService:   scriptWorkflowRef,
 		ConversationStore: convStore,
 		MessageSummarizer: msgSummarizer,
 		MCPRegistry:       mcpRegistry,
@@ -762,19 +772,31 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 				log.Printf("watcher: skill reload error: %v", err)
 				return err
 			}
+			if err := scriptWorkflowRef.Reload(context.Background()); err != nil {
+				log.Printf("watcher: workflow reload error: %v", err)
+				return err
+			}
 			log.Printf("watcher: skills reloaded (%d skill(s))", len(skillRegistry.List()))
 			return nil
 		}
 
-		globalSkillsDir := filepath.Join(globalDir, "skills")
-		workspaceSkillsDir := filepath.Join(workspace, ".go-harness", "skills")
+		reloadWorkflows := func() error {
+			if err := scriptWorkflowRef.Reload(context.Background()); err != nil {
+				log.Printf("watcher: workflow reload error: %v", err)
+				return err
+			}
+			log.Printf("watcher: script workflows reloaded")
+			return nil
+		}
 
+		w.Watch(watcher.WatchedDir{Path: globalWorkflowsDir, Reload: reloadWorkflows})
+		w.Watch(watcher.WatchedDir{Path: workspaceWorkflowsDir, Reload: reloadWorkflows})
 		w.Watch(watcher.WatchedDir{Path: globalSkillsDir, Reload: reloadSkills})
 		w.Watch(watcher.WatchedDir{Path: workspaceSkillsDir, Reload: reloadSkills})
 
 		go w.Start(watchCtx)
-		log.Printf("hot-reload watcher started (interval: %s, dirs: %s, %s)",
-			pollInterval, globalSkillsDir, workspaceSkillsDir)
+		log.Printf("hot-reload watcher started (interval: %s, dirs: %s, %s, %s, %s)",
+			pollInterval, globalWorkflowsDir, workspaceWorkflowsDir, globalSkillsDir, workspaceSkillsDir)
 	}
 
 	// Build the Skills SkillManager only when skillLister is a *skillListerAdapter
@@ -799,6 +821,10 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		checkpointService:    checkpointService,
 		workflowDefinitions:  workflowDefinitions,
 		workflowStore:        workflowStore,
+		goWorkflowDirs:       []string{globalWorkflowsDir, workspaceWorkflowsDir},
+		goWorkflowSkillDirs:  []string{globalSkillsDir, workspaceSkillsDir},
+		goWorkflowCacheDir:   goWorkflowCacheDir,
+		scriptWorkflowRef:    scriptWorkflowRef,
 		networkDefinitions:   networkDefinitions,
 		skillLister:          skillLister,
 		baseRegistryOptions:  baseRegistryOptions,
@@ -814,6 +840,8 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		subagentBaseRef:      subagentBaseRef,
 		subagentWorktreeRoot: subagentWorktreeRoot,
 		subagentConfigTOML:   subagentConfigTOML,
+		askUserBroker:        askUserBroker,
+		askUserTimeout:       time.Duration(askUserTimeoutSeconds) * time.Second,
 	})
 	if err != nil {
 		return err

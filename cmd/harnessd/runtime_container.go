@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"go-agent-harness/internal/server"
 	istore "go-agent-harness/internal/store"
 	"go-agent-harness/internal/subagents"
+	scriptworkflow "go-agent-harness/internal/workflow"
 	"go-agent-harness/internal/workflows"
 )
 
@@ -60,6 +62,10 @@ type httpRuntimeOptions struct {
 	checkpointService    *checkpoints.Service
 	workflowDefinitions  []workflows.Definition
 	workflowStore        workflows.Store
+	goWorkflowDirs       []string
+	goWorkflowSkillDirs  []string
+	goWorkflowCacheDir   string
+	scriptWorkflowRef    *scriptWorkflowServiceRef
 	networkDefinitions   []networks.Definition
 	skillLister          htools.SkillLister
 	baseRegistryOptions  harness.DefaultRegistryOptions
@@ -75,6 +81,8 @@ type httpRuntimeOptions struct {
 	subagentBaseRef      string
 	subagentWorktreeRoot string
 	subagentConfigTOML   string
+	askUserBroker        htools.AskUserQuestionBroker
+	askUserTimeout       time.Duration
 }
 
 type httpRuntime struct {
@@ -117,6 +125,29 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		return httpRuntime{}, fmt.Errorf("create subagent manager: %w", err)
 	}
 
+	scriptEngine := scriptworkflow.NewEngine(scriptworkflow.EngineOptions{
+		Subagents: scriptSubagentAdapter{manager: subagentMgr},
+		QuestionResponder: workflowQuestionResponder{
+			broker:  opts.askUserBroker,
+			timeout: opts.askUserTimeout,
+		},
+	})
+	sourceWorkflows, err := scriptworkflow.NewSourceManager(scriptworkflow.SourceManagerOptions{
+		Engine:       scriptEngine,
+		WorkflowDirs: opts.goWorkflowDirs,
+		SkillDirs:    opts.goWorkflowSkillDirs,
+		CacheDir:     opts.goWorkflowCacheDir,
+	})
+	if err != nil {
+		return httpRuntime{}, fmt.Errorf("create script workflow manager: %w", err)
+	}
+	if err := sourceWorkflows.Load(context.Background()); err != nil {
+		return httpRuntime{}, fmt.Errorf("load script workflows: %w", err)
+	}
+	if opts.scriptWorkflowRef != nil {
+		opts.scriptWorkflowRef.Set(sourceWorkflows)
+	}
+
 	if opts.callbackStarter != nil {
 		opts.callbackStarter.mu.Lock()
 		opts.callbackStarter.runner = runner
@@ -142,6 +173,7 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		subagentManager:  subagentMgr,
 		checkpoints:      opts.checkpointService,
 		workflows:        workflowEngine,
+		scriptWorkflows:  sourceWorkflows,
 		networks:         networkEngine,
 		providerRegistry: opts.providerRegistry,
 		runStore:         opts.runStore,

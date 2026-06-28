@@ -24,6 +24,10 @@ For a fresh agent worktree, run `scripts/init.sh <task-slug>` before doing anyth
 
 ## 3) Non-Negotiables (Detailed Rules in Runbooks)
 
+- Communication preference: respond concisely but educationally. Explain what
+  changed and why it matters. When you struggle with something and solve it,
+  document the symptom, cause, and fix in the appropriate durable log or plan
+  note so future agents can reuse the learning.
 - Strict TDD and no trivial/underspecified tests: `docs/runbooks/testing.md`
 - Tests must pass before commit: `docs/runbooks/testing.md`
 - Never allow failures in the accepted baseline. A failing test, failing package, failing regression command, or known red verification step is a blocker, not acceptable "pre-existing" state.
