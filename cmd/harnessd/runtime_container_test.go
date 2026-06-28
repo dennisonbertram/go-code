@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"go-agent-harness/internal/harness"
+	"go-agent-harness/internal/relay"
 )
 
 func TestBuildMCPStdioRuntimeCreatesCatalogAndServer(t *testing.T) {
@@ -46,6 +49,14 @@ func TestBuildHTTPRuntimeAssemblesRunnerSubagentsAndHTTPServer(t *testing.T) {
 		MessageSummarizer: msgSummarizer,
 	}
 	tools := harness.NewDefaultRegistryWithOptions(workspace, baseRegistryOptions)
+	relayStore, err := relay.NewSQLiteWorkerStore(filepath.Join(t.TempDir(), "relay.db"))
+	if err != nil {
+		t.Fatalf("NewSQLiteWorkerStore: %v", err)
+	}
+	t.Cleanup(func() { _ = relayStore.Close() })
+	if err := relayStore.Migrate(context.Background()); err != nil {
+		t.Fatalf("Migrate relay store: %v", err)
+	}
 
 	runtime, err := buildHTTPRuntime(httpRuntimeOptions{
 		addr:                "127.0.0.1:0",
@@ -59,6 +70,7 @@ func TestBuildHTTPRuntimeAssemblesRunnerSubagentsAndHTTPServer(t *testing.T) {
 		modelCatalog:        nil,
 		providerRegistry:    nil,
 		runStore:            nil,
+		relayWorkerStore:    relayStore,
 		triggers:            buildTriggerRuntime(nil, nil),
 		callbackStarter:     callbackStarter,
 		msgSummarizer:       msgSummarizer,
@@ -114,6 +126,13 @@ func TestBuildHTTPRuntimeAssemblesRunnerSubagentsAndHTTPServer(t *testing.T) {
 	runtime.handler.ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK && rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("GET /healthz: expected 200, got %d", rec.Code)
+	}
+
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/v1/relay/workers", nil)
+	runtime.handler.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /v1/relay/workers: expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 
 	callbackStarter.mu.Lock()

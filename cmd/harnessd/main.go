@@ -647,6 +647,10 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	if convStore != nil {
 		defer convStore.Close()
 	}
+	relayWorkerStore := persistenceBootstrap.relayWorkerStore
+	if relayWorkerStore != nil {
+		defer relayWorkerStore.Close()
+	}
 	convCleanerCancel := persistenceBootstrap.convCleanerCancel
 	if convCleanerCancel != nil {
 		defer convCleanerCancel()
@@ -806,6 +810,7 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		modelCatalog:         modelCatalog,
 		providerRegistry:     providerRegistry,
 		runStore:             runStore,
+		relayWorkerStore:     relayWorkerStore,
 		triggers:             triggerRuntime,
 		callbackStarter:      callbackStarter,
 		callbackBridge:       callbackBridge,
