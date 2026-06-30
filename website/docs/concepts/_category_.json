@@ -1,0 +1,8 @@
+{
+  "label": "Core Concepts",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "description": "The mental model behind go-code: architecture, runs and conversations, tools and permissions, workspaces, providers, the event model, skills/profiles/subagents, memory, and configuration."
+  }
+}

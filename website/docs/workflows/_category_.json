@@ -1,0 +1,8 @@
+{
+  "label": "Workflows & Orchestration",
+  "position": 5,
+  "link": {
+    "type": "generated-index",
+    "description": "Compose multi-agent pipelines with the workflow engine and pkg/workflowsdk, and coordinate work with Symphony and Go Relay."
+  }
+}
