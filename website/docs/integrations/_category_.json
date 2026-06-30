@@ -1,0 +1,8 @@
+{
+  "label": "Integrations",
+  "position": 6,
+  "link": {
+    "type": "generated-index",
+    "description": "Connect go-code to the outside world: external MCP servers, skills, subagents/profiles, cron, GitHub/Slack/Linear webhooks, and a real case study."
+  }
+}

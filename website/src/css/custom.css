@@ -1,0 +1,220 @@
+/**
+ * go-code documentation — Geist design system
+ * Overrides Docusaurus Infima variables with Vercel Geist tokens.
+ */
+
+/* Import Tailwind CSS (base, components, utilities + ShadCN vars) */
+@import './tailwind.css';
+
+/* ============================================================
+   LIGHT THEME (Infima overrides)
+   ============================================================ */
+:root {
+  /* Primary: Geist blue */
+  --ifm-color-primary: #006bff;
+  --ifm-color-primary-dark: #0060e6;
+  --ifm-color-primary-darker: #005bd9;
+  --ifm-color-primary-darkest: #004ab3;
+  --ifm-color-primary-light: #1a78ff;
+  --ifm-color-primary-lighter: #2680ff;
+  --ifm-color-primary-lightest: #4d97ff;
+
+  /* Surfaces */
+  --ifm-background-color: #ffffff;
+  --ifm-background-surface-color: #fafafa;
+  --ifm-navbar-background-color: rgba(255, 255, 255, 0.85);
+  --ifm-footer-background-color: #fafafa;
+  --ifm-sidebar-background: #fafafa;
+
+  /* Text */
+  --ifm-font-color-base: #171717;
+  --ifm-font-color-secondary: #4d4d4d;
+  --ifm-heading-color: #171717;
+
+  /* Typography */
+  --ifm-font-family-base: 'Geist', 'Geist Sans', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --ifm-font-family-monospace: 'Geist Mono', ui-monospace, 'SFMono-Regular', monospace;
+  --ifm-font-size-base: 15px;
+  --ifm-line-height-base: 1.6;
+  --ifm-code-font-size: 90%;
+
+  /* Borders */
+  --ifm-color-emphasis-300: #e5e5e5;
+  --ifm-color-emphasis-400: #d4d4d4;
+  --ifm-toc-border-color: #e5e5e5;
+  --ifm-table-border-color: #e5e5e5;
+
+  /* Spacing & radius */
+  --ifm-global-radius: 6px;
+  --ifm-card-border-radius: 12px;
+  --ifm-button-border-radius: 6px;
+
+  /* Code */
+  --docusaurus-highlighted-code-line-bg: rgba(0, 107, 255, 0.08);
+
+  /* Navbar */
+  --ifm-navbar-height: 60px;
+  --ifm-navbar-shadow: 0 1px 0 0 #e5e5e5;
+  --ifm-navbar-link-color: #4d4d4d;
+  --ifm-navbar-link-hover-color: #171717;
+}
+
+/* ============================================================
+   DARK THEME (Infima overrides)
+   ============================================================ */
+[data-theme='dark'] {
+  /* Primary: Geist blue-600 for dark */
+  --ifm-color-primary: #0090ff;
+  --ifm-color-primary-dark: #006efe;
+  --ifm-color-primary-darker: #005fd9;
+  --ifm-color-primary-darkest: #004db3;
+  --ifm-color-primary-light: #1a9bff;
+  --ifm-color-primary-lighter: #47a8ff;
+  --ifm-color-primary-lightest: #75bcff;
+
+  /* Surfaces */
+  --ifm-background-color: #000000;
+  --ifm-background-surface-color: #0a0a0a;
+  --ifm-navbar-background-color: rgba(0, 0, 0, 0.85);
+  --ifm-footer-background-color: #0a0a0a;
+  --ifm-sidebar-background: #0a0a0a;
+
+  /* Text */
+  --ifm-font-color-base: #ededed;
+  --ifm-font-color-secondary: #a0a0a0;
+  --ifm-heading-color: #ededed;
+
+  /* Borders */
+  --ifm-color-emphasis-300: #ffffff21;
+  --ifm-color-emphasis-400: #ffffff24;
+  --ifm-toc-border-color: #ffffff17;
+  --ifm-table-border-color: #ffffff21;
+
+  /* Code */
+  --docusaurus-highlighted-code-line-bg: rgba(0, 144, 255, 0.12);
+
+  /* Navbar */
+  --ifm-navbar-shadow: 0 1px 0 0 #ffffff17;
+  --ifm-navbar-link-color: #a0a0a0;
+  --ifm-navbar-link-hover-color: #ededed;
+}
+
+/* ============================================================
+   TYPOGRAPHY REFINEMENTS
+   ============================================================ */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+h1 { letter-spacing: -0.04em; }
+h2 { letter-spacing: -0.03em; }
+h3 { letter-spacing: -0.02em; }
+
+/* ============================================================
+   NAVBAR
+   ============================================================ */
+.navbar {
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--ifm-color-emphasis-300);
+}
+
+[data-theme='dark'] .navbar {
+  border-bottom: 1px solid #ffffff17;
+}
+
+.navbar__brand {
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: -0.02em;
+}
+
+.navbar__item.navbar__link {
+  font-size: 0.875rem;
+  font-weight: 500;
+}
+
+/* ============================================================
+   SIDEBAR
+   ============================================================ */
+.menu {
+  font-size: 0.875rem;
+}
+
+.menu__link {
+  border-radius: 6px;
+  font-weight: 400;
+}
+
+.menu__link--active {
+  font-weight: 500;
+}
+
+/* ============================================================
+   CODE BLOCKS
+   ============================================================ */
+code {
+  font-family: var(--ifm-font-family-monospace);
+  font-size: var(--ifm-code-font-size);
+  border-radius: 4px;
+}
+
+[data-theme='dark'] code {
+  background: #1a1a1a;
+  color: #ededed;
+  border: 1px solid #ffffff17;
+}
+
+/* ============================================================
+   CARDS & SURFACES
+   ============================================================ */
+.card {
+  border-radius: 12px;
+  box-shadow: none;
+  border: 1px solid var(--ifm-color-emphasis-300);
+}
+
+[data-theme='dark'] .card {
+  background: #0a0a0a;
+  border-color: #ffffff17;
+}
+
+/* ============================================================
+   FOOTER
+   ============================================================ */
+.footer {
+  border-top: 1px solid var(--ifm-color-emphasis-300);
+}
+
+[data-theme='dark'] .footer {
+  border-top: 1px solid #ffffff17;
+}
+
+.footer--dark {
+  --ifm-footer-background-color: #000000;
+}
+
+/* ============================================================
+   BUTTONS
+   ============================================================ */
+.button--primary {
+  background: var(--ifm-color-primary);
+  border-color: var(--ifm-color-primary);
+  font-weight: 500;
+}
+
+/* ============================================================
+   SCROLLBAR (dark)
+   ============================================================ */
+[data-theme='dark'] {
+  scrollbar-color: #292929 #000000;
+}
+
+/* ============================================================
+   FOCUS RING (Geist style)
+   ============================================================ */
+:focus-visible {
+  outline: 2px solid var(--ifm-color-primary);
+  outline-offset: 2px;
+}

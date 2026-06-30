@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * ShadCN-style CSS variable tokens mapped to Geist light/dark palette.
+ * These use the HSL format expected by Tailwind's color mapping.
+ */
+
+/* Light mode */
+:root {
+  --background: 0 0% 100%;          /* #ffffff */
+  --foreground: 0 0% 9%;            /* #171717 */
+  --card: 0 0% 98%;                 /* #fafafa */
+  --card-foreground: 0 0% 9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 9%;
+  --primary: 215 100% 50%;          /* #006bff */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 0 0% 95%;            /* #f2f2f2 */
+  --secondary-foreground: 0 0% 9%;
+  --muted: 0 0% 95%;
+  --muted-foreground: 0 0% 30%;     /* #4d4d4d */
+  --accent: 215 100% 50%;
+  --accent-foreground: 0 0% 100%;
+  --destructive: 349 100% 49%;      /* #fc0035 */
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 90%;               /* light border */
+  --input: 0 0% 90%;
+  --ring: 215 100% 50%;
+
+  /* Radius tokens */
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-full: 9999px;
+}
+
+/* Dark mode */
+[data-theme='dark'] {
+  --background: 0 0% 0%;            /* #000000 */
+  --foreground: 0 0% 93%;           /* #ededed */
+  --card: 0 0% 10%;                 /* #1a1a1a */
+  --card-foreground: 0 0% 93%;
+  --popover: 0 0% 12%;              /* #1f1f1f */
+  --popover-foreground: 0 0% 93%;
+  --primary: 210 100% 50%;          /* #0090ff */
+  --primary-foreground: 0 0% 0%;
+  --secondary: 0 0% 16%;            /* #292929 */
+  --secondary-foreground: 0 0% 93%;
+  --muted: 0 0% 12%;                /* #1f1f1f */
+  --muted-foreground: 0 0% 63%;     /* #a0a0a0 */
+  --accent: 210 100% 50%;
+  --accent-foreground: 0 0% 0%;
+  --destructive: 349 100% 49%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 100% / 0.13;       /* #ffffff21 */
+  --input: 0 0% 100% / 0.14;
+  --ring: 210 100% 50%;
+}

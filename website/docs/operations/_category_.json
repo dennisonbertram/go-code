@@ -1,0 +1,8 @@
+{
+  "label": "Operations",
+  "position": 8,
+  "link": {
+    "type": "generated-index",
+    "description": "Operate go-code over time: rollout capture, replay and forensics, training and benchmarks, and the local development workflow."
+  }
+}

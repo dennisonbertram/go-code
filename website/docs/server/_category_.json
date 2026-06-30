@@ -1,0 +1,8 @@
+{
+  "label": "Server & API",
+  "position": 4,
+  "link": {
+    "type": "generated-index",
+    "description": "Run the harnessd daemon, secure it, drive it over the HTTP + SSE API, and expose it as an MCP server."
+  }
+}
