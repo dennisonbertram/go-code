@@ -39,8 +39,8 @@ func TestTUI010_DefaultTUIConfigValues(t *testing.T) {
 	if cfg.BaseURL != "http://localhost:8080" {
 		t.Errorf("BaseURL = %q, want http://localhost:8080", cfg.BaseURL)
 	}
-	if cfg.ColorProfile != "truecolor" {
-		t.Errorf("ColorProfile = %q, want truecolor", cfg.ColorProfile)
+	if cfg.ColorProfile != "auto" {
+		t.Errorf("ColorProfile = %q, want auto (detected/applied at startup)", cfg.ColorProfile)
 	}
 	if !cfg.AltScreen {
 		t.Error("AltScreen should default to true")

@@ -483,11 +483,17 @@ func resolveWorkspacePath(workspace string) string {
 }
 
 func newTUIConfig(baseURL, workspace, resumeConversationID string) tui.TUIConfig {
+	// Default to auto-detection; HARNESS_COLOR_PROFILE overrides (truecolor, 256,
+	// ansi, none). Resolved and applied in runTUI before the program starts.
+	colorProfile := strings.TrimSpace(os.Getenv("HARNESS_COLOR_PROFILE"))
+	if colorProfile == "" {
+		colorProfile = "auto"
+	}
 	return tui.TUIConfig{
 		BaseURL:              baseURL,
 		Workspace:            workspace,
 		EnableTUI:            true,
-		ColorProfile:         "truecolor",
+		ColorProfile:         colorProfile,
 		AltScreen:            true,
 		ResumeConversationID: resumeConversationID,
 	}
@@ -498,6 +504,9 @@ func runTUI(baseURL, workspace, resumeConversationID string) error {
 		return fmt.Errorf("--tui requires a terminal; pipe output or use without --tui for streaming mode")
 	}
 	tuiCfg := newTUIConfig(baseURL, workspace, resumeConversationID)
+	// Resolve and apply the color profile to the renderer before building the
+	// model, and store the effective profile back for accurate display.
+	tuiCfg.ColorProfile = tui.ApplyColorProfile(tuiCfg.ColorProfile)
 	p := tea.NewProgram(
 		tui.New(tuiCfg),
 		tea.WithAltScreen(),
