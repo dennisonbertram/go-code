@@ -357,12 +357,6 @@ The corresponding secrets are set via `GITHUB_WEBHOOK_SECRET`, `SLACK_SIGNING_SE
 There are also source-specific webhook routes — `POST /v1/webhooks/github`, `POST /v1/webhooks/slack`, and `POST /v1/webhooks/linear` — that bypass Bearer auth and use HMAC validation directly. These are convenient when a platform requires a fixed webhook URL, but the `/v1/external/trigger` route gives you more flexibility for multi-source setups.
 </Callout>
 
-<Callout type="warning">
-The `cloudscheduler` package (`internal/cloudscheduler/`) is a distinct, unrelated system for one-shot Docker-backed async job dispatch. Its package documentation describes HTTP routes (`POST /v1/cloud-jobs`, etc.), but **those routes are not implemented** in the current codebase — they exist only as design intent in the package comment. Do not attempt to call them.
-</Callout>
-
----
-
 ## Reference: `cronsd` environment variables
 
 When running `cronsd` as a standalone daemon:

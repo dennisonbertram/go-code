@@ -136,34 +136,3 @@ func (t Theme) ClampWidth(w, min, max int) int {
 	}
 	return w
 }
-
-// NoColorTheme returns a theme with no color or styling — for piped/non-TTY use.
-func NoColorTheme() Theme {
-	plain := lipgloss.NewStyle()
-	return Theme{
-		UserMsgStyle:      plain,
-		AssistantMsgStyle: plain,
-		ThinkingStyle:     plain,
-		ToolNameStyle:     plain,
-		ToolResultStyle:   plain,
-		ToolInputStyle:    plain,
-		StatusBarStyle:    plain,
-		StatusModelStyle:  plain,
-		CostStyle:         plain,
-		TimingStyle:       plain,
-		DimStyle:          plain,
-		BoldStyle:         plain,
-		CodeStyle:         plain,
-		ItalicStyle:       plain,
-		DiffAddStyle:      plain,
-		DiffRemoveStyle:   plain,
-		DiffHunkStyle:     plain,
-		ErrorStyle:        plain,
-		WarningStyle:      plain,
-		SuccessStyle:      plain,
-		InputStyle:        plain,
-		InputPromptStyle:  plain,
-		SeparatorStyle:    plain,
-		BorderStyle:       plain,
-	}
-}

@@ -50,14 +50,6 @@ func TestTUI006_SymbolsAreDefined(t *testing.T) {
 	}
 }
 
-func TestTUI006_ThemeSupportsNoColorMode(t *testing.T) {
-	// No-color theme should still return usable styles (just unstyled)
-	th := tui.NoColorTheme()
-	// Should not panic
-	_ = th.UserMsgStyle.Render("test")
-	_ = th.ErrorStyle.Render("error")
-}
-
 func TestTUI006_SpinnerHas6Frames(t *testing.T) {
 	if len(tui.Symbols.Spinner) != 6 {
 		t.Errorf("Spinner should have 6 frames (braille pattern), got %d", len(tui.Symbols.Spinner))
