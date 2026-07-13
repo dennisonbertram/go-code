@@ -25,6 +25,7 @@ import (
 	"go-agent-harness/internal/fakeprovider"
 	"go-agent-harness/internal/harness"
 	htools "go-agent-harness/internal/harness/tools"
+	"go-agent-harness/internal/harness/tools/deferred"
 	"go-agent-harness/internal/mcp"
 	"go-agent-harness/internal/networks"
 	om "go-agent-harness/internal/observationalmemory"
@@ -34,6 +35,7 @@ import (
 	"go-agent-harness/internal/provider/pricing"
 	"go-agent-harness/internal/server"
 	"go-agent-harness/internal/skills"
+	"go-agent-harness/internal/skills/packs"
 	istore "go-agent-harness/internal/store"
 	"go-agent-harness/internal/store/s3backup"
 	"go-agent-harness/internal/systemprompt"
@@ -672,6 +674,32 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	if goWorkflowCacheDir == "" {
 		goWorkflowCacheDir = filepath.Join(workspace, ".harness", "workflow-cache")
 	}
+	// Shared todo store: one instance backs both the todos tool and the
+	// /v1/runs/{id}/todos HTTP route. The store is keyed by run ID internally,
+	// so a single process-wide instance keeps runs isolated.
+	todoManager, todosToolBuilder := deferred.NewTodoStore()
+
+	// Profile run store: powers get_efficiency_report (read) and per-run history
+	// persistence (write). Optional — on open failure the feature degrades to a
+	// no-history report rather than failing startup.
+	var profileReadStore deferred.ProfileRunStoreIface
+	var profileWriteStore istore.ProfileRunStoreIface
+	if ps, perr := istore.NewSQLiteProfileRunStore(filepath.Join(globalDir, "profile-runs.db")); perr != nil {
+		log.Printf("profile run store disabled: %v", perr)
+	} else {
+		profileWriteStore = ps
+		profileReadStore = profiles.NewEfficiencyReadAdapter(ps)
+		defer ps.Close()
+	}
+
+	// Skill pack registry: powers manage_skill_packs. Returns an empty (but
+	// usable) registry when the directory is absent.
+	packRegistry, perr := packs.NewPackRegistry(filepath.Join(globalDir, "skill-packs"))
+	if perr != nil {
+		log.Printf("skill pack registry disabled: %v", perr)
+		packRegistry = nil
+	}
+
 	baseRegistryOptions := harness.DefaultRegistryOptions{
 		ApprovalMode:       approvalMode,
 		Policy:             nil,
@@ -699,6 +727,9 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		ConversationStore: convStore,
 		MessageSummarizer: msgSummarizer,
 		MCPRegistry:       mcpRegistry,
+		ProfileRunStore:   profileReadStore,
+		PackRegistry:      packRegistry,
+		TodosTool:         todosToolBuilder,
 	}
 	tools := harness.NewDefaultRegistryWithOptions(workspace, baseRegistryOptions)
 	if rolloutDir != "" {
@@ -730,6 +761,10 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		WorktreeRootDir:     subagentWorktreeRoot,
 		BaseRegistryOptions: baseRegistryOptions,
 	})
+
+	// Persist per-run profile history so get_efficiency_report has data to
+	// aggregate. Nil when the store failed to open (feature degrades gracefully).
+	runnerCfg.ProfileRunStore = profileWriteStore
 
 	// S3 backup: wire uploader when all required env vars are present.
 	if s3cfg, ok := s3backup.ConfigFromEnv(getenv); ok {
@@ -839,6 +874,7 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		providerRegistry:     providerRegistry,
 		runStore:             runStore,
 		relayWorkerStore:     relayWorkerStore,
+		todos:                todoManager,
 		triggers:             triggerRuntime,
 		callbackStarter:      callbackStarter,
 		callbackBridge:       callbackBridge,

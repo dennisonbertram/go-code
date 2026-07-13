@@ -30,6 +30,7 @@ func TestDefaultRegistryToolContract(t *testing.T) {
 		"compact_history",
 		"context_status",
 		"create_prompt_extension",
+		"deploy",
 		"download",
 		"edit",
 		"file_inspect",

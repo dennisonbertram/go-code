@@ -53,6 +53,10 @@ type DefaultRegistryOptions struct {
 	// ProfileRunStore is the optional store for profile run history.
 	// When non-nil, enables the get_efficiency_report tool.
 	ProfileRunStore deferred.ProfileRunStoreIface
+	// TodosTool, when non-nil, builds the todos tool bound to a store shared
+	// with the HTTP layer (see deferred.NewTodoStore). When nil, an isolated
+	// per-registry store is used and the /v1/runs/{id}/todos route sees nothing.
+	TodosTool func() htools.Tool
 }
 
 // conversationStoreAdapter adapts ConversationStore (harness package) to htools.ConversationReader.
@@ -229,7 +233,11 @@ func NewDefaultRegistryWithOptions(workspaceRoot string, opts DefaultRegistryOpt
 	deferredTools = append(deferredTools, deferred.CreatePromptExtensionTool(buildOpts.PromptExtensionDirs))
 
 	if buildOpts.EnableTodos {
-		coreTools = append(coreTools, deferred.TodosTool())
+		if opts.TodosTool != nil {
+			coreTools = append(coreTools, opts.TodosTool())
+		} else {
+			coreTools = append(coreTools, deferred.TodosTool())
+		}
 	}
 	// LSP tools (lsp_diagnostics, lsp_references, lsp_restart) are intentionally
 	// absent from the default registry. See BuildOptions comment above.
@@ -390,6 +398,10 @@ func NewDefaultRegistryWithOptions(workspaceRoot string, opts DefaultRegistryOpt
 
 	// get_efficiency_report: always registered; returns no-history report when store is nil.
 	deferredTools = append(deferredTools, deferred.GetEfficiencyReportTool(opts.ProfileRunStore))
+
+	// deploy: always registered. The built-in registry supports the railway and
+	// flyio adapters; the tool reports its deployable platforms honestly.
+	deferredTools = append(deferredTools, deferred.DeployTool(deferred.DefaultDeployPlatformRegistry(), workspaceRoot))
 
 	// Deep git history tools: always registered since git is already required by the
 	// existing git_status and git_diff core tools.

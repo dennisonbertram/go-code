@@ -393,3 +393,54 @@ func TestDeployTool_ForceFlag(t *testing.T) {
 		t.Fatal("expected non-empty result")
 	}
 }
+
+// TestDeployTool_DoesNotAdvertiseUnbackedPlatforms guards the honesty fix: the
+// tool must not tag itself with platforms it has no deploy adapter for.
+func TestDeployTool_DoesNotAdvertiseUnbackedPlatforms(t *testing.T) {
+	tool := DeployTool(DefaultDeployPlatformRegistry(), t.TempDir())
+	for _, tag := range tool.Definition.Tags {
+		if tag == "vercel" || tag == "cloudflare" {
+			t.Errorf("deploy tool advertises %q but has no adapter for it; tags=%v", tag, tool.Definition.Tags)
+		}
+	}
+}
+
+// TestDeployTool_DetectReportsDeployableSubset verifies the detect action
+// separates what it can DETECT from what it can DEPLOY: a vercel project is
+// detected (in "all") but excluded from "deployable" since there is no adapter.
+func TestDeployTool_DetectReportsDeployableSubset(t *testing.T) {
+	dir := t.TempDir()
+	writeDeployFile(t, dir, "fly.toml")    // deployable
+	writeDeployFile(t, dir, "vercel.json") // detected only
+	tool := DeployTool(DefaultDeployPlatformRegistry(), dir)
+	args, _ := json.Marshal(map[string]string{"action": "detect"})
+	result, err := tool.Handler(context.Background(), json.RawMessage(args))
+	if err != nil {
+		t.Fatalf("detect: %v", err)
+	}
+	var parsed struct {
+		All        []string `json:"all"`
+		Deployable []string `json:"deployable"`
+	}
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("parse result %q: %v", result, err)
+	}
+	if !containsStr(parsed.All, "vercel") {
+		t.Errorf("expected vercel in detected 'all', got %v", parsed.All)
+	}
+	if containsStr(parsed.Deployable, "vercel") {
+		t.Errorf("vercel must not appear in 'deployable' (no adapter), got %v", parsed.Deployable)
+	}
+	if !containsStr(parsed.Deployable, "flyio") {
+		t.Errorf("expected flyio in 'deployable', got %v", parsed.Deployable)
+	}
+}
+
+func containsStr(xs []string, want string) bool {
+	for _, x := range xs {
+		if x == want {
+			return true
+		}
+	}
+	return false
+}

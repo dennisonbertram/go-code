@@ -13,6 +13,7 @@ import (
 	githubadapter "go-agent-harness/internal/github"
 	"go-agent-harness/internal/harness"
 	htools "go-agent-harness/internal/harness/tools"
+	"go-agent-harness/internal/harness/tools/deferred"
 	linearadapter "go-agent-harness/internal/linear"
 	"go-agent-harness/internal/networks"
 	"go-agent-harness/internal/provider/anthropic"
@@ -373,6 +374,7 @@ type serverBootstrapOptions struct {
 	providerRegistry *catalog.ProviderRegistry
 	runStore         istore.Store
 	relayWorkerStore relay.WorkerStore
+	todos            deferred.TodoManager
 	triggers         triggerRuntime
 	rolloutDir       string
 }
@@ -393,6 +395,7 @@ func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
 		ProviderRegistry: opts.providerRegistry,
 		Store:            opts.runStore,
 		RelayWorkerStore: opts.relayWorkerStore,
+		Todos:            opts.todos,
 		Validators:       opts.triggers.validators,
 		GitHubAdapter:    opts.triggers.github,
 		SlackAdapter:     opts.triggers.slack,

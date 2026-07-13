@@ -1,8 +1,53 @@
 package deferred
 
 import (
+	"context"
+	"encoding/json"
+	"strings"
 	"testing"
+
+	tools "go-agent-harness/internal/harness/tools"
 )
+
+// TestNewTodoStore_ToolAndManagerShareStore is the regression test for the wiring
+// fix: a write performed through the LLM-facing tool handler (run ID taken from
+// context) must be visible through the TodoManager handed to the HTTP layer, and
+// vice-versa. Before the fix, TodosTool() built an isolated store so the
+// /v1/runs/{id}/todos route never saw tool writes.
+func TestNewTodoStore_ToolAndManagerShareStore(t *testing.T) {
+	t.Parallel()
+
+	mgr, toolFn := NewTodoStore()
+	tool := toolFn()
+	ctx := context.WithValue(context.Background(), tools.ContextKeyRunID, "run-shared")
+
+	// Write via the tool handler; read via the manager (HTTP path).
+	_, err := tool.Handler(ctx, json.RawMessage(`{"action":"set","todos":[{"id":"1","text":"from tool","status":"pending"}]}`))
+	if err != nil {
+		t.Fatalf("tool set: %v", err)
+	}
+	got := mgr.GetTodos("run-shared")
+	if len(got) != 1 || got[0].Text != "from tool" {
+		t.Fatalf("manager did not see tool write; got %+v", got)
+	}
+
+	// Write via the manager (HTTP path); read via the tool handler (get action).
+	if err := mgr.SetTodos("run-shared", []TodoItem{{ID: "2", Text: "from http", Status: "completed"}}); err != nil {
+		t.Fatalf("manager set: %v", err)
+	}
+	out, err := tool.Handler(ctx, json.RawMessage(`{"action":"get"}`))
+	if err != nil {
+		t.Fatalf("tool get: %v", err)
+	}
+	if want := "from http"; !strings.Contains(out, want) {
+		t.Fatalf("tool did not see manager write; got %s", out)
+	}
+
+	// Runs are isolated by run ID.
+	if other := mgr.GetTodos("run-other"); len(other) != 0 {
+		t.Fatalf("expected run isolation, got %+v", other)
+	}
+}
 
 func TestNewTodoStore_ReturnsManagerAndToolFactory(t *testing.T) {
 	t.Parallel()
