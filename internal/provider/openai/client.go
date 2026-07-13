@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go-agent-harness/internal/harness"
+	"go-agent-harness/internal/provider"
 	"go-agent-harness/internal/provider/pricing"
 )
 
@@ -41,22 +42,26 @@ type Config struct {
 	Quirks            []string
 	OpenRouterReferer string // when non-empty and providerName == "openrouter", sent as HTTP-Referer header
 	OpenRouterTitle   string // when non-empty and providerName == "openrouter", sent as X-Title header
+	// Retry controls bounded retry/backoff behavior for HTTP requests. Nil uses
+	// provider.DefaultRetryConfig().
+	Retry *provider.RetryConfig
 }
 
 type Client struct {
-	apiKey              string
-	baseURL             string
-	model               string
-	client              *http.Client
-	pricingResolver     pricing.Resolver
-	providerName        string
-	modelAPILookup      ModelAPILookupFn
-	noParallelTools     bool
-	forceNonStreaming   bool
-	modelIDPrefix       string
-	quirks              []string
-	openRouterReferer   string
-	openRouterTitle     string
+	apiKey            string
+	baseURL           string
+	model             string
+	client            *http.Client
+	pricingResolver   pricing.Resolver
+	providerName      string
+	modelAPILookup    ModelAPILookupFn
+	noParallelTools   bool
+	forceNonStreaming bool
+	modelIDPrefix     string
+	quirks            []string
+	openRouterReferer string
+	openRouterTitle   string
+	retry             *provider.RetryConfig
 }
 
 func NewClient(config Config) (*Client, error) {
@@ -99,6 +104,7 @@ func NewClient(config Config) (*Client, error) {
 		quirks:            append([]string(nil), config.Quirks...),
 		openRouterReferer: config.OpenRouterReferer,
 		openRouterTitle:   config.OpenRouterTitle,
+		retry:             config.Retry,
 	}, nil
 }
 
@@ -175,7 +181,7 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 
 	requestStart := time.Now()
 
-	httpRes, err := c.client.Do(httpReq)
+	httpRes, err := provider.DoWithRetry(ctx, c.client, httpReq, c.retry)
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("request failed: %w", err)
 	}
@@ -1083,7 +1089,7 @@ func (c *Client) completeWithResponsesAPI(ctx context.Context, req harness.Compl
 
 	requestStart := time.Now()
 
-	httpRes, err := c.client.Do(httpReq)
+	httpRes, err := provider.DoWithRetry(ctx, c.client, httpReq, c.retry)
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("responses request failed: %w", err)
 	}

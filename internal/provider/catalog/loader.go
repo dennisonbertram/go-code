@@ -47,7 +47,7 @@ func validateCatalog(cat *Catalog) error {
 		if strings.TrimSpace(p.BaseURL) == "" {
 			return fmt.Errorf("provider %q: base_url is required", name)
 		}
-		if strings.TrimSpace(p.APIKeyEnv) == "" {
+		if strings.TrimSpace(p.APIKeyEnv) == "" && !p.APIKeyOptional {
 			return fmt.Errorf("provider %q: api_key_env is required", name)
 		}
 		if len(p.Models) == 0 {

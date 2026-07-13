@@ -814,14 +814,43 @@ func (se *stepEngine) run() {
 				continue
 			}
 
-			if r.config.ApprovalBroker != nil && effectiveApprovalPolicy != ApprovalPolicyNone && effectiveApprovalPolicy != "" {
-				needsApproval := false
+			ruleEffect, ruleErr := r.permissionRuleDecision(runID, call.Name, callArgs)
+			if ruleErr != nil {
+				ruleEffect = PermissionEffectDeny
+			}
+			if ruleEffect == PermissionEffectDeny {
+				deniedOutput := mustJSON(map[string]any{
+					"error": map[string]any{
+						"code":    "permission_denied",
+						"message": "tool call denied by permission rule",
+						"reason":  "fine-grained permission rule denied the call",
+					},
+				})
+				r.emit(runID, EventToolCallBlocked, map[string]any{
+					"call_id": call.ID,
+					"tool":    call.Name,
+					"reason":  "permission_rule_denied",
+				})
+				messages = append(messages, Message{
+					Role:       "tool",
+					Name:       call.Name,
+					ToolCallID: call.ID,
+					Content:    deniedOutput,
+				})
+				r.setMessages(runID, messages)
+				continue
+			}
+
+			needsApproval := ruleEffect == PermissionEffectAsk
+			if !needsApproval && r.config.ApprovalBroker != nil && effectiveApprovalPolicy != ApprovalPolicyNone && effectiveApprovalPolicy != "" {
 				switch effectiveApprovalPolicy {
 				case ApprovalPolicyAll:
 					needsApproval = true
 				case ApprovalPolicyDestructive:
 					needsApproval = runTools.IsMutating(call.Name)
 				}
+			}
+			if r.config.ApprovalBroker != nil {
 				if needsApproval {
 					deadlineAt := time.Now().UTC().Add(r.config.AskUserTimeout)
 					r.setStatus(runID, RunStatusWaitingForApproval, "", "")
@@ -902,6 +931,27 @@ func (se *stepEngine) run() {
 						"tool":    call.Name,
 					})
 				}
+			} else if needsApproval {
+				deniedOutput := mustJSON(map[string]any{
+					"error": map[string]any{
+						"code":    "permission_denied",
+						"message": "tool call requires approval but no approval broker is configured",
+						"reason":  "fine-grained permission rule requested approval",
+					},
+				})
+				r.emit(runID, EventToolCallBlocked, map[string]any{
+					"call_id": call.ID,
+					"tool":    call.Name,
+					"reason":  "permission_rule_approval_unavailable",
+				})
+				messages = append(messages, Message{
+					Role:       "tool",
+					Name:       call.Name,
+					ToolCallID: call.ID,
+					Content:    deniedOutput,
+				})
+				r.setMessages(runID, messages)
+				continue
 			}
 
 			meta := r.runMetadata(runID)

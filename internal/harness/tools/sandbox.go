@@ -2,6 +2,7 @@ package tools
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -94,4 +95,52 @@ func checkLocalScopeCommand(command string) error {
 		}
 	}
 	return nil
+}
+
+// SandboxEnforcementEnv controls what happens when the OS-level confinement
+// mechanism required for a scope (seatbelt on macOS, bubblewrap on Linux) is
+// unavailable on the host. When set to a truthy value ("1", "true", "yes",
+// "on"), unavailability is fatal: the command is rejected rather than run
+// unconfined (fail closed). Left unset, the JobManager degrades to the
+// string-heuristic checks above and reports the degradation via
+// SandboxExecResult.Warning so it is observable rather than silent.
+const SandboxEnforcementEnv = "HARNESS_SANDBOX_STRICT"
+
+func sandboxStrictModeEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(SandboxEnforcementEnv))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+// SandboxExecResult describes whether OS-level process confinement was
+// actually applied to a spawned bash command, and by what mechanism.
+type SandboxExecResult struct {
+	// Applied is true when the command was actually wrapped in an OS-level
+	// confinement mechanism (not just the string heuristics above).
+	Applied bool
+	// Mechanism identifies what was used: "seatbelt", "bubblewrap", "none"
+	// (unrestricted scope, confinement intentionally not applicable), or
+	// "unavailable" (confinement was required but could not be applied).
+	Mechanism string
+	// Warning is non-empty when confinement degraded to heuristic-only
+	// enforcement and should be surfaced to the caller.
+	Warning string
+}
+
+// resolveSandboxUnavailable is called by the platform-specific
+// buildSandboxedCommand implementations when the OS-level confinement
+// mechanism for the given scope cannot be applied (binary missing,
+// unsupported platform, etc). In strict mode it fails closed by returning an
+// error; otherwise it returns a degraded SandboxExecResult carrying an
+// explicit, observable warning so callers do not silently believe they are
+// isolated when they are not.
+func resolveSandboxUnavailable(scope SandboxScope, mechanism, reason string) (SandboxExecResult, error) {
+	if sandboxStrictModeEnabled() {
+		return SandboxExecResult{}, fmt.Errorf("sandbox: refusing to run %q-scope command: OS-level confinement (%s) unavailable: %s (set %s=0 to allow degraded execution)", scope, mechanism, reason, SandboxEnforcementEnv)
+	}
+	warning := fmt.Sprintf("sandbox: OS-level confinement (%s) unavailable for %q scope: %s — falling back to heuristic checks only, isolation is NOT guaranteed", mechanism, scope, reason)
+	return SandboxExecResult{Applied: false, Mechanism: "unavailable", Warning: warning}, nil
 }

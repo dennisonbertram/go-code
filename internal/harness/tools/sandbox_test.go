@@ -2,10 +2,34 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 )
+
+// osSandboxAvailable reports whether this host has the OS-level confinement
+// mechanism buildSandboxedCommand would actually apply for scope, so tests
+// that prove real isolation (rather than the string heuristic) can skip
+// gracefully on hosts/CI where it's missing.
+func osSandboxAvailable(t *testing.T) bool {
+	t.Helper()
+	switch runtime.GOOS {
+	case "darwin":
+		if _, err := os.Stat("/usr/bin/sandbox-exec"); err != nil {
+			return false
+		}
+		return true
+	case "linux":
+		_, err := exec.LookPath("bwrap")
+		return err == nil
+	default:
+		return false
+	}
+}
 
 func TestCheckSandboxCommandUnrestricted(t *testing.T) {
 	t.Parallel()
@@ -241,5 +265,111 @@ func TestJobManagerContextSandboxScopeBlocksBackgroundCommand(t *testing.T) {
 
 	if _, err := mgr.RunBackgroundWithContext(ctx, "curl https://example.com", 5, ""); err == nil {
 		t.Fatal("expected local sandbox override to block background network command")
+	}
+}
+
+// TestSandboxWorkspaceScopeBlocksWriteOutsideWorkspaceAtOSLevel proves that
+// workspace-scope confinement is enforced by the OS, not by string matching:
+// the destination path is built via shell variable indirection so it never
+// appears as a literal absolute-path token in the command, which the
+// existing regex/token heuristic in checkWorkspaceScopeCommand would have
+// caught. The write must still fail at the OS level.
+func TestSandboxWorkspaceScopeBlocksWriteOutsideWorkspaceAtOSLevel(t *testing.T) {
+	if !osSandboxAvailable(t) {
+		t.Skip("no OS-level sandbox mechanism (seatbelt/bubblewrap) available on this host")
+	}
+
+	workspace := t.TempDir()
+	absWorkspace, err := filepath.Abs(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mgr := NewJobManager(absWorkspace, nil)
+	mgr.SetSandboxScope(SandboxScopeWorkspace)
+
+	target := filepath.Join(os.TempDir(), fmt.Sprintf("harness-sandbox-proof-%d", time.Now().UnixNano()))
+	_ = os.Remove(target)
+	defer os.Remove(target)
+
+	dir := filepath.Dir(target)
+	base := filepath.Base(target)
+	command := fmt.Sprintf(`D=%s; echo pwned > "$D/%s"`, dir, base)
+
+	// The heuristic layer must NOT catch this obfuscated escape — that is
+	// what makes this a proof of OS-level enforcement rather than a
+	// duplicate of the existing string-matching tests above.
+	if err := CheckSandboxCommand(SandboxScopeWorkspace, absWorkspace, command); err != nil {
+		t.Fatalf("expected heuristic to miss the obfuscated escape (so the OS layer is what's under test), got error: %v", err)
+	}
+
+	result, _ := mgr.RunForeground(context.Background(), command, 5, "")
+	if result != nil {
+		if exitCode, _ := result["exit_code"].(int); exitCode == 0 {
+			t.Errorf("expected non-zero exit code for OS-blocked write outside workspace, got 0; result=%v", result)
+		}
+	}
+	if _, statErr := os.Stat(target); statErr == nil {
+		t.Fatalf("sandbox violation: file %q was created outside the workspace despite workspace sandbox scope", target)
+	}
+}
+
+// TestSandboxLocalScopeBlocksObfuscatedNetworkAtOSLevel proves that
+// local-scope network denial is enforced by the OS, not by regex matching
+// against the command string: "curl" is assembled from two shell variables
+// so the literal substring "curl" never appears in the command, defeating
+// the \bcurl\b pattern in checkLocalScopeCommand. The request must still
+// fail because the OS layer denies network operations outright.
+func TestSandboxLocalScopeBlocksObfuscatedNetworkAtOSLevel(t *testing.T) {
+	if !osSandboxAvailable(t) {
+		t.Skip("no OS-level sandbox mechanism (seatbelt/bubblewrap) available on this host")
+	}
+
+	workspace := t.TempDir()
+	mgr := NewJobManager(workspace, nil)
+	mgr.SetSandboxScope(SandboxScopeLocal)
+
+	command := `A=cur; B=l; "$A$B" -s -m 5 https://example.com -o /dev/null -w '%{http_code}'`
+
+	if err := CheckSandboxCommand(SandboxScopeLocal, workspace, command); err != nil {
+		t.Fatalf("expected heuristic to miss the obfuscated network command (so the OS layer is what's under test), got error: %v", err)
+	}
+
+	result, err := mgr.RunForeground(context.Background(), command, 10, "")
+	if err != nil {
+		// A hard exec failure also demonstrates the network call never
+		// succeeded; only a clean success (exit 0) would be a problem.
+		return
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	exitCode, _ := result["exit_code"].(int)
+	if exitCode == 0 {
+		t.Fatalf("expected obfuscated curl to fail under OS-level network denial, got exit_code 0; result=%v", result)
+	}
+}
+
+func TestResolveSandboxUnavailableDegradesByDefault(t *testing.T) {
+	res, err := resolveSandboxUnavailable(SandboxScopeWorkspace, "seatbelt", "binary not found")
+	if err != nil {
+		t.Fatalf("expected no error in default (non-strict) mode, got: %v", err)
+	}
+	if res.Applied {
+		t.Error("expected Applied=false for unavailable mechanism")
+	}
+	if res.Mechanism != "unavailable" {
+		t.Errorf("expected Mechanism=\"unavailable\", got %q", res.Mechanism)
+	}
+	if res.Warning == "" {
+		t.Error("expected a non-empty warning explaining the degradation")
+	}
+}
+
+func TestResolveSandboxUnavailableFailsClosedWhenStrict(t *testing.T) {
+	t.Setenv(SandboxEnforcementEnv, "1")
+
+	if _, err := resolveSandboxUnavailable(SandboxScopeWorkspace, "seatbelt", "binary not found"); err == nil {
+		t.Fatal("expected an error when strict mode is enabled and the mechanism is unavailable")
 	}
 }

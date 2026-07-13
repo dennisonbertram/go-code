@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"go-agent-harness/internal/harness"
+	"go-agent-harness/internal/provider"
+	"go-agent-harness/internal/provider/catalog"
 	"go-agent-harness/internal/provider/pricing"
 )
 
@@ -29,6 +31,15 @@ type Config struct {
 	Client          *http.Client
 	PricingResolver pricing.Resolver
 	ProviderName    string
+	// MaxOutputTokens, when > 0, overrides the max_tokens sent on every
+	// request, taking precedence over any catalog-derived value.
+	MaxOutputTokens int
+	// Catalog, when set, is used to resolve a model's max_tokens from
+	// Model.MaxOutputTokens when MaxOutputTokens is not set.
+	Catalog *catalog.Catalog
+	// Retry controls bounded retry/backoff behavior for HTTP requests. Nil uses
+	// provider.DefaultRetryConfig().
+	Retry *provider.RetryConfig
 }
 
 // Client is an Anthropic API client implementing harness.Provider.
@@ -39,6 +50,9 @@ type Client struct {
 	client          *http.Client
 	pricingResolver pricing.Resolver
 	providerName    string
+	maxOutputTokens int
+	catalog         *catalog.Catalog
+	retry           *provider.RetryConfig
 }
 
 // NewClient creates a new Anthropic provider client.
@@ -69,7 +83,58 @@ func NewClient(cfg Config) (*Client, error) {
 		client:          httpClient,
 		pricingResolver: cfg.PricingResolver,
 		providerName:    providerName,
+		maxOutputTokens: cfg.MaxOutputTokens,
+		catalog:         cfg.Catalog,
+		retry:           cfg.Retry,
 	}, nil
+}
+
+func (c *Client) maxTokensForModel(modelID string) int {
+	if c.maxOutputTokens > 0 {
+		return c.maxOutputTokens
+	}
+	if maxTokens, ok := maxTokensFromCatalog(c.catalog, c.providerName, modelID); ok && maxTokens > 0 {
+		return maxTokens
+	}
+	return defaultMaxTokens
+}
+
+func maxTokensFromCatalog(cat *catalog.Catalog, providerName, modelID string) (int, bool) {
+	if cat == nil || modelID == "" {
+		return 0, false
+	}
+
+	var entry catalog.ProviderEntry
+	var ok bool
+	if providerName != "" {
+		entry, ok = cat.Providers[providerName]
+	}
+	if !ok {
+		for name, p := range cat.Providers {
+			if strings.EqualFold(name, providerName) {
+				entry = p
+				ok = true
+				break
+			}
+		}
+	}
+	if !ok {
+		return 0, false
+	}
+
+	resolved := modelID
+	if target, ok := entry.Aliases[modelID]; ok {
+		if _, exists := entry.Models[target]; exists {
+			resolved = target
+		}
+	}
+
+	m, ok := entry.Models[resolved]
+	if !ok {
+		return 0, false
+	}
+
+	return m.MaxOutputTokens, m.MaxOutputTokens > 0
 }
 
 // Complete implements harness.Provider.
@@ -90,7 +155,7 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 
 	payload := messageRequest{
 		Model:     model,
-		MaxTokens: defaultMaxTokens,
+		MaxTokens: c.maxTokensForModel(model),
 		System:    systemPrompt,
 		Messages:  anthropicMsgs,
 		Tools:     mapTools(req.Tools),
@@ -113,7 +178,7 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
 
-	httpRes, err := c.client.Do(httpReq)
+	httpRes, err := provider.DoWithRetry(ctx, c.client, httpReq, c.retry)
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("request failed: %w", err)
 	}

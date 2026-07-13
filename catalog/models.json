@@ -890,6 +890,123 @@
           }
         }
       }
+    },
+    "ollama": {
+      "display_name": "Ollama",
+      "base_url": "http://localhost:11434/v1",
+      "api_key_env": "",
+      "api_key_optional": true,
+      "protocol": "openai_compat",
+      "models": {
+        "llama3.1:8b": {
+          "display_name": "Llama 3.1 8B",
+          "description": "Local Llama 3.1 8B inference via Ollama. Good default for agent loops on modest hardware.",
+          "context_window": 128000,
+          "max_output_tokens": 8192,
+          "modalities": [
+            "text"
+          ],
+          "tool_calling": true,
+          "streaming": true,
+          "strengths": [
+            "local",
+            "privacy",
+            "offline",
+            "tool-calling"
+          ],
+          "best_for": [
+            "local-development",
+            "offline-tasks",
+            "privacy-sensitive-tasks"
+          ],
+          "speed_tier": "medium",
+          "cost_tier": "budget"
+        },
+        "qwen2.5-coder:14b": {
+          "display_name": "Qwen 2.5 Coder 14B",
+          "description": "Local Qwen 2.5 Coder via Ollama. Strong coding model for local agent use.",
+          "context_window": 128000,
+          "max_output_tokens": 8192,
+          "modalities": [
+            "text"
+          ],
+          "tool_calling": true,
+          "streaming": true,
+          "strengths": [
+            "local",
+            "coding",
+            "offline"
+          ],
+          "best_for": [
+            "local-coding",
+            "offline-coding",
+            "agent-loops"
+          ],
+          "speed_tier": "medium",
+          "cost_tier": "budget"
+        }
+      },
+      "aliases": {
+        "llama": "llama3.1:8b",
+        "qwen-coder": "qwen2.5-coder:14b"
+      }
+    },
+    "lmstudio": {
+      "display_name": "LM Studio",
+      "base_url": "http://localhost:1234/v1",
+      "api_key_env": "",
+      "api_key_optional": true,
+      "protocol": "openai_compat",
+      "models": {
+        "llama-3.1-8b-instruct": {
+          "display_name": "Llama 3.1 8B Instruct",
+          "description": "Llama 3.1 8B Instruct loaded in LM Studio. Lightweight local option.",
+          "context_window": 128000,
+          "max_output_tokens": 8192,
+          "modalities": [
+            "text"
+          ],
+          "tool_calling": true,
+          "streaming": true,
+          "strengths": [
+            "local",
+            "privacy",
+            "offline"
+          ],
+          "best_for": [
+            "local-development",
+            "offline-tasks"
+          ],
+          "speed_tier": "medium",
+          "cost_tier": "budget"
+        },
+        "qwen2.5-coder-14b-instruct": {
+          "display_name": "Qwen 2.5 Coder 14B Instruct",
+          "description": "Qwen 2.5 Coder 14B Instruct loaded in LM Studio. Strong local coding model.",
+          "context_window": 128000,
+          "max_output_tokens": 8192,
+          "modalities": [
+            "text"
+          ],
+          "tool_calling": true,
+          "streaming": true,
+          "strengths": [
+            "local",
+            "coding",
+            "offline"
+          ],
+          "best_for": [
+            "local-coding",
+            "offline-coding"
+          ],
+          "speed_tier": "medium",
+          "cost_tier": "budget"
+        }
+      },
+      "aliases": {
+        "llama": "llama-3.1-8b-instruct",
+        "qwen-coder": "qwen2.5-coder-14b-instruct"
+      }
     }
   }
 }

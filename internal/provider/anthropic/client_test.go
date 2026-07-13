@@ -8,9 +8,12 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"go-agent-harness/internal/harness"
+	"go-agent-harness/internal/provider"
 	"go-agent-harness/internal/provider/pricing"
 )
 
@@ -863,5 +866,151 @@ func TestMapMessagesAssistantWithToolCall(t *testing.T) {
 	}
 	if blocks[0].ID != "tc1" || blocks[0].Name != "mytool" {
 		t.Fatalf("unexpected block: %+v", blocks[0])
+	}
+}
+
+// --- Retry ---
+
+func testRetryConfig() *provider.RetryConfig {
+	return &provider.RetryConfig{
+		MaxAttempts: 3,
+		BaseDelay:   1 * time.Millisecond,
+		MaxDelay:    10 * time.Millisecond,
+		MaxTotal:    100 * time.Millisecond,
+		Jitter:      false,
+	}
+}
+
+func minimalMessageResponse() []byte {
+	return []byte(`{
+		"id": "msg_01",
+		"type": "message",
+		"role": "assistant",
+		"content": [{"type": "text", "text": "ok"}],
+		"stop_reason": "end_turn",
+		"usage": {"input_tokens": 10, "output_tokens": 5}
+	}`)
+}
+
+func TestClientRetriesOn429(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"rate_limit_error","message":"rate limited"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(minimalMessageResponse())
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, func(c *Config) {
+		c.Retry = testRetryConfig()
+	})
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got)
+	}
+}
+
+func TestClientRetriesOn503(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"type":"error","error":{"type":"overloaded_error","message":"unavailable"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(minimalMessageResponse())
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, func(c *Config) {
+		c.Retry = testRetryConfig()
+	})
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got)
+	}
+}
+
+func TestClientDoesNotRetryOn400(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"invalid_request_error","message":"bad request"}}`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, func(c *Config) {
+		c.Retry = testRetryConfig()
+	})
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hello"}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("expected 1 attempt, got %d", got)
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Fatalf("expected 400 in error, got: %v", err)
+	}
+}
+
+func TestClientContextCancellationAbortsRetry(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int64
+	ctx, cancel := context.WithCancel(context.Background())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			cancel()
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv, func(c *Config) {
+		c.Retry = &provider.RetryConfig{
+			MaxAttempts: 3,
+			BaseDelay:   10 * time.Second,
+			MaxDelay:    10 * time.Second,
+			MaxTotal:    10 * time.Second,
+			Jitter:      false,
+		}
+	})
+
+	_, err := client.Complete(ctx, harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hello"}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("expected 1 attempt, got %d", got)
 	}
 }

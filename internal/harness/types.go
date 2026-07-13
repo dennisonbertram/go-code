@@ -422,6 +422,10 @@ type RunRequest struct {
 	// Used to gate task_complete visibility and enforce DefaultMaxForkDepth.
 	// Populated automatically by RunForkedSkill; callers should not set this.
 	ForkDepth int `json:"fork_depth,omitempty"`
+	// Rules applies fine-grained allow, ask, or deny effects to tool calls.
+	// Rules in Permissions and this field are evaluated together; the
+	// RunRequest rules are appended after PermissionConfig.Rules.
+	Rules []PermissionRule `json:"rules,omitempty"`
 }
 
 // ContinueRunRequest defines the continuation-specific inputs accepted when a
@@ -693,6 +697,9 @@ const (
 type PermissionConfig struct {
 	Sandbox  SandboxScope   `json:"sandbox"`
 	Approval ApprovalPolicy `json:"approval"`
+	// Rules applies fine-grained effects to matching tool calls. A nil or empty
+	// rule set leaves the legacy two-axis permission behavior unchanged.
+	Rules *PermissionRuleSet `json:"rules,omitempty"`
 }
 
 // DefaultPermissionConfig returns the default (unrestricted, no approval required).
@@ -735,6 +742,9 @@ func ValidatePermissionConfig(p PermissionConfig) error {
 		// empty defaults to none — also valid at validation time
 	default:
 		return fmt.Errorf("invalid approval policy %q: must be one of none, destructive, all", p.Approval)
+	}
+	if err := ValidatePermissionRules(permissionRulesFromSet(p.Rules)); err != nil {
+		return err
 	}
 	return nil
 }
