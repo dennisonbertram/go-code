@@ -10,6 +10,7 @@ import (
 	"go-agent-harness/internal/checkpoints"
 	"go-agent-harness/internal/harness"
 	htools "go-agent-harness/internal/harness/tools"
+	"go-agent-harness/internal/harness/tools/deferred"
 	"go-agent-harness/internal/mcpserver"
 	"go-agent-harness/internal/networks"
 	"go-agent-harness/internal/provider/catalog"
@@ -75,6 +76,7 @@ type httpRuntimeOptions struct {
 	providerRegistry     *catalog.ProviderRegistry
 	runStore             istore.Store
 	relayWorkerStore     relay.WorkerStore
+	todos                deferred.TodoManager
 	triggers             triggerRuntime
 	callbackStarter      *callbackRunStarter
 	callbackBridge       *harness.CallbackEventBridge
@@ -180,6 +182,7 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		providerRegistry: opts.providerRegistry,
 		runStore:         opts.runStore,
 		relayWorkerStore: opts.relayWorkerStore,
+		todos:            opts.todos,
 		triggers:         opts.triggers,
 		rolloutDir:       opts.runnerCfg.RolloutDir,
 	}))

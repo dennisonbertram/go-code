@@ -31,7 +31,7 @@ func DeployTool(registry DeployPlatformRegistry, workspaceRoot string) tools.Too
 		Mutating:     true,
 		ParallelSafe: false,
 		Tier:         tools.TierDeferred,
-		Tags:         []string{"deploy", "cloud", "infrastructure", "railway", "fly", "vercel", "cloudflare"},
+		Tags:         []string{"deploy", "cloud", "infrastructure", "railway", "fly"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -94,9 +94,20 @@ func DeployTool(registry DeployPlatformRegistry, workspaceRoot string) tools.Too
 				return "", fmt.Errorf("detect platform: %w", err)
 			}
 			all := deploy.DetectAll(wsDir)
+			// Distinguish what we can DETECT from what we can actually DEPLOY:
+			// detection recognises more project types (e.g. vercel, cloudflare)
+			// than there are deploy adapters for. Report the deployable subset so
+			// the caller does not assume a detected platform can be deployed here.
+			deployable := make([]string, 0, len(all))
+			for _, p := range all {
+				if _, ok := registry[p]; ok {
+					deployable = append(deployable, p)
+				}
+			}
 			return tools.MarshalToolResult(map[string]any{
-				"platform": name,
-				"all":      all,
+				"platform":   name,
+				"all":        all,
+				"deployable": deployable,
 			})
 		}
 
