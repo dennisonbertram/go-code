@@ -711,6 +711,22 @@ func (m Model) WithCancelRun(cancel func()) Model {
 	return m
 }
 
+// pluginCommandResultMsg carries the outcome of an asynchronously-executed
+// plugin slash command (bash or prompt handler).
+type pluginCommandResultMsg struct {
+	Result CommandResult
+}
+
+// runPluginCommandCmd runs a plugin command's Handler as a tea.Cmd so a slow
+// bash plugin cannot block Update(). Bubble Tea runs the returned closure on
+// its own goroutine, so ExecuteBash's up-to-10s blocking call happens off the
+// render/input/SSE-polling loop.
+func runPluginCommandCmd(entry CommandEntry, cmd Command) tea.Cmd {
+	return func() tea.Msg {
+		return pluginCommandResultMsg{Result: entry.Handler(cmd)}
+	}
+}
+
 // statusTickCmd returns a tea.Cmd that fires statusTickMsg after duration d.
 func statusTickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return statusTickMsg{} })
@@ -1067,6 +1083,41 @@ func (m *Model) appendThinkingDelta(delta string) {
 		Active: true,
 		Label:  label,
 	}
+}
+
+// interruptActiveToolCall finalizes the currently active tool call's timer and
+// view when a run is cancelled mid-tool-call. Without this, a tool call that
+// was still "running" at cancel time keeps its timer running and its view
+// stuck rendering "running..." forever, since no further ToolResult/ToolError
+// event will ever arrive for it.
+func (m *Model) interruptActiveToolCall() {
+	if m.activeToolCallID == "" {
+		return
+	}
+	callID := m.activeToolCallID
+	view, ok := m.toolViews[callID]
+	if !ok || view.Status != "running" {
+		return
+	}
+	timer := m.toolTimers[callID]
+	if timer.IsRunning() {
+		timer = timer.Stop()
+		m.toolTimers[callID] = timer
+	}
+	view.Status = "error"
+	view.ErrorText = "Interrupted"
+	view.Timer = timer
+	m.toolViews[callID] = view
+	m.appendToolUseView(view)
+}
+
+// ActiveToolCallStatus returns the Status of the currently active tool call's
+// view, or "" when there is no active tool call (for testing).
+func (m Model) ActiveToolCallStatus() string {
+	if m.activeToolCallID == "" {
+		return ""
+	}
+	return m.toolViews[m.activeToolCallID].Status
 }
 
 func (m *Model) rerenderActiveToolView() {
@@ -1678,6 +1729,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.cancelRun()
 					m.cancelRun = nil
 				}
+				m.interruptActiveToolCall()
 				m.runActive = false
 				cmds = append(cmds, m.setStatusMsg("Interrupted"))
 				return m, tea.Batch(cmds...)
@@ -1796,6 +1848,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelRun()
 				m.runActive = false
 				m.cancelRun = nil
+				m.interruptActiveToolCall()
 				cmds = append(cmds, m.setStatusMsg("Interrupted"))
 				return m, tea.Batch(cmds...)
 			}
@@ -2238,6 +2291,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp.ScrollUp(m.vp.Height() / 2)
 		case key.Matches(msg, m.keys.PageDown):
 			m.vp.ScrollDown(m.vp.Height() / 2)
+		case key.Matches(msg, m.keys.GotoTop):
+			m.vp.ScrollUp(m.vp.LineCount())
+		case key.Matches(msg, m.keys.GotoBottom):
+			m.vp.ScrollToBottom()
 
 		// #668 (1): ctrl+u clears the main input when no overlay is active.
 		// The apikeys and model-config overlay arms above already matched earlier
@@ -2364,6 +2421,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case inputarea.CommandSubmittedMsg:
+		// Whitespace-only submissions are never valid — neither a slash command
+		// nor a meaningful user message — so bail out before touching history,
+		// the dropdown, or the transcript.
+		if strings.TrimSpace(msg.Value) == "" {
+			return m, tea.Batch(cmds...)
+		}
 		// Persist command history to config on every submit.
 		// The input has already pushed the entry into its history at this point.
 		m.historyStore = m.input.HistoryState()
@@ -2375,6 +2438,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.slashComplete = m.slashComplete.Close()
 		// Check if it's a slash command; dispatch if so.
 		if cmd, ok := ParseCommand(msg.Value); ok {
+			// Plugin commands (bash or prompt handlers loaded from disk) only set
+			// CommandEntry.Handler, never Execute — built-in commands always set
+			// Execute. Dispatch those asynchronously so a slow bash plugin (up to
+			// its 10s timeout) can't block Update() and freeze rendering, input,
+			// and SSE polling for the duration of the command.
+			if entry, found := m.commandRegistry.Lookup(cmd.Name); found && entry.Execute == nil && entry.Handler != nil {
+				cmds = append(cmds, m.setStatusMsg("Running /"+cmd.Name+"..."), runPluginCommandCmd(entry, cmd))
+				return m, tea.Batch(cmds...)
+			}
 			result := m.commandRegistry.Dispatch(cmd)
 			switch result.Status {
 			case CmdOK:
@@ -2547,6 +2619,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.setStatusMsg("Transcript saved to "+msg.FilePath))
 		} else {
 			cmds = append(cmds, m.setStatusMsg("Export failed"))
+		}
+
+	case pluginCommandResultMsg:
+		switch msg.Result.Status {
+		case CmdOK:
+			if msg.Result.Output != "" {
+				m.vp.AppendLine(msg.Result.Output)
+				m.vp.AppendLine("")
+			}
+		case CmdError:
+			cmds = append(cmds, m.setStatusMsg(msg.Result.Output))
+		case CmdUnknown:
+			cmds = append(cmds, m.setStatusMsg(msg.Result.Hint))
 		}
 
 	case editorDoneMsg:
