@@ -52,6 +52,8 @@ type runState struct {
 	allowedTools []string
 	// permissions is the effective two-axis permission configuration for this run.
 	permissions PermissionConfig
+	// permissionWorkspaceRoot is the workspace used to resolve path rules.
+	permissionWorkspaceRoot string
 	// recorderCh is the input channel for the per-run recorder goroutine.
 	// Events sent here are written to the JSONL rollout file in order.
 	// Nil when no RolloutDir is configured.  The channel is closed (and
@@ -723,6 +725,9 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 			return Run{}, fmt.Errorf("invalid permissions: %w", err)
 		}
 	}
+	if err := ValidatePermissionRules(req.Rules); err != nil {
+		return Run{}, fmt.Errorf("invalid rules: %w", err)
+	}
 	if len(req.MCPServers) > 0 {
 		if err := validateMCPServerConfigs(req.MCPServers); err != nil {
 			return Run{}, fmt.Errorf("invalid mcp_servers: %w", err)
@@ -830,6 +835,8 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 	if req.Permissions != nil {
 		effectivePerms = normalizePermissionConfig(*req.Permissions)
 	}
+	mergedPermissionRules := append(copyPermissionRules(permissionRulesFromSet(effectivePerms.Rules)), req.Rules...)
+	effectivePerms.Rules = NewPermissionRuleSet(mergedPermissionRules)
 
 	var sb *errorchain.SnapshotBuilder
 	if r.config.ErrorChainEnabled {
@@ -840,24 +847,25 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 	mergedRules := mergeDynamicRules(r.config.DynamicRules, req.DynamicRules)
 
 	state := &runState{
-		run:                run,
-		staticSystemPrompt: systemPrompt,
-		promptResolved:     resolvedPrompt,
-		usageTotals:        usageTotalsAccumulator{},
-		costTotals:         RunCostTotals{CostStatus: CostStatusPending},
-		messages:           make([]Message, 0, 16),
-		events:             make([]Event, 0, 32),
-		subscribers:        make(map[chan Event]struct{}),
-		steeringCh:         make(chan string, steeringBufferSize),
-		maxCostUSD:         req.MaxCostUSD,
-		allowedTools:       req.AllowedTools,
-		permissions:        effectivePerms,
-		snapshotBuilder:    sb,
-		auditWriter:        aw,
-		profileName:        req.ProfileName,
-		dynamicRules:       mergedRules,
-		firedOnceRules:     make(map[string]bool),
-		forkDepth:          req.ForkDepth,
+		run:                     run,
+		staticSystemPrompt:      systemPrompt,
+		promptResolved:          resolvedPrompt,
+		usageTotals:             usageTotalsAccumulator{},
+		costTotals:              RunCostTotals{CostStatus: CostStatusPending},
+		messages:                make([]Message, 0, 16),
+		events:                  make([]Event, 0, 32),
+		subscribers:             make(map[chan Event]struct{}),
+		steeringCh:              make(chan string, steeringBufferSize),
+		maxCostUSD:              req.MaxCostUSD,
+		allowedTools:            req.AllowedTools,
+		permissions:             effectivePerms,
+		permissionWorkspaceRoot: r.defaultPermissionWorkspaceRoot(),
+		snapshotBuilder:         sb,
+		auditWriter:             aw,
+		profileName:             req.ProfileName,
+		dynamicRules:            mergedRules,
+		firedOnceRules:          make(map[string]bool),
+		forkDepth:               req.ForkDepth,
 	}
 	if rec != nil {
 		startRecorderGoroutine(state, rec)
@@ -1096,6 +1104,7 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 			r.mu.Lock()
 			if st, ok := r.runs[runID]; ok {
 				st.perRunTools = perRun
+				st.permissionWorkspaceRoot = wsPath
 			}
 			r.mu.Unlock()
 		}
@@ -1475,6 +1484,7 @@ func (r *Runner) ContinueRunWithOptions(runID string, req ContinueRunRequest) (R
 		steeringCh:               make(chan string, steeringBufferSize),
 		maxCostUSD:               srcMaxCostUSD,
 		permissions:              effectivePermissions,
+		permissionWorkspaceRoot:  r.defaultPermissionWorkspaceRoot(),
 		resolvedRoleModels:       srcResolvedRoleModels,
 		allowedTools:             effectiveAllowedTools,
 		previousRunID:            runID,
@@ -5081,12 +5091,13 @@ func normalizePermissionConfig(p PermissionConfig) PermissionConfig {
 	if p.Approval == "" {
 		p.Approval = ApprovalPolicyNone
 	}
+	p.Rules = copyPermissionRuleSet(p.Rules)
 	return p
 }
 
 func buildContinuationPolicyNotice(srcAllowed, currentAllowed []string, srcPerms, currentPerms PermissionConfig) string {
 	allowedChanged := !stringSlicesEqual(srcAllowed, currentAllowed)
-	permsChanged := srcPerms != currentPerms
+	permsChanged := !permissionConfigsEqual(srcPerms, currentPerms)
 	if !allowedChanged && !permsChanged {
 		return ""
 	}
