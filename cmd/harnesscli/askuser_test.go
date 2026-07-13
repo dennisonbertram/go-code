@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -405,5 +407,78 @@ func TestNonTUI_RunIDWithSlashes_URLIsEscaped(t *testing.T) {
 	}
 	if !strings.Contains(receivedPath, "run%2Fwith%2Fslashes") {
 		t.Errorf("expected percent-escaped runID in path; got: %q", receivedPath)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Auth: ask-user GET/POST must attach the Bearer token from ~/.harness/config.json
+// ---------------------------------------------------------------------------
+
+func writeTestHarnessConfig(t *testing.T, apiKey string) {
+	t.Helper()
+	tmpHome := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	t.Cleanup(func() { os.Setenv("HOME", oldHome) })
+	os.Setenv("HOME", tmpHome)
+
+	cfgDir := filepath.Join(tmpHome, ".harness")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	cfgBody, err := json.Marshal(harnessConfig{Server: "http://localhost:8080", APIKey: apiKey})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), cfgBody, 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+}
+
+func TestAskUser_GetInput_AttachesAuthorizationHeader(t *testing.T) {
+	writeTestHarnessConfig(t, "harness_sk_test_token")
+
+	var getAuthHeader, postAuthHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/input"):
+			getAuthHeader = r.Header.Get("Authorization")
+			pending := map[string]interface{}{
+				"run_id":  "run-auth-1",
+				"call_id": "call-a1",
+				"tool":    "AskUserQuestion",
+				"questions": []map[string]interface{}{
+					{
+						"question": "Proceed?",
+						"header":   "H",
+						"options": []map[string]string{
+							{"label": "Yes", "description": "OK"},
+						},
+						"multiSelect": false,
+					},
+				},
+				"deadline_at": "2099-01-01T00:00:00Z",
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(pending) //nolint:errcheck
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/input"):
+			postAuthHeader = r.Header.Get("Authorization")
+			w.WriteHeader(http.StatusAccepted)
+		}
+	}))
+	defer srv.Close()
+
+	stdin := strings.NewReader("Yes\n")
+	var stdout bytes.Buffer
+	if err := handleAskUserQuestion(srv.URL, "run-auth-1", stdin, &stdout); err != nil {
+		t.Fatalf("handleAskUserQuestion failed: %v", err)
+	}
+
+	wantAuth := "Bearer harness_sk_test_token"
+	if getAuthHeader != wantAuth {
+		t.Errorf("GET /input: expected Authorization %q, got %q", wantAuth, getAuthHeader)
+	}
+	if postAuthHeader != wantAuth {
+		t.Errorf("POST /input: expected Authorization %q, got %q", wantAuth, postAuthHeader)
 	}
 }

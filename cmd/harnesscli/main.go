@@ -10,9 +10,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"os/signal"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	"go-agent-harness/cmd/harnesscli/tui"
@@ -58,8 +61,21 @@ var (
 		},
 	}
 
-	errInvalidSSEData  = errors.New("invalid sse data")
-	errIgnoredSSEBlock = errors.New("ignored sse block")
+	errInvalidSSEData   = errors.New("invalid sse data")
+	errIgnoredSSEBlock  = errors.New("ignored sse block")
+	errSSELineTruncated = errors.New("sse line truncated: exceeded max size")
+
+	// maxSSELineSize bounds a single SSE line kept in memory. Lines longer
+	// than this are fully drained from the stream (to keep it aligned) but
+	// only the first maxSSELineSize bytes are retained; the event they
+	// belong to is skipped with a warning instead of aborting the stream.
+	// It is a var (not a const) so tests can shrink it temporarily.
+	maxSSELineSize = 16 * 1024 * 1024
+
+	// maxResponseBodyBytes bounds how much of any single HTTP response body
+	// is read into memory. A hostile or misbehaving server cannot use an
+	// oversized body to exhaust client memory.
+	maxResponseBodyBytes int64 = 8 * 1024 * 1024
 )
 
 type runCreateRequest struct {
@@ -173,7 +189,9 @@ func run(args []string) int {
 		}
 	}
 
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
 	runID, err := startRun(ctx, requestHTTPClient, *baseURL, runCreateRequest{
 		Prompt:           *prompt,
 		Model:            *model,
@@ -192,11 +210,47 @@ func run(args []string) int {
 	fmt.Fprintf(stdout, "run_id=%s\n", runID)
 	terminalEvent, err := streamRunEvents(ctx, streamHTTPClient, *baseURL, runID, stdout)
 	if err != nil {
-		fmt.Fprintf(stderr, "harnesscli: stream events: %v\n", err)
-		return 1
+		return handleStreamError(ctx, requestHTTPClient, *baseURL, runID, err)
 	}
 	fmt.Fprintf(stdout, "terminal_event=%s\n", terminalEvent)
 	return 0
+}
+
+// handleStreamError decides how to report a streamRunEvents failure. If ctx
+// was cancelled (SIGINT/SIGTERM during the run), it best-effort cancels the
+// still-executing server-side run so it stops burning tokens, prints a clear
+// message, and returns the conventional interrupted exit code. Otherwise it
+// reports the streaming error as-is.
+func handleStreamError(ctx context.Context, client *http.Client, baseURL, runID string, streamErr error) int {
+	if ctx.Err() != nil {
+		fmt.Fprintln(stderr, "harnesscli: interrupted, cancelling run...")
+		cancelRunOnInterrupt(client, baseURL, runID)
+		fmt.Fprintf(stdout, "run %s cancelled\n", runID)
+		return 130
+	}
+	fmt.Fprintf(stderr, "harnesscli: stream events: %v\n", streamErr)
+	return 1
+}
+
+// cancelRunOnInterrupt best-effort POSTs /v1/runs/{id}/cancel using a fresh,
+// short-lived context (the caller's own context is already cancelled). Errors
+// are intentionally swallowed: this runs during process shutdown and must not
+// block or fail the exit path.
+func cancelRunOnInterrupt(client *http.Client, baseURL, runID string) {
+	cancelCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	endpoint := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/cancel"
+	req, err := http.NewRequestWithContext(cancelCtx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxResponseBodyBytes))
 }
 
 func startRun(ctx context.Context, client *http.Client, baseURL string, req runCreateRequest) (string, error) {
@@ -217,7 +271,7 @@ func startRun(ctx context.Context, client *http.Client, baseURL string, req runC
 	}
 	defer httpRes.Body.Close()
 
-	responseBody, err := io.ReadAll(httpRes.Body)
+	responseBody, err := io.ReadAll(io.LimitReader(httpRes.Body, maxResponseBodyBytes))
 	if err != nil {
 		return "", fmt.Errorf("read run response: %w", err)
 	}
@@ -249,19 +303,31 @@ func streamRunEvents(ctx context.Context, client *http.Client, baseURL, runID st
 	defer httpRes.Body.Close()
 
 	if httpRes.StatusCode >= 300 {
-		responseBody, readErr := io.ReadAll(httpRes.Body)
+		responseBody, readErr := io.ReadAll(io.LimitReader(httpRes.Body, maxResponseBodyBytes))
 		if readErr != nil {
 			return "", fmt.Errorf("read event stream error body: %w", readErr)
 		}
 		return "", formatAPIError(httpRes.StatusCode, responseBody)
 	}
 
-	scanner := bufio.NewScanner(httpRes.Body)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	reader := bufio.NewReaderSize(httpRes.Body, 64*1024)
 
 	lines := make([]string, 0, 8)
-	for scanner.Scan() {
-		line := strings.TrimRight(scanner.Text(), "\r")
+	for {
+		line, readErr := readSSELine(reader, maxSSELineSize)
+		if readErr != nil && !errors.Is(readErr, errSSELineTruncated) {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			return "", fmt.Errorf("scan event stream: %w", readErr)
+		}
+		if errors.Is(readErr, errSSELineTruncated) {
+			fmt.Fprintf(stderr, "harnesscli: warning: SSE event line exceeded %d bytes; event skipped\n", maxSSELineSize)
+			lines = lines[:0]
+			continue
+		}
+
+		line = strings.TrimRight(line, "\r")
 		if line == "" {
 			if len(lines) == 0 {
 				continue
@@ -281,10 +347,6 @@ func streamRunEvents(ctx context.Context, client *http.Client, baseURL, runID st
 		lines = append(lines, line)
 	}
 
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("scan event stream: %w", err)
-	}
-
 	if len(lines) > 0 {
 		terminalEvent, done, processErr := processSSEBlock(strings.Join(lines, "\n"), out)
 		if processErr != nil {
@@ -296,6 +358,54 @@ func streamRunEvents(ctx context.Context, client *http.Client, baseURL, runID st
 	}
 
 	return "", fmt.Errorf("stream ended before terminal event")
+}
+
+// readSSELine reads a single line (delimited by '\n') from r, capping the
+// returned line at maxLine bytes. A line longer than maxLine is still fully
+// consumed from r so the stream stays aligned on line boundaries, but only
+// the first maxLine bytes are returned along with errSSELineTruncated so the
+// caller can warn and skip the corresponding SSE event instead of aborting
+// the whole stream (as bufio.Scanner's hard ErrTooLong would).
+func readSSELine(r *bufio.Reader, maxLine int) (string, error) {
+	var buf []byte
+	truncated := false
+	for {
+		chunk, err := r.ReadSlice('\n')
+		if len(chunk) > 0 {
+			if !truncated {
+				if len(buf)+len(chunk) > maxLine {
+					if room := maxLine - len(buf); room > 0 {
+						buf = append(buf, chunk[:room]...)
+					}
+					truncated = true
+				} else {
+					buf = append(buf, chunk...)
+				}
+			}
+		}
+		switch {
+		case err == nil:
+			// Found the delimiter.
+			line := strings.TrimSuffix(string(buf), "\n")
+			if truncated {
+				return line, errSSELineTruncated
+			}
+			return line, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			// No delimiter yet within the read buffer; keep reading.
+			continue
+		case errors.Is(err, io.EOF):
+			if len(buf) == 0 {
+				return "", io.EOF
+			}
+			if truncated {
+				return string(buf), errSSELineTruncated
+			}
+			return string(buf), nil
+		default:
+			return "", err
+		}
+	}
 }
 
 func processSSEBlock(raw string, out io.Writer) (string, bool, error) {
@@ -426,7 +536,7 @@ func listProfilesCmd(client *http.Client, baseURL string) int {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 	if err != nil {
 		fmt.Fprintf(stderr, "harnesscli: list-profiles: read response: %v\n", err)
 		return 1

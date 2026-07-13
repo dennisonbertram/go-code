@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -137,7 +140,24 @@ func loadConfig() (*harnessConfig, error) {
 	}
 	var cfg harnessConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
+		fmt.Fprintf(stderr, "harnesscli: warning: config at %s is corrupt and could not be parsed: %v\n", configPath(), err)
 		return nil, err
 	}
 	return &cfg, nil
+}
+
+// newAuthedRequest builds an HTTP request and, if a config file with an API
+// key is present, attaches it as a Bearer Authorization header. Config load
+// failures (missing or corrupt config) are treated as "no credentials
+// available" — the request is still returned unauthenticated so callers can
+// surface the server's own auth error rather than failing here.
+func newAuthedRequest(ctx context.Context, method, url string, body io.Reader) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if cfg, err := loadConfig(); err == nil && cfg != nil && cfg.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
+	}
+	return req, nil
 }

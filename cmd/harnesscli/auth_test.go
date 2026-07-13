@@ -152,3 +152,34 @@ func TestLoadConfigNotExist(t *testing.T) {
 		t.Fatalf("expected nil config for missing file, got: %+v", cfg)
 	}
 }
+
+func TestLoadConfig_CorruptFile_WarnsOnStderr(t *testing.T) {
+	origHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", origHome)
+	tmp := t.TempDir()
+	os.Setenv("HOME", tmp)
+
+	cfgDir := filepath.Join(tmp, ".harness")
+	if err := os.MkdirAll(cfgDir, 0o700); err != nil {
+		t.Fatalf("mkdir config dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "config.json"), []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("write corrupt config: %v", err)
+	}
+
+	origStderr := stderr
+	var errBuf bytes.Buffer
+	stderr = &errBuf
+	defer func() { stderr = origStderr }()
+
+	cfg, err := loadConfig()
+	if err == nil {
+		t.Fatal("expected an error for a corrupt config file")
+	}
+	if cfg != nil {
+		t.Fatalf("expected nil config on parse failure, got: %+v", cfg)
+	}
+	if !strings.Contains(errBuf.String(), "corrupt") {
+		t.Errorf("expected a clear corrupt-config warning on stderr, got: %q", errBuf.String())
+	}
+}
