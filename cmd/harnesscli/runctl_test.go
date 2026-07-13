@@ -245,6 +245,36 @@ func TestRunStatus_ShowsDetails(t *testing.T) {
 	}
 }
 
+// TestRunStatus_ResponseBodyIsBounded verifies that runStatus reads response
+// bodies through a bounded reader: with maxResponseBodyBytes shrunk below the
+// size of a valid response, decoding must fail instead of silently reading
+// the entire (in this test, still-small, but in principle attacker-huge) body.
+func TestRunStatus_ResponseBodyIsBounded(t *testing.T) {
+	orig := maxResponseBodyBytes
+	maxResponseBodyBytes = 10
+	defer func() { maxResponseBodyBytes = orig }()
+
+	runData := sampleRunJSON("run_detail", "completed", "gpt-4o", "write a report")
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(runData)
+	}))
+	defer ts.Close()
+
+	_, errBuf, restore := captureOutput(t)
+	defer restore()
+
+	origClient := requestHTTPClient
+	requestHTTPClient = ts.Client()
+	defer func() { requestHTTPClient = origClient }()
+
+	code := runStatus([]string{"-base-url=" + ts.URL, "run_detail"})
+	if code != 1 {
+		t.Fatalf("expected exit code 1 when the body is truncated below a decodable size, got %d (stderr=%s)", code, errBuf.String())
+	}
+}
+
 // --- BT-008: status 404 says not found ---
 
 func TestRunStatus_NotFound(t *testing.T) {

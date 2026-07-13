@@ -87,7 +87,7 @@ func runList(args []string) int {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 	if err != nil {
 		fmt.Fprintf(stderr, "harnesscli list: read response: %v\n", err)
 		return 1
@@ -149,7 +149,7 @@ func runCancel(args []string) int {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 	if err != nil {
 		fmt.Fprintf(stderr, "harnesscli cancel: read response: %v\n", err)
 		return 1
@@ -205,7 +205,7 @@ func runStatus(args []string) int {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 	if err != nil {
 		fmt.Fprintf(stderr, "harnesscli status: read response: %v\n", err)
 		return 1
@@ -298,7 +298,7 @@ func runContinue(args []string) int {
 	}
 	defer resp.Body.Close()
 
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 	if err != nil {
 		fmt.Fprintf(stderr, "harnesscli continue: read response: %v\n", err)
 		return 1
@@ -379,7 +379,7 @@ func runReplay(args []string) int {
 	}
 	defer resp.Body.Close()
 
-	responseBody, err := io.ReadAll(resp.Body)
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 	if err != nil {
 		fmt.Fprintf(stderr, "harnesscli replay: read response: %v\n", err)
 		return 1
@@ -436,7 +436,7 @@ func runSearch(args []string) int {
 		return 1
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 	if err != nil {
 		fmt.Fprintf(stderr, "harnesscli search: read response: %v\n", err)
 		return 1

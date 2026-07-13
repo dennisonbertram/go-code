@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,7 +52,11 @@ type cliAskOption struct {
 func handleAskUserQuestion(baseURL, runID string, in io.Reader, out io.Writer) error {
 	// Step 1: GET /v1/runs/{id}/input
 	getURL := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/input"
-	resp, err := cliHTTPClient.Get(getURL)
+	getReq, err := newAuthedRequest(context.Background(), http.MethodGet, getURL, nil)
+	if err != nil {
+		return fmt.Errorf("build pending input request: %w", err)
+	}
+	resp, err := cliHTTPClient.Do(getReq)
 	if err != nil {
 		return fmt.Errorf("fetch pending input: %w", err)
 	}
@@ -108,7 +113,12 @@ func handleAskUserQuestion(baseURL, runID string, in io.Reader, out io.Writer) e
 	postURL := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/input"
 	payload := map[string]interface{}{"answers": answers}
 	body, _ := json.Marshal(payload)
-	postResp, err := cliHTTPClient.Post(postURL, "application/json", bytes.NewReader(body))
+	postReq, err := newAuthedRequest(context.Background(), http.MethodPost, postURL, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("build submit answers request: %w", err)
+	}
+	postReq.Header.Set("Content-Type", "application/json")
+	postResp, err := cliHTTPClient.Do(postReq)
 	if err != nil {
 		return fmt.Errorf("submit answers: %w", err)
 	}

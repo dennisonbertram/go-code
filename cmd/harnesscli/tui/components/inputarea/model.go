@@ -159,7 +159,7 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyEnter:
-		if m.value == "" {
+		if strings.TrimSpace(m.value) == "" {
 			return m, nil
 		}
 		submitted := m.value
