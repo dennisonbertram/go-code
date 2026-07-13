@@ -315,6 +315,15 @@ type Model struct {
 }
 
 // New creates a new root Model.
+// spinnerSeed returns the spinner verb seed: the configured value when non-zero
+// (deterministic, used by tests), otherwise a time-based seed for variety.
+func spinnerSeed(cfg TUIConfig) int64 {
+	if cfg.SpinnerSeed != 0 {
+		return cfg.SpinnerSeed
+	}
+	return time.Now().UnixNano()
+}
+
 func New(cfg TUIConfig) Model {
 	m := Model{
 		config:          cfg,
@@ -323,7 +332,7 @@ func New(cfg TUIConfig) Model {
 		contextGrid:     contextgrid.New(),
 		statsPanel:      statspanel.New(nil),
 		costDisplay:     costdisplay.New(),
-		spinner:         spinner.New(time.Now().UnixNano()),
+		spinner:         spinner.New(spinnerSeed(cfg)),
 		thinkingBar:     thinkingbar.New(),
 		interruptBanner: interruptui.New(),
 		selectedModel:   cfg.Model,
@@ -2594,7 +2603,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.RunID = msg.RunID
 		m.runActive = true
 		m.clearThinkingBar()
-		m.spinner = spinner.New(time.Now().UnixNano()).Start()
+		m.spinner = spinner.New(spinnerSeed(m.config)).Start()
 		cmds = append(cmds, spinnerTickCmd())
 		// The harness auto-assigns conversation_id = run_id when none is
 		// supplied. Record this as the conversationID for subsequent turns so
