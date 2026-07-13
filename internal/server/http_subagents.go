@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +12,36 @@ import (
 	"go-agent-harness/internal/store"
 	"go-agent-harness/internal/subagents"
 )
+
+// subagentTenantMismatch reports whether the given subagent's stored tenant
+// differs from the caller's authenticated tenant. Mirrors runTenantMismatch
+// (http_runs.go): no-ops when auth is disabled or no run store is configured,
+// and normalizes "" to "default" so untenanted records and the default tenant
+// compare equal.
+func (s *Server) subagentTenantMismatch(r *http.Request, subagentTenantID string) bool {
+	if s.authDisabled || s.runStore == nil {
+		return false
+	}
+	caller := normalizeTenant(TenantIDFromContext(r.Context()))
+	return normalizeTenant(subagentTenantID) != caller
+}
+
+// filterSubagentsByTenant restricts a subagent list to the caller's own
+// tenant. When auth is disabled or no run store is configured, the list is
+// returned unfiltered, preserving prior behavior.
+func (s *Server) filterSubagentsByTenant(r *http.Request, items []subagents.Subagent) []subagents.Subagent {
+	if s.authDisabled || s.runStore == nil {
+		return items
+	}
+	caller := normalizeTenant(TenantIDFromContext(r.Context()))
+	filtered := make([]subagents.Subagent, 0, len(items))
+	for _, item := range items {
+		if normalizeTenant(item.TenantID) == caller {
+			filtered = append(filtered, item)
+		}
+	}
+	return filtered
+}
 
 func (s *Server) handleSubagents(w http.ResponseWriter, r *http.Request) {
 	if s.subagentManager == nil {
@@ -30,6 +61,7 @@ func (s *Server) handleSubagents(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "list_failed", err.Error())
 			return
 		}
+		items = s.filterSubagentsByTenant(r, items)
 		writeJSON(w, http.StatusOK, map[string]any{"subagents": items})
 	case http.MethodPost:
 		// POST /v1/subagents — requires runs:write
@@ -42,6 +74,14 @@ func (s *Server) handleSubagents(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
 			return
 		}
+		// Enforce tenant isolation: derive the effective tenant from the auth
+		// context, mirroring handlePostRun (http_runs.go).
+		effective, err := s.effectiveTenantID(r, req.TenantID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		req.TenantID = effective
 		item, err := s.subagentManager.Create(r.Context(), req)
 		if err != nil {
 			switch {
@@ -106,6 +146,10 @@ func (s *Server) handleSubagentByID(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
 			return
 		}
+		if s.subagentTenantMismatch(r, item.TenantID) {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("subagent %q not found", id))
+			return
+		}
 		writeJSON(w, http.StatusOK, item)
 	case http.MethodDelete:
 		// DELETE /v1/subagents/{id} — requires runs:write
@@ -113,7 +157,20 @@ func (s *Server) handleSubagentByID(w http.ResponseWriter, r *http.Request) {
 			writeScopeError(w, store.ScopeRunsWrite)
 			return
 		}
-		err := s.subagentManager.Delete(r.Context(), id)
+		item, err := s.subagentManager.Get(r.Context(), id)
+		if err != nil {
+			if errors.Is(err, subagents.ErrNotFound) {
+				writeError(w, http.StatusNotFound, "not_found", err.Error())
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
+			return
+		}
+		if s.subagentTenantMismatch(r, item.TenantID) {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("subagent %q not found", id))
+			return
+		}
+		err = s.subagentManager.Delete(r.Context(), id)
 		if err != nil {
 			switch {
 			case errors.Is(err, subagents.ErrNotFound):
@@ -160,6 +217,10 @@ func (s *Server) handleSubagentWait(w http.ResponseWriter, r *http.Request, suba
 				writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
 				return
 			}
+			if s.subagentTenantMismatch(r, item.TenantID) {
+				writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("subagent %q not found", subagentID))
+				return
+			}
 			if item.Status == harness.RunStatusCompleted || item.Status == harness.RunStatusFailed || item.Status == harness.RunStatusCancelled {
 				writeJSON(w, http.StatusOK, item)
 				return
@@ -171,6 +232,19 @@ func (s *Server) handleSubagentWait(w http.ResponseWriter, r *http.Request, suba
 func (s *Server) handleSubagentCancel(w http.ResponseWriter, r *http.Request, subagentID string) {
 	if r.Method != http.MethodPost {
 		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+	item, err := s.subagentManager.Get(r.Context(), subagentID)
+	if err != nil {
+		if errors.Is(err, subagents.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "get_failed", err.Error())
+		return
+	}
+	if s.subagentTenantMismatch(r, item.TenantID) {
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("subagent %q not found", subagentID))
 		return
 	}
 	if err := s.subagentManager.Cancel(r.Context(), subagentID); err != nil {

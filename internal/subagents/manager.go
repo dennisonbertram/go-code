@@ -38,6 +38,7 @@ var (
 )
 
 type Request struct {
+	TenantID      string `json:"tenant_id,omitempty"`
 	Prompt        string `json:"prompt,omitempty"`
 	Skill         string `json:"skill,omitempty"`
 	SkillArgs     string `json:"skill_args,omitempty"`
@@ -46,22 +47,23 @@ type Request struct {
 	AllowFallback bool   `json:"allow_fallback,omitempty"`
 	// SystemPrompt overrides the runner's default system prompt for this subagent run.
 	// When non-empty, it is forwarded to RunRequest.SystemPrompt.
-	SystemPrompt    string                    `json:"system_prompt,omitempty"`
-	MaxSteps        int                       `json:"max_steps,omitempty"`
-	MaxCostUSD      float64                   `json:"max_cost_usd,omitempty"`
-	ReasoningEffort string                    `json:"reasoning_effort,omitempty"`
-	AllowedTools    []string                  `json:"allowed_tools,omitempty"`
-	ProfileName     string                    `json:"profile,omitempty"`
-	Permissions     *harness.PermissionConfig `json:"permissions,omitempty"`
-	Isolation       IsolationMode             `json:"isolation,omitempty"`
-	CleanupPolicy   CleanupPolicy             `json:"cleanup_policy,omitempty"`
-	WorktreeRoot    string                    `json:"worktree_root,omitempty"`
-	BaseRef         string                    `json:"base_ref,omitempty"`
+	SystemPrompt         string                      `json:"system_prompt,omitempty"`
+	MaxSteps             int                         `json:"max_steps,omitempty"`
+	MaxCostUSD           float64                     `json:"max_cost_usd,omitempty"`
+	ReasoningEffort      string                      `json:"reasoning_effort,omitempty"`
+	AllowedTools         []string                    `json:"allowed_tools,omitempty"`
+	ProfileName          string                      `json:"profile,omitempty"`
+	Permissions          *harness.PermissionConfig   `json:"permissions,omitempty"`
+	Isolation            IsolationMode               `json:"isolation,omitempty"`
+	CleanupPolicy        CleanupPolicy               `json:"cleanup_policy,omitempty"`
+	WorktreeRoot         string                      `json:"worktree_root,omitempty"`
+	BaseRef              string                      `json:"base_ref,omitempty"`
 	ParentContextHandoff *tools.ParentContextHandoff `json:"parent_context_handoff,omitempty"`
 }
 
 type Subagent struct {
 	ID               string            `json:"id"`
+	TenantID         string            `json:"tenant_id,omitempty"`
 	RunID            string            `json:"run_id"`
 	Status           harness.RunStatus `json:"status"`
 	Isolation        IsolationMode     `json:"isolation"`
@@ -205,6 +207,7 @@ func (m *manager) Create(ctx context.Context, req Request) (Subagent, error) {
 	managed := &managedSubagent{
 		Subagent: Subagent{
 			ID:            id,
+			TenantID:      strings.TrimSpace(req.TenantID),
 			Isolation:     isolation,
 			CleanupPolicy: cleanupPolicy,
 			Status:        harness.RunStatusQueued,

@@ -124,14 +124,19 @@ func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// POST /v1/conversations/cleanup — retention-based bulk delete (runs:write) (Issue #34)
+	// POST /v1/conversations/cleanup — retention-based bulk delete (admin) (Issue #34)
+	//
+	// Gated to admin scope rather than runs:write: DeleteOldConversations has no
+	// tenant parameter (internal/harness/conversation_store.go), so this endpoint
+	// deletes across ALL tenants. Restricting to admin is the safe interim until
+	// the store interface gains a tenant-scoped variant.
 	if len(parts) == 1 && parts[0] == "cleanup" {
 		if r.Method != http.MethodPost {
 			writeMethodNotAllowed(w, http.MethodPost)
 			return
 		}
-		if !hasScope(r.Context(), store.ScopeRunsWrite) {
-			writeScopeError(w, store.ScopeRunsWrite)
+		if !hasScope(r.Context(), store.ScopeAdmin) {
+			writeScopeError(w, store.ScopeAdmin)
 			return
 		}
 		s.handleConversationsCleanup(w, r)
