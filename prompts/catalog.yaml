@@ -1,10 +1,15 @@
 version: 1
 defaults:
-  intent: general
+  # Empty = base prompt only (no intent overlay). Overlays are opt-in and
+  # selected explicitly per run (RunRequest.AgentIntent) or by a launcher
+  # (HARNESS_DEFAULT_AGENT_INTENT).
+  intent: ""
   model_profile: default
 intents:
-  general: intents/general.md
-  interactive: intents/interactive.md
+  # Headless/autonomous overlay for the benchmark harness, cloud, and cron.
+  autonomous: intents/autonomous.md
+  # Back-compat alias: older callers may still name "general".
+  general: intents/autonomous.md
   code_review: intents/code_review.md
   frontend_design: intents/frontend_design.md
 model_profiles:

@@ -14,11 +14,16 @@ func (e *FileEngine) Resolve(req ResolveRequest) (ResolvedPrompt, error) {
 		intent = strings.TrimSpace(req.DefaultAgentIntent)
 	}
 	if intent == "" {
-		intent = e.defaults.intent
+		intent = strings.TrimSpace(e.defaults.intent)
 	}
-	intentPrompt, ok := e.intents[intent]
-	if !ok {
-		return ResolvedPrompt{}, invalid("agent_intent", intent, "intent not found")
+	// A blank intent means "base prompt only" — no intent overlay is applied.
+	var intentPrompt string
+	if intent != "" {
+		p, ok := e.intents[intent]
+		if !ok {
+			return ResolvedPrompt{}, invalid("agent_intent", intent, "intent not found")
+		}
+		intentPrompt = p
 	}
 
 	profileName, modelFallback, err := e.resolveModelProfile(req.Model, req.PromptProfile)

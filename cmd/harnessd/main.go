@@ -357,7 +357,9 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		}
 	}
 	systemPrompt := envOrDefault("HARNESS_SYSTEM_PROMPT", defaultSystemPrompt)
-	defaultAgentIntent := envOrDefault("HARNESS_DEFAULT_AGENT_INTENT", "general")
+	// Default to no intent overlay (base prompt only). Headless launchers
+	// (benchmark, cloud, cron) opt into "autonomous" explicitly via this env var.
+	defaultAgentIntent := envOrDefault("HARNESS_DEFAULT_AGENT_INTENT", "")
 	promptsDir := strings.TrimSpace(envOrDefault("HARNESS_PROMPTS_DIR", findDefaultPromptsDir()))
 	askUserTimeoutSeconds := envIntOrDefault("HARNESS_ASK_USER_TIMEOUT_SECONDS", 300)
 	approvalMode := envToolApprovalModeOrDefault("HARNESS_TOOL_APPROVAL_MODE", harness.ToolApprovalModeFullAuto)

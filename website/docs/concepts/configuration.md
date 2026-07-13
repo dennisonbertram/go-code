@@ -167,7 +167,7 @@ Invalid `HARNESS_*` values fail silently. Always verify your environment after a
 | `HARNESS_MAX_COST_PER_RUN_USD` | `cost.max_per_run_usd` | `0.0` (unlimited) | Per-run cost ceiling in USD |
 | `HARNESS_WORKSPACE` | — | `.` | Workspace root; controls project config and DB paths |
 | `HARNESS_SYSTEM_PROMPT` | — | built-in coding prompt | System prompt text for all runs |
-| `HARNESS_DEFAULT_AGENT_INTENT` | — | `general` | Startup intent for prompt routing |
+| `HARNESS_DEFAULT_AGENT_INTENT` | — | *(empty)* | Startup prompt overlay. Empty = base prompt only (the default). Set to `autonomous` for headless/benchmark runs, or a task overlay like `code_review`. |
 | `HARNESS_TOOL_APPROVAL_MODE` | — | `full_auto` | `full_auto` or `permissions` |
 | `HARNESS_ASK_USER_TIMEOUT_SECONDS` | — | `300` | Timeout in seconds for ask-user checkpoints |
 | `HARNESS_PROVIDER` | — | — | Set to `fake` for key-free deterministic smoke |

@@ -171,17 +171,18 @@ func validateCatalog(cfg catalog) error {
 	if cfg.Version != 1 {
 		return invalid("catalog.version", fmt.Sprintf("%d", cfg.Version), "expected version 1")
 	}
-	if isBlank(cfg.Defaults.Intent) {
-		return invalid("catalog.defaults.intent", "", "value is required")
-	}
 	if isBlank(cfg.Defaults.ModelProfile) {
 		return invalid("catalog.defaults.model_profile", "", "value is required")
 	}
 	if len(cfg.Intents) == 0 {
 		return invalid("catalog.intents", "", "at least one intent is required")
 	}
-	if _, ok := cfg.Intents[cfg.Defaults.Intent]; !ok {
-		return invalid("catalog.defaults.intent", cfg.Defaults.Intent, "intent not found in catalog.intents")
+	// A blank default intent is allowed and means "base prompt only, no overlay".
+	// A non-blank default must name a real intent.
+	if !isBlank(cfg.Defaults.Intent) {
+		if _, ok := cfg.Intents[cfg.Defaults.Intent]; !ok {
+			return invalid("catalog.defaults.intent", cfg.Defaults.Intent, "intent not found in catalog.intents")
+		}
 	}
 	if len(cfg.ModelProfiles) == 0 {
 		return invalid("catalog.model_profiles", "", "at least one model profile is required")
