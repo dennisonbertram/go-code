@@ -128,6 +128,9 @@ type ServerOptions struct {
 	// event stores). When provided, the /v1/relay control-plane endpoints are
 	// enabled.
 	RelayControl *relay.ControlPlane
+	// Tools is the optional registered tool catalog. When provided, GET /v1/tools
+	// enumerates the tools available to agent runs.
+	Tools toolCatalog
 	// RolloutDir is the configured root directory for JSONL rollout files. When
 	// set (and auth is enabled), POST /v1/runs/replay enforces two-part safety:
 	//  1. Read-safety containment: the caller-supplied rollout_path must resolve
@@ -185,6 +188,7 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		linearAdapter:     opts.LinearAdapter,
 		relayWorkerStore:  opts.RelayWorkerStore,
 		relayControl:      opts.RelayControl,
+		toolCatalog:       opts.Tools,
 		rolloutDir:        opts.RolloutDir,
 		maxBodyBytes:      opts.MaxRequestBodyBytes,
 		replayBodyBytes:   opts.ReplayMaxRequestBodyBytes,
@@ -311,6 +315,9 @@ func (s *Server) buildMux() http.Handler {
 	mux.Handle("/v1/relay/operator/workers", auth(http.HandlerFunc(s.handleRelayOperatorWorkers)))
 	mux.Handle("/v1/relay/capabilities/", auth(http.HandlerFunc(s.handleRelayCapabilitiesByWorker)))
 
+	// /v1/tools — enumerate the registered tool catalog (runs:read).
+	mux.Handle("/v1/tools", auth(http.HandlerFunc(s.handleTools)))
+
 	return s.hardenHandler(mux)
 }
 
@@ -385,6 +392,8 @@ type Server struct {
 	// relayControl is the optional self-contained relay control plane enabling
 	// the /v1/relay placement, contract, policy, capability, and operator routes.
 	relayControl *relay.ControlPlane
+	// toolCatalog is the optional registered tool catalog for GET /v1/tools.
+	toolCatalog toolCatalog
 	// rolloutDir is the configured root directory for JSONL rollout files. When
 	// set (and auth is enabled), POST /v1/runs/replay enforces read-safety
 	// containment (rollout_path must resolve under this dir after symlink

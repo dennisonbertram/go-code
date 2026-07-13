@@ -184,6 +184,7 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		runStore:         opts.runStore,
 		relayWorkerStore: opts.relayWorkerStore,
 		relayControl:     opts.relayControl,
+		tools:            opts.tools,
 		todos:            opts.todos,
 		triggers:         opts.triggers,
 		rolloutDir:       opts.runnerCfg.RolloutDir,
