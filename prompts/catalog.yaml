@@ -4,6 +4,7 @@ defaults:
   model_profile: default
 intents:
   general: intents/general.md
+  interactive: intents/interactive.md
   code_review: intents/code_review.md
   frontend_design: intents/frontend_design.md
 model_profiles:
