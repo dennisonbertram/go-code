@@ -282,6 +282,10 @@ type Model struct {
 	// askUser.active is true when the overlay is shown.
 	askUser askUserState
 
+	// toolApproval holds the state for an in-progress tool-approval decision.
+	// toolApproval.active is true when the overlay is shown.
+	toolApproval toolApprovalState
+
 	// planOverlay is the plan mode overlay component (immutable value semantics).
 	// It is visible when planOverlay.IsVisible() returns true.
 	planOverlay planoverlay.Model
@@ -640,6 +644,27 @@ func (m Model) AskUserQuestions() []AskUserQuestion {
 // question (for testing).
 func (m Model) AskUserSelectedIdx() int {
 	return m.askUser.selectedIdx
+}
+
+// ToolApprovalActive returns true when the tool-approval overlay is active (for testing).
+func (m Model) ToolApprovalActive() bool {
+	return m.toolApproval.active
+}
+
+// ToolApprovalTool returns the name of the tool pending approval (for testing).
+func (m Model) ToolApprovalTool() string {
+	return m.toolApproval.tool
+}
+
+// ToolApprovalCallID returns the call ID of the tool call pending approval (for testing).
+func (m Model) ToolApprovalCallID() string {
+	return m.toolApproval.callID
+}
+
+// ToolApprovalArguments returns the formatted argument summary for the tool call
+// pending approval (for testing).
+func (m Model) ToolApprovalArguments() string {
+	return m.toolApproval.arguments
 }
 
 // LastAssistantText returns the accumulated assistant text for the current run (for testing).
@@ -1552,6 +1577,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.askUser.active {
 			newState, cmd := m.handleAskUserKey(msg)
 			m.askUser = newState
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
+		// Tool-approval overlay takes the same key priority as ask-user.
+		if m.toolApproval.active {
+			newState, cmd := m.handleToolApprovalKey(msg)
+			m.toolApproval = newState
 			if cmd != nil {
 				cmds = append(cmds, cmd)
 			}
@@ -2585,6 +2619,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.handleToolResult(p.CallID, p.Output, p.DurationMS)
 				}
 			}
+		case "tool.approval_required":
+			var p struct {
+				CallID     string          `json:"call_id"`
+				Tool       string          `json:"tool"`
+				Arguments  json.RawMessage `json:"arguments"`
+				DeadlineAt string          `json:"deadline_at"`
+			}
+			if err := json.Unmarshal(msg.Raw, &p); err == nil {
+				var deadline time.Time
+				if p.DeadlineAt != "" {
+					deadline, _ = time.Parse(time.RFC3339, p.DeadlineAt)
+				}
+				m.toolApproval = toolApprovalState{
+					active:     true,
+					runID:      m.RunID,
+					callID:     p.CallID,
+					tool:       p.Tool,
+					arguments:  formatToolApprovalArguments(p.Arguments),
+					deadlineAt: deadline,
+				}
+			}
+		case "tool.approval_granted", "tool.approval_denied":
+			// The decision has already been recorded server-side (e.g. from
+			// another client); make sure the overlay does not linger.
+			m.toolApproval = toolApprovalState{}
 		case "usage.delta":
 			var p struct {
 				CumulativeUsage struct {
@@ -2708,6 +2767,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case AskUserSubmitErrorMsg:
 		// Submission failed — show error in status bar.
 		cmds = append(cmds, m.setStatusMsg("ask user: "+msg.Err))
+
+	case ToolApprovalDecidedMsg:
+		// Decision accepted by the server — overlay already dismissed on keypress.
+		_ = msg
+
+	case ToolApprovalErrorMsg:
+		// Approve/deny request failed — show error in status bar rather than
+		// leaving the run hanging silently.
+		cmds = append(cmds, m.setStatusMsg("tool approval: "+msg.Err))
 
 	case AskUserTimeoutMsg:
 		// Deadline passed — dismiss overlay only if this timeout matches the
@@ -2931,6 +2999,14 @@ func (m Model) View() string {
 	if m.askUser.active {
 		// Ask-user overlay takes priority over all other content.
 		overlayLines := m.renderAskUserOverlay()
+		if len(overlayLines) > 0 {
+			mainContent = m.vp.View() + "\n" + strings.Join(overlayLines, "\n")
+		} else {
+			mainContent = m.vp.View()
+		}
+	} else if m.toolApproval.active {
+		// Tool-approval overlay takes the same priority as ask-user.
+		overlayLines := m.renderToolApprovalOverlay()
 		if len(overlayLines) > 0 {
 			mainContent = m.vp.View() + "\n" + strings.Join(overlayLines, "\n")
 		} else {
