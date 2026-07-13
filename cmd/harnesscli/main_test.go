@@ -183,7 +183,7 @@ func TestRunCreatesAndStreamsToCompletion(t *testing.T) {
 }
 
 func TestNewTUIConfigIncludesWorkspace(t *testing.T) {
-	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project")
+	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "")
 	if cfg.BaseURL != "http://127.0.0.1:8080" {
 		t.Fatalf("BaseURL = %q", cfg.BaseURL)
 	}
@@ -192,6 +192,16 @@ func TestNewTUIConfigIncludesWorkspace(t *testing.T) {
 	}
 	if !cfg.EnableTUI {
 		t.Fatal("EnableTUI = false, want true")
+	}
+	if cfg.ResumeConversationID != "" {
+		t.Fatalf("ResumeConversationID = %q, want empty when not resuming", cfg.ResumeConversationID)
+	}
+}
+
+func TestNewTUIConfigIncludesResumeConversationID(t *testing.T) {
+	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "conv-resume-42")
+	if cfg.ResumeConversationID != "conv-resume-42" {
+		t.Fatalf("ResumeConversationID = %q, want %q", cfg.ResumeConversationID, "conv-resume-42")
 	}
 }
 

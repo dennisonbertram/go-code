@@ -17,10 +17,10 @@
                                                                                 
                                                                                 
 ────────────────────────────────────────────────────────────────────────────────
-✶ Processing... (esc to interrupt)
+✶ Synthesizing... (esc to interrupt)
              ╭───────────────────────────────────────────────────╮              
              │ ⚠  Press Ctrl+C again to stop, or Esc to continue │              
              ╰───────────────────────────────────────────────────╯              
 ❯  
 ────────────────────────────────────────────────────────────────────────────────
-Press ctrl+c again to interrupt
+Press ctrl+c again to interrupt (esc to keep going)

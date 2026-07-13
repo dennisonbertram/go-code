@@ -13,7 +13,7 @@ func TestRunTUIRequiresTerminal(t *testing.T) {
 		t.Skip("stdout is a terminal in this environment")
 	}
 
-	err := runTUI("http://localhost:8080", "/tmp/project")
+	err := runTUI("http://localhost:8080", "/tmp/project", "")
 	if err == nil {
 		t.Fatal("expected non-terminal runTUI call to fail")
 	}

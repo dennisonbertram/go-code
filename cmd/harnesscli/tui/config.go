@@ -18,6 +18,10 @@ type TUIConfig struct {
 	ColorProfile string
 	// AltScreen uses the alternate screen buffer when true.
 	AltScreen bool
+	// ResumeConversationID, when non-empty, seeds the TUI's conversation ID at
+	// startup so the run history is loaded and new prompts continue the
+	// existing conversation instead of starting a new one.
+	ResumeConversationID string
 }
 
 // DefaultTUIConfig returns a TUIConfig with sensible defaults.

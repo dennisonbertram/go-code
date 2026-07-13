@@ -130,11 +130,11 @@ func TestTUI039_CancelNoRunIsNoOp(t *testing.T) {
 	}
 }
 
-// TestTUI039_SecondCtrlCSetsInterruptedStatus verifies statusMsg="Interrupted" after
-// the second ctrl+c completes the cancel.
+// TestTUI039_SecondCtrlCSetsInterruptedStatus verifies statusMsg reports the run
+// was interrupted after the second ctrl+c completes the cancel.
 //
 // Changed from original (which asserted "Interrupted" after the FIRST ctrl+c).
-// Now "Interrupted" only appears after the SECOND ctrl+c.
+// Now the interrupted status only appears after the SECOND ctrl+c.
 func TestTUI039_SecondCtrlCSetsInterruptedStatus(t *testing.T) {
 	m := tui.New(tui.DefaultTUIConfig())
 	m2, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
@@ -143,20 +143,20 @@ func TestTUI039_SecondCtrlCSetsInterruptedStatus(t *testing.T) {
 	m3 := m2.(tui.Model).WithCancelRun(cancelFn)
 	m4, _ := m3.Update(tui.RunStartedMsg{RunID: "run-001"})
 
-	// First ctrl+c: shows banner, status = "Press ctrl+c again to interrupt".
+	// First ctrl+c: shows banner, status = "Press ctrl+c again to interrupt...".
 	m5, _ := m4.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	afterFirst := m5.(tui.Model)
-	if afterFirst.StatusMsg() == "Interrupted" {
-		t.Error("StatusMsg must NOT be 'Interrupted' after only the first Ctrl+C")
+	if strings.Contains(afterFirst.StatusMsg(), "Run interrupted") {
+		t.Error("StatusMsg must NOT report the run as interrupted after only the first Ctrl+C")
 	}
 
-	// Second ctrl+c: cancels, status = "Interrupted".
+	// Second ctrl+c: cancels, status reports the run was interrupted.
 	m6, _ := m5.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	model := m6.(tui.Model)
 
 	statusMsg := model.StatusMsg()
-	if statusMsg != "Interrupted" {
-		t.Errorf("statusMsg must be 'Interrupted' after second ctrl+c cancel, got: %q", statusMsg)
+	if !strings.Contains(statusMsg, "Run interrupted") {
+		t.Errorf("statusMsg must report the run as interrupted after second ctrl+c cancel, got: %q", statusMsg)
 	}
 }
 
@@ -297,10 +297,10 @@ func TestTUI039_VisualSnapshot_80x24(t *testing.T) {
 		t.Errorf("banner snapshot must contain ctrl+c hint, got:\n%s", bannerOutput)
 	}
 
-	// Snapshot 2: after second ctrl+c — "Interrupted" status.
+	// Snapshot 2: after second ctrl+c — interrupted status.
 	interruptedOutput := interruptedModel.View()
-	if !strings.Contains(interruptedOutput, "Interrupted") {
-		t.Errorf("interrupted snapshot must contain 'Interrupted', got:\n%s", interruptedOutput)
+	if !strings.Contains(interruptedOutput, "interrupted") {
+		t.Errorf("interrupted snapshot must contain 'interrupted', got:\n%s", interruptedOutput)
 	}
 }
 

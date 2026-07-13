@@ -7,6 +7,7 @@ set -euo pipefail
 #   go-code                  Launch the interactive TUI (default).
 #   go-code "prompt"         Run a single prompt, stream output, then exit.
 #   go-code --server         Start harnessd in the background and print its URL.
+#   go-code --resume <id>    Resume a conversation in the interactive TUI.
 #   go-code runs             List known runs.
 #   go-code show <run-id>    Show one run.
 #   go-code cancel <run-id>  Cancel one run.
@@ -35,6 +36,7 @@ Usage:
   go-code "your prompt"    Run a single prompt, stream output, then exit.
   go-code --server         Start harnessd in the background, print the URL,
                            and exit. The server keeps running until killed.
+  go-code --resume <id>    Resume a conversation in the interactive TUI.
   go-code runs             List known runs.
   go-code show <run-id>    Show one run.
   go-code cancel <run-id>  Cancel one run.
@@ -240,6 +242,7 @@ main() {
   local prompt=""
   local cli_command=""
   local -a cli_args=()
+  local resume_id=""
 
   # Parse arguments.
   case "${1:-}" in
@@ -248,6 +251,13 @@ main() {
       ;;
     --tui)
       mode="tui"
+      ;;
+    --resume)
+      if [[ -z "${2:-}" ]]; then
+        die "--resume requires a conversation id, e.g. go-code --resume <conversation-id>"
+      fi
+      mode="tui"
+      resume_id="$2"
       ;;
     --help|-h|help)
       usage
@@ -370,7 +380,11 @@ main() {
       if [[ "$STARTED_BY_US" -eq 1 ]]; then
         trap stop_server EXIT
       fi
-      harnesscli -base-url "$base_url" -workspace "$project_root" --tui
+      if [[ -n "$resume_id" ]]; then
+        harnesscli -base-url "$base_url" -workspace "$project_root" --tui -resume "$resume_id"
+      else
+        harnesscli -base-url "$base_url" -workspace "$project_root" --tui
+      fi
       ;;
     prompt)
       if [[ "$STARTED_BY_US" -eq 1 ]]; then
