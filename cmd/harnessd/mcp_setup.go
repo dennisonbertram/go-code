@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	htools "go-agent-harness/internal/harness/tools"
 	"go-agent-harness/internal/config"
+	htools "go-agent-harness/internal/harness/tools"
 	"go-agent-harness/internal/mcp"
 )
 
@@ -46,14 +46,29 @@ func (r *clientManagerRegistry) CallTool(ctx context.Context, server, tool strin
 	return r.cm.ExecuteTool(ctx, server, tool, args)
 }
 
-// ListResources returns an empty list — ClientManager does not support MCP resources.
-func (r *clientManagerRegistry) ListResources(_ context.Context, _ string) ([]htools.MCPResource, error) {
-	return nil, nil
+// ListResources returns the resources advertised by the named MCP server.
+func (r *clientManagerRegistry) ListResources(ctx context.Context, server string) ([]htools.MCPResource, error) {
+	defs, err := r.cm.ListResources(ctx, server)
+	if err != nil {
+		return nil, fmt.Errorf("list resources from MCP server %q: %w", server, err)
+	}
+	resources := make([]htools.MCPResource, 0, len(defs))
+	for _, d := range defs {
+		resources = append(resources, htools.MCPResource{
+			URI:  d.URI,
+			Name: d.Name,
+		})
+	}
+	return resources, nil
 }
 
-// ReadResource returns an error — ClientManager does not support MCP resources.
-func (r *clientManagerRegistry) ReadResource(_ context.Context, server, _ string) (string, error) {
-	return "", fmt.Errorf("MCP server %q does not support resources", server)
+// ReadResource reads the content of a resource by URI from the named MCP server.
+func (r *clientManagerRegistry) ReadResource(ctx context.Context, server, uri string) (string, error) {
+	content, err := r.cm.ReadResource(ctx, server, uri)
+	if err != nil {
+		return "", fmt.Errorf("read resource %q from MCP server %q: %w", uri, server, err)
+	}
+	return content, nil
 }
 
 // registerMCPServersFromConfig registers MCP servers from TOML config and env

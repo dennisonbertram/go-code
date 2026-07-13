@@ -143,6 +143,22 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeStatsCommand,
 		},
 		{
+			Name:        "cost",
+			Description: "Show running cost and token usage",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeCostCommand,
+		},
+		{
+			Name:        "config",
+			Description: "View current session configuration",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeConfigCommand,
+		},
+		{
 			Name:        "subagents",
 			Description: "View active subagent processes",
 			Handler: func(cmd Command) CommandResult {

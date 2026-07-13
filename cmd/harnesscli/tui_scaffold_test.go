@@ -11,7 +11,6 @@ import (
 	_ "go-agent-harness/cmd/harnesscli/tui/components/inputarea"
 	_ "go-agent-harness/cmd/harnesscli/tui/components/layout"
 	_ "go-agent-harness/cmd/harnesscli/tui/components/messagebubble"
-	_ "go-agent-harness/cmd/harnesscli/tui/components/permissionprompt"
 	_ "go-agent-harness/cmd/harnesscli/tui/components/slashcomplete"
 	_ "go-agent-harness/cmd/harnesscli/tui/components/statspanel"
 	_ "go-agent-harness/cmd/harnesscli/tui/components/statusbar"

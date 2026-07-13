@@ -263,7 +263,10 @@ func TestKeysOverlay_EnterWithInputEmitsSetMsg(t *testing.T) {
 
 // TestKeysCommand_InHelpList verifies /keys appears in /help output.
 func TestKeysCommand_InHelpList(t *testing.T) {
-	m := initModel(t, 80, 24)
+	// A taller window is needed so /keys is within the help dialog's first
+	// visible page now that /cost and /config have been added to the
+	// (alphabetically-earlier) command set.
+	m := initModel(t, 80, 30)
 	m = sendSlashCommand(m, "/help")
 
 	v := m.View()

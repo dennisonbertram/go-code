@@ -28,6 +28,14 @@ type ToolDef struct {
 	InputSchema json.RawMessage
 }
 
+// ResourceDef describes a resource exposed by an MCP server.
+type ResourceDef struct {
+	URI         string
+	Name        string
+	Description string
+	MimeType    string
+}
+
 // ServerConfig holds the configuration for a single MCP server connection.
 type ServerConfig struct {
 	// Name is the logical identifier for this server. Required, must be unique.
@@ -60,6 +68,19 @@ type Conn interface {
 
 	// Close releases resources associated with this connection.
 	Close() error
+}
+
+// ResourceCapableConn is an optional extension of Conn implemented by
+// connections that support the MCP resources capability (resources/list and
+// resources/read). Not every Conn implementation supports resources — callers
+// should type-assert and treat a failed assertion as "server does not support
+// resources" rather than an error.
+type ResourceCapableConn interface {
+	// ListResources queries the server for available resources.
+	ListResources(ctx context.Context) ([]ResourceDef, error)
+
+	// ReadResource reads the content of a resource by URI.
+	ReadResource(ctx context.Context, uri string) (string, error)
 }
 
 // ConnFactory is a function that creates a new Conn.
@@ -173,6 +194,36 @@ func (m *ClientManager) ExecuteTool(ctx context.Context, serverName, toolName st
 		return "", err
 	}
 	return conn.CallTool(ctx, toolName, args)
+}
+
+// ListResources connects to the named server if not already connected and
+// returns its resource list. If the server's connection does not support the
+// MCP resources capability, it returns a clean error.
+func (m *ClientManager) ListResources(ctx context.Context, serverName string) ([]ResourceDef, error) {
+	conn, err := m.getConn(ctx, serverName)
+	if err != nil {
+		return nil, err
+	}
+	rc, ok := conn.(ResourceCapableConn)
+	if !ok {
+		return nil, fmt.Errorf("mcp: server %q does not support resources", serverName)
+	}
+	return rc.ListResources(ctx)
+}
+
+// ReadResource connects to the named server if not already connected and
+// reads the resource at uri. If the server's connection does not support the
+// MCP resources capability, it returns a clean error.
+func (m *ClientManager) ReadResource(ctx context.Context, serverName, uri string) (string, error) {
+	conn, err := m.getConn(ctx, serverName)
+	if err != nil {
+		return "", err
+	}
+	rc, ok := conn.(ResourceCapableConn)
+	if !ok {
+		return "", fmt.Errorf("mcp: server %q does not support resources", serverName)
+	}
+	return rc.ReadResource(ctx, uri)
 }
 
 // Close closes all open server connections and releases resources.
@@ -577,6 +628,31 @@ func (c *stdioConn) CallTool(ctx context.Context, name string, args json.RawMess
 	return extractToolCallResult(raw)
 }
 
+// ListResources queries the server for its resource list.
+func (c *stdioConn) ListResources(ctx context.Context) ([]ResourceDef, error) {
+	raw, err := c.sendRequest(ctx, "resources/list", nil)
+	if err != nil {
+		if isMethodNotFoundError(err) {
+			return nil, fmt.Errorf("mcp: server %q does not support resources", c.name)
+		}
+		return nil, err
+	}
+	return parseResourcesListResult(raw)
+}
+
+// ReadResource reads a resource's content by URI.
+func (c *stdioConn) ReadResource(ctx context.Context, uri string) (string, error) {
+	params := map[string]any{"uri": uri}
+	raw, err := c.sendRequest(ctx, "resources/read", params)
+	if err != nil {
+		if isMethodNotFoundError(err) {
+			return "", fmt.Errorf("mcp: server %q does not support resources", c.name)
+		}
+		return "", err
+	}
+	return extractResourceReadResult(raw)
+}
+
 // extractToolCallResult extracts the text content from a tools/call result.
 func extractToolCallResult(raw json.RawMessage) (string, error) {
 	var result struct {
@@ -608,6 +684,76 @@ func extractToolCallResult(raw json.RawMessage) (string, error) {
 		return string(raw), nil
 	}
 	return sb.String(), nil
+}
+
+// parseResourcesListResult parses a "resources/list" JSON-RPC result into
+// ResourceDefs.
+func parseResourcesListResult(raw json.RawMessage) ([]ResourceDef, error) {
+	var result struct {
+		Resources []struct {
+			URI         string `json:"uri"`
+			Name        string `json:"name"`
+			Description string `json:"description"`
+			MimeType    string `json:"mimeType"`
+		} `json:"resources"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return nil, fmt.Errorf("mcp: parse resources/list response: %w", err)
+	}
+	out := make([]ResourceDef, 0, len(result.Resources))
+	for _, r := range result.Resources {
+		out = append(out, ResourceDef{
+			URI:         r.URI,
+			Name:        r.Name,
+			Description: r.Description,
+			MimeType:    r.MimeType,
+		})
+	}
+	return out, nil
+}
+
+// extractResourceReadResult extracts text content from a "resources/read"
+// result. Binary ("blob") contents are not decoded — a short descriptive note
+// is returned instead of raw base64/bytes.
+func extractResourceReadResult(raw json.RawMessage) (string, error) {
+	var result struct {
+		Contents []struct {
+			URI      string `json:"uri"`
+			MimeType string `json:"mimeType"`
+			Text     string `json:"text"`
+			Blob     string `json:"blob"`
+		} `json:"contents"`
+	}
+	if err := json.Unmarshal(raw, &result); err != nil {
+		return string(raw), nil
+	}
+	var parts []string
+	for _, cont := range result.Contents {
+		switch {
+		case cont.Text != "":
+			parts = append(parts, cont.Text)
+		case cont.Blob != "":
+			mt := cont.MimeType
+			if mt == "" {
+				mt = "application/octet-stream"
+			}
+			parts = append(parts, fmt.Sprintf("[binary content: %s, %d bytes base64-encoded]", mt, len(cont.Blob)))
+		}
+	}
+	if len(parts) == 0 {
+		return string(raw), nil
+	}
+	return strings.Join(parts, "\n"), nil
+}
+
+// isMethodNotFoundError checks if an error from sendRequest indicates a
+// JSON-RPC "method not found" error (code -32601), which means the server
+// does not implement the requested method (e.g. resources/list).
+func isMethodNotFoundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "code -32601")
 }
 
 // Close closes the connection and any underlying subprocess.
