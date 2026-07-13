@@ -385,6 +385,7 @@ type serverBootstrapOptions struct {
 	runStore         istore.Store
 	relayWorkerStore relay.WorkerStore
 	relayControl     *relay.ControlPlane
+	tools            *harness.Registry
 	todos            deferred.TodoManager
 	triggers         triggerRuntime
 	rolloutDir       string
@@ -407,6 +408,7 @@ func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
 		Store:            opts.runStore,
 		RelayWorkerStore: opts.relayWorkerStore,
 		RelayControl:     opts.relayControl,
+		Tools:            opts.tools,
 		Todos:            opts.todos,
 		Validators:       opts.triggers.validators,
 		GitHubAdapter:    opts.triggers.github,
