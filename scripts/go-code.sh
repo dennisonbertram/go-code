@@ -184,8 +184,15 @@ start_server() {
   local harnessd_bin
   harnessd_bin="$(command -v harnessd)"
 
+  # go-code is the local, interactive entry point: default the agent to the
+  # conversational "interactive" intent rather than the container/benchmark
+  # "general" intent (which assumes /app, Docker root, and task-completion
+  # framing). The benchmark harness invokes harnessd directly and is unaffected.
+  # An explicit HARNESS_DEFAULT_AGENT_INTENT always wins.
+  local intent="${HARNESS_DEFAULT_AGENT_INTENT:-interactive}"
+
   # Start in background, capturing the PID.
-  HARNESS_ADDR=":${port}" "$harnessd_bin" &
+  HARNESS_ADDR=":${port}" HARNESS_DEFAULT_AGENT_INTENT="${intent}" "$harnessd_bin" &
   local pid=$!
   PID_FILE="${TMPDIR:-/tmp}/harnessd.${$}.pid"
   echo "$pid" > "$PID_FILE"
