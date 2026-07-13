@@ -92,7 +92,8 @@ func (m *JobManager) runForeground(ctx context.Context, command string, timeoutS
 	if timeoutSeconds > 300 {
 		timeoutSeconds = 300
 	}
-	if err := CheckSandboxCommand(m.sandboxScopeForContext(ctx), m.root, command); err != nil {
+	scope := m.sandboxScopeForContext(ctx)
+	if err := CheckSandboxCommand(scope, m.root, command); err != nil {
 		return nil, err
 	}
 	workDir, err := resolveWorkingDir(m.root, workingDir)
@@ -103,7 +104,11 @@ func (m *JobManager) runForeground(ctx context.Context, command string, timeoutS
 	timeoutCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
-	cmd := exec.CommandContext(timeoutCtx, "/bin/bash", "-lc", command)
+	cmd, sandboxCleanup, sbResult, err := buildSandboxedCommand(timeoutCtx, scope, m.root, command)
+	if err != nil {
+		return nil, err
+	}
+	defer sandboxCleanup()
 	cmd.Dir = workDir
 
 	streamer, hasStreamer := OutputStreamerFromContext(ctx)
@@ -185,6 +190,12 @@ func (m *JobManager) runForeground(ctx context.Context, command string, timeoutS
 	if streamErr != nil {
 		result["stream_error"] = streamErr.Error()
 	}
+	if sbResult.Mechanism != "" {
+		result["sandbox_mechanism"] = sbResult.Mechanism
+	}
+	if sbResult.Warning != "" {
+		result["sandbox_warning"] = sbResult.Warning
+	}
 	return result, nil
 }
 
@@ -195,7 +206,8 @@ func (m *JobManager) runBackground(ctx context.Context, command string, timeoutS
 	if timeoutSeconds > 3600 {
 		timeoutSeconds = 3600
 	}
-	if err := CheckSandboxCommand(m.sandboxScopeForContext(ctx), m.root, command); err != nil {
+	scope := m.sandboxScopeForContext(ctx)
+	if err := CheckSandboxCommand(scope, m.root, command); err != nil {
 		return nil, err
 	}
 	workDir, err := resolveWorkingDir(m.root, workingDir)
@@ -230,11 +242,20 @@ func (m *JobManager) runBackground(ctx context.Context, command string, timeoutS
 	m.wg.Add(1)
 	m.mu.Unlock()
 
-	cmd := exec.CommandContext(ctx, "/bin/bash", "-lc", command)
+	cmd, sandboxCleanup, sbResult, err := buildSandboxedCommand(ctx, scope, m.root, command)
+	if err != nil {
+		cancel()
+		m.mu.Lock()
+		delete(m.jobs, id)
+		m.mu.Unlock()
+		m.wg.Done()
+		return nil, err
+	}
 	cmd.Dir = workDir
 	cmd.Stdout = job.stdout
 	cmd.Stderr = job.stderr
 	if err := cmd.Start(); err != nil {
+		sandboxCleanup()
 		cancel()
 		m.mu.Lock()
 		delete(m.jobs, id)
@@ -246,6 +267,7 @@ func (m *JobManager) runBackground(ctx context.Context, command string, timeoutS
 	go func() {
 		defer m.wg.Done()
 		err := cmd.Wait()
+		sandboxCleanup()
 		job.mu.Lock()
 		defer job.mu.Unlock()
 		if err != nil {
@@ -261,12 +283,19 @@ func (m *JobManager) runBackground(ctx context.Context, command string, timeoutS
 		job.done = true
 	}()
 
-	return map[string]any{
+	result := map[string]any{
 		"shell_id":    id,
 		"started":     true,
 		"command":     command,
 		"working_dir": NormalizeRelPath(m.root, workDir),
-	}, nil
+	}
+	if sbResult.Mechanism != "" {
+		result["sandbox_mechanism"] = sbResult.Mechanism
+	}
+	if sbResult.Warning != "" {
+		result["sandbox_warning"] = sbResult.Warning
+	}
+	return result, nil
 }
 
 func readStreamLine(reader *bufio.Reader, maxBytes int) (string, bool, error) {
