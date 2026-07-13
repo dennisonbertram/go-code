@@ -101,6 +101,10 @@ class HarnessInstalledAgent(BaseAgent):
             "ANTHROPIC_API_KEY": anthropic_key,
             "GOOGLE_API_KEY": google_key,
             "HARNESS_MODEL": model,
+            # The benchmark runs headless in a container: opt into the
+            # autonomous overlay (no user present, act and verify, /app task
+            # framing). harnessd's default is now the neutral base prompt.
+            "HARNESS_DEFAULT_AGENT_INTENT": "autonomous",
             "HARNESS_MAX_STEPS": "50",
             "HARNESS_PROMPTS_DIR": "/harness-agent/prompts",
             "HARNESS_ROLLOUT_DIR": "/harness-agent/rollouts",

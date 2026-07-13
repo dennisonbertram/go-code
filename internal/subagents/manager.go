@@ -47,7 +47,11 @@ type Request struct {
 	AllowFallback bool   `json:"allow_fallback,omitempty"`
 	// SystemPrompt overrides the runner's default system prompt for this subagent run.
 	// When non-empty, it is forwarded to RunRequest.SystemPrompt.
-	SystemPrompt         string                      `json:"system_prompt,omitempty"`
+	SystemPrompt string `json:"system_prompt,omitempty"`
+	// AgentIntent selects a named prompt overlay (e.g. "code_review",
+	// "autonomous") for this subagent, forwarded to RunRequest.AgentIntent.
+	// SystemPrompt (a full override) takes precedence over an intent overlay.
+	AgentIntent          string                      `json:"agent_intent,omitempty"`
 	MaxSteps             int                         `json:"max_steps,omitempty"`
 	MaxCostUSD           float64                     `json:"max_cost_usd,omitempty"`
 	ReasoningEffort      string                      `json:"reasoning_effort,omitempty"`
@@ -222,6 +226,7 @@ func (m *manager) Create(ctx context.Context, req Request) (Subagent, error) {
 		ProviderName:         strings.TrimSpace(req.ProviderName),
 		AllowFallback:        req.AllowFallback,
 		SystemPrompt:         strings.TrimSpace(req.SystemPrompt),
+		AgentIntent:          strings.TrimSpace(req.AgentIntent),
 		MaxSteps:             req.MaxSteps,
 		MaxCostUSD:           req.MaxCostUSD,
 		ReasoningEffort:      strings.TrimSpace(req.ReasoningEffort),

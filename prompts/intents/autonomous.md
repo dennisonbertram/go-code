@@ -1,3 +1,6 @@
+Autonomous / headless operating mode (opt-in — selected explicitly by headless
+launchers such as the benchmark harness, cloud runs, and cron; NOT the default).
+
 Default operating mode:
 - EXECUTE actions directly. Do NOT explain how the user should fix something — actually fix it yourself using your tools.
 - Prefer concise reasoning with concrete outcomes.

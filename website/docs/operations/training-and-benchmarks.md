@@ -248,7 +248,7 @@ pip install terminal-bench
 2. Packages the repo as a tar archive (excluding `.git`, `.tmp`, `node_modules`).
 3. Copies the archive and binaries into the task container.
 4. Starts `harnessd` in a tmux session at `http://127.0.0.1:8080`.
-5. Runs `harnesscli` with `-agent-intent=general` and `-task-context="Terminal Bench private smoke suite"`.
+5. Runs `harnesscli` with `-agent-intent=autonomous` and `-task-context="Terminal Bench private smoke suite"`.
 6. Fetches the run summary via `GET /v1/runs/{id}/summary`.
 7. Returns success only if `"terminal_event=run.completed"` appears in the terminal output.
 

@@ -30,7 +30,7 @@ These variables cover the fundamental harness runtime: address, model, cost limi
 | `HARNESS_MAX_COST_PER_RUN_USD` | `cost.max_per_run_usd` | `0.0` (unlimited) | Per-run cost ceiling in USD. `0` means no limit. |
 | `HARNESS_WORKSPACE` | — | `"."` | Workspace root directory. Determines where project TOML config and database files are found. |
 | `HARNESS_SYSTEM_PROMPT` | — | Built-in coding assistant prompt | Override the default system prompt text for all runs. |
-| `HARNESS_DEFAULT_AGENT_INTENT` | — | `"general"` | Startup intent used for prompt routing when no per-run intent is specified. |
+| `HARNESS_DEFAULT_AGENT_INTENT` | — | `""` | Default prompt overlay when no per-run intent is given. Empty means base prompt only. Set `autonomous` for headless/benchmark runs; `code_review`/`frontend_design` are task overlays. |
 | `HARNESS_PROMPTS_DIR` | — | Auto-detected (`prompts/catalog.yaml` walk from cwd) | Directory for the file-based system prompt engine. |
 | `HARNESS_TOOL_APPROVAL_MODE` | — | `"full_auto"` | Tool approval mode. Valid values: `"full_auto"` or `"permissions"`. |
 | `HARNESS_ASK_USER_TIMEOUT_SECONDS` | — | `300` | How long (in seconds) `harnessd` waits at an `ask_user` checkpoint before timing out. |

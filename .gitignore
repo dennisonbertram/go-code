@@ -57,3 +57,6 @@ training-reports/
 
 # Runtime artifacts
 transcript-*.md
+
+# Build artifacts
+build/

@@ -46,13 +46,13 @@ func (c *captureRunEngine) CancelRun(runID string) error {
 }
 
 type statefulRunEngine struct {
-	mu               sync.Mutex
-	lastReq          harness.RunRequest
-	status           harness.RunStatus
-	output           string
-	cancelled        bool
-	cancelCallCount  int
-	cancelledRunID   string
+	mu              sync.Mutex
+	lastReq         harness.RunRequest
+	status          harness.RunStatus
+	output          string
+	cancelled       bool
+	cancelCallCount int
+	cancelledRunID  string
 }
 
 func (s *statefulRunEngine) StartRun(req harness.RunRequest) (harness.Run, error) {
@@ -117,6 +117,27 @@ func TestRequestSystemPromptForwarded(t *testing.T) {
 
 	assert.Equal(t, "Be a helpful specialist.", engine.lastReq.SystemPrompt,
 		"SystemPrompt should be forwarded to RunRequest")
+}
+
+func TestRequestAgentIntentForwarded(t *testing.T) {
+	engine := &captureRunEngine{}
+
+	mgr, err := NewManager(Options{
+		InlineRunner: engine,
+	})
+	require.NoError(t, err)
+
+	req := Request{
+		Prompt:      "Review the diff",
+		AgentIntent: "code_review",
+		Isolation:   IsolationInline,
+	}
+
+	_, err = mgr.Create(context.Background(), req)
+	require.NoError(t, err)
+
+	assert.Equal(t, "code_review", engine.lastReq.AgentIntent,
+		"AgentIntent should be forwarded to RunRequest so a subagent can select a named overlay")
 }
 
 func TestRequestSystemPromptEmpty(t *testing.T) {
