@@ -6,8 +6,35 @@ import (
 	"testing"
 	"time"
 
+	"go-agent-harness/internal/goals"
 	htools "go-agent-harness/internal/harness/tools"
 )
+
+// TestGoalsToolRegistersWithManager verifies the goals tool is present exactly
+// when a GoalManager is wired: absent by default, registered when provided.
+func TestGoalsToolRegistersWithManager(t *testing.T) {
+	t.Parallel()
+
+	has := func(reg *Registry) bool {
+		for _, def := range reg.Definitions() {
+			if def.Name == "goals" {
+				return true
+			}
+		}
+		return false
+	}
+
+	if has(NewDefaultRegistry(t.TempDir())) {
+		t.Error("goals tool should not be registered without a GoalManager")
+	}
+
+	withMgr := NewDefaultRegistryWithOptions(t.TempDir(), DefaultRegistryOptions{
+		GoalManager: goals.NewManager(nil),
+	})
+	if !has(withMgr) {
+		t.Error("goals tool should be registered when a GoalManager is provided")
+	}
+}
 
 func TestDefaultRegistryToolContract(t *testing.T) {
 	t.Parallel()

@@ -23,6 +23,7 @@ import (
 	"go-agent-harness/internal/config"
 	"go-agent-harness/internal/cron"
 	"go-agent-harness/internal/fakeprovider"
+	"go-agent-harness/internal/goals"
 	"go-agent-harness/internal/harness"
 	htools "go-agent-harness/internal/harness/tools"
 	"go-agent-harness/internal/harness/tools/deferred"
@@ -700,6 +701,18 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		packRegistry = nil
 	}
 
+	// Goals: persistent, cross-session goal tracking (the goals tool). Backed by
+	// SQLite; on open failure NewManager falls back to an in-memory store so the
+	// tool still works within the process (non-persistent) rather than vanishing.
+	var goalStore goals.Store
+	if gs, gerr := goals.NewSQLiteStore(filepath.Join(globalDir, "goals.db")); gerr != nil {
+		log.Printf("goals persistence disabled (using in-memory): %v", gerr)
+	} else {
+		goalStore = gs
+		defer gs.Close()
+	}
+	goalManager := goals.NewManager(goalStore)
+
 	baseRegistryOptions := harness.DefaultRegistryOptions{
 		ApprovalMode:       approvalMode,
 		Policy:             nil,
@@ -730,6 +743,7 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		ProfileRunStore:   profileReadStore,
 		PackRegistry:      packRegistry,
 		TodosTool:         todosToolBuilder,
+		GoalManager:       goalManager,
 	}
 	tools := harness.NewDefaultRegistryWithOptions(workspace, baseRegistryOptions)
 	if rolloutDir != "" {

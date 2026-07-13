@@ -57,6 +57,9 @@ type DefaultRegistryOptions struct {
 	// with the HTTP layer (see deferred.NewTodoStore). When nil, an isolated
 	// per-registry store is used and the /v1/runs/{id}/todos route sees nothing.
 	TodosTool func() htools.Tool
+	// GoalManager, when non-nil, enables the goals tool for persistent,
+	// cross-session goal tracking. Backed by a persistent store in production.
+	GoalManager deferred.GoalCreator
 }
 
 // conversationStoreAdapter adapts ConversationStore (harness package) to htools.ConversationReader.
@@ -402,6 +405,14 @@ func NewDefaultRegistryWithOptions(workspaceRoot string, opts DefaultRegistryOpt
 	// deploy: always registered. The built-in registry supports the railway and
 	// flyio adapters; the tool reports its deployable platforms honestly.
 	deferredTools = append(deferredTools, deferred.DeployTool(deferred.DefaultDeployPlatformRegistry(), workspaceRoot))
+
+	// goals: registered when a goal manager is wired. Enables persistent,
+	// cross-session goal tracking with dependency chains.
+	if opts.GoalManager != nil {
+		if goalTool := deferred.NewGoalTools(opts.GoalManager); goalTool != nil {
+			deferredTools = append(deferredTools, goalTool())
+		}
+	}
 
 	// Deep git history tools: always registered since git is already required by the
 	// existing git_status and git_diff core tools.
