@@ -202,6 +202,73 @@ func TestTUI024_BoundaryWidths(t *testing.T) {
 	}
 }
 
+// TestSpinnerShowsCancelHintWhileActive verifies that View() always surfaces
+// the cancel hint while the spinner is active, using the rotating verb when
+// no current action has been set.
+func TestSpinnerShowsCancelHintWhileActive(t *testing.T) {
+	m := New(42)
+	m = m.Start()
+
+	view := m.View(80)
+	if !strings.Contains(view, CancelHint) {
+		t.Errorf("active View() should contain cancel hint %q, got: %q", CancelHint, view)
+	}
+	if !strings.Contains(view, m.verb) {
+		t.Errorf("active View() with no action set should still show the verb %q, got: %q", m.verb, view)
+	}
+}
+
+// TestSpinnerShowsCurrentActionInsteadOfVerb verifies that once SetAction is
+// called with a non-empty label, View() displays that label instead of the
+// rotating verb, while still showing the cancel hint.
+func TestSpinnerShowsCurrentActionInsteadOfVerb(t *testing.T) {
+	m := New(42)
+	m = m.Start()
+	m = m.SetAction("Running bash")
+
+	view := m.View(80)
+	if !strings.Contains(view, "Running bash") {
+		t.Errorf("View() should show the current action, got: %q", view)
+	}
+	if strings.Contains(view, m.verb+"...") {
+		t.Errorf("View() should not show the rotating verb once an action is set, got: %q", view)
+	}
+	if !strings.Contains(view, CancelHint) {
+		t.Errorf("View() with an action set should still contain cancel hint %q, got: %q", CancelHint, view)
+	}
+}
+
+// TestSpinnerClearingActionRestoresVerb verifies that SetAction("") reverts
+// View() back to the rotating verb.
+func TestSpinnerClearingActionRestoresVerb(t *testing.T) {
+	m := New(42)
+	m = m.Start()
+	m = m.SetAction("Running bash")
+	m = m.SetAction("")
+
+	view := m.View(80)
+	if strings.Contains(view, "Running bash") {
+		t.Errorf("View() should not show a cleared action, got: %q", view)
+	}
+	if !strings.Contains(view, m.verb) {
+		t.Errorf("View() should fall back to the verb once action is cleared, got: %q", view)
+	}
+}
+
+// TestSpinnerNoCancelHintAfterCompletion verifies that the cancel hint does
+// not linger in the completion line — there is nothing left to cancel once
+// the spinner has stopped.
+func TestSpinnerNoCancelHintAfterCompletion(t *testing.T) {
+	m := New(42)
+	m = m.Start()
+	m = m.Stop(10)
+
+	view := m.View(80)
+	if strings.Contains(view, CancelHint) {
+		t.Errorf("completion View() should not contain the cancel hint, got: %q", view)
+	}
+}
+
 // ─── Regression Tests ────────────────────────────────────────────────────────
 
 // TestTUI024_Regression_NoGoroutineStateAfterStop verifies that a stopped

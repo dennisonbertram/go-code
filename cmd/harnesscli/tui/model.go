@@ -28,6 +28,7 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/profilepicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/sessionpicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/slashcomplete"
+	"go-agent-harness/cmd/harnesscli/tui/components/spinner"
 	"go-agent-harness/cmd/harnesscli/tui/components/statspanel"
 	"go-agent-harness/cmd/harnesscli/tui/components/statusbar"
 	"go-agent-harness/cmd/harnesscli/tui/components/thinkingbar"
@@ -274,6 +275,12 @@ type Model struct {
 	contextGrid contextgrid.Model
 	statsPanel  statspanel.Model
 
+	// spinner drives the persistent in-progress indicator shown while a run
+	// is active and the thinking bar has no streamed text to display (e.g.
+	// while a tool call is executing). Shows the current action (running
+	// tool name, when known) plus a cancel hint.
+	spinner spinner.Model
+
 	// historyStore holds the persistent command history across window resizes
 	// and is saved to ~/.config/harnesscli/config.json on every submit.
 	historyStore inputarea.History
@@ -310,6 +317,7 @@ func New(cfg TUIConfig) Model {
 		theme:           DefaultTheme(),
 		contextGrid:     contextgrid.New(),
 		statsPanel:      statspanel.New(nil),
+		spinner:         spinner.New(time.Now().UnixNano()),
 		thinkingBar:     thinkingbar.New(),
 		interruptBanner: interruptui.New(),
 		planOverlay:     planoverlay.New(),
@@ -708,6 +716,30 @@ func statusTickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return statusTickMsg{} })
 }
 
+// spinnerTickCmd returns a tea.Cmd that fires a spinner.SpinnerTickMsg after
+// SpinnerInterval. The handler for that message re-issues this command while
+// a run is active, forming a self-rescheduling animation loop that stops on
+// its own once the run ends.
+func spinnerTickCmd() tea.Cmd {
+	return tea.Tick(SpinnerInterval, func(t time.Time) tea.Msg { return spinner.SpinnerTickMsg{T: t} })
+}
+
+// currentSpinnerAction returns a short label describing what is currently
+// running, for display in the spinner, or "" when nothing more specific than
+// "thinking" is known. Only reports the active tool while it is genuinely
+// still running — activeToolCallID lingers after completion so it can be
+// expanded/collapsed, but by then there is nothing left to announce.
+func (m Model) currentSpinnerAction() string {
+	if m.activeToolCallID == "" {
+		return ""
+	}
+	view, ok := m.toolViews[m.activeToolCallID]
+	if !ok || view.Status != "running" || view.ToolName == "" {
+		return ""
+	}
+	return "Running " + view.ToolName
+}
+
 // StatusTickMsgForTesting returns a statusTickMsg as a tea.Msg for use in
 // external test packages that need to drive the auto-dismiss path.
 func StatusTickMsgForTesting() tea.Msg { return statusTickMsg{} }
@@ -1003,6 +1035,21 @@ func normalizeThinkingLabel(text string) string {
 		return ""
 	}
 	return "Thinking: " + collapsed
+}
+
+// defaultContextWindowTokens is the fallback context window size used when
+// the model's actual window size has not been reported yet. Mirrors
+// contextgrid's own fallback so the status bar and the /context overlay agree.
+const defaultContextWindowTokens = 200000
+
+// contextWindowTotal returns the total context window size to report
+// alongside token usage, falling back to defaultContextWindowTokens when the
+// context grid has not been given a concrete window size yet.
+func (m Model) contextWindowTotal() int {
+	if m.contextGrid.TotalTokens > 0 {
+		return m.contextGrid.TotalTokens
+	}
+	return defaultContextWindowTokens
 }
 
 func (m *Model) clearThinkingBar() {
@@ -1547,6 +1594,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.statusBar = statusbar.New(msg.Width)
 		m.statusBar.SetModel(m.statusBarModelLabel())
 		m.statusBar.SetCost(m.cumulativeCostUSD)
+		m.statusBar.SetContext(m.totalTokens, m.contextWindowTotal())
 		m.interruptBanner.Width = msg.Width
 		// Preserve conversation history across window resizes (#664). On the
 		// first WindowSizeMsg the viewport has no content yet, so create it; on
@@ -2408,6 +2456,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.RunID = msg.RunID
 		m.runActive = true
 		m.clearThinkingBar()
+		m.spinner = spinner.New(time.Now().UnixNano()).Start()
+		cmds = append(cmds, spinnerTickCmd())
 		// The harness auto-assigns conversation_id = run_id when none is
 		// supplied. Record this as the conversationID for subsequent turns so
 		// that follow-up messages are linked to the same conversation.
@@ -2660,6 +2710,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.statsPanel = statspanel.New(m.usageDataPoints)
 				// Update context grid token count.
 				m.contextGrid.UsedTokens = m.totalTokens
+				m.statusBar.SetContext(m.totalTokens, m.contextWindowTotal())
 			}
 		case "run.waiting_for_user":
 			// Extract run_id from the event payload, then fetch pending questions.
@@ -2895,6 +2946,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsgExpiry = time.Time{}
 		}
 
+	case spinner.SpinnerTickMsg:
+		// Only keep animating (and rescheduling) while a run is active; this
+		// lets the loop stop on its own once the run ends.
+		if m.runActive {
+			m.spinner = m.spinner.Tick().SetAction(m.currentSpinnerAction())
+			cmds = append(cmds, spinnerTickCmd())
+		}
+
 	case pluginWarningMsg:
 		// Show a transient notice that some plugins failed to load.
 		cmds = append(cmds, m.setStatusMsg(msg.text))
@@ -3098,6 +3157,14 @@ func (m Model) View() string {
 	}
 	if thinkingView != "" {
 		sections = append(sections, thinkingView)
+	} else if m.runActive {
+		// The thinking bar is empty while a tool call is executing (or
+		// between streamed thinking deltas); fill that gap with the spinner
+		// so the run always has a persistent, animated indicator plus a
+		// cancel hint.
+		if spinnerView := m.spinner.View(m.width); spinnerView != "" {
+			sections = append(sections, spinnerView)
+		}
 	}
 	if bannerView != "" {
 		sections = append(sections, bannerView)
