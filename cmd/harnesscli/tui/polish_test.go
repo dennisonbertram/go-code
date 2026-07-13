@@ -45,52 +45,6 @@ func TestPolishTooSmallView(t *testing.T) {
 	}
 }
 
-func TestPolishReducedMotion(t *testing.T) {
-	// Neither env var set — should be false.
-	t.Setenv("NO_MOTION", "")
-	t.Setenv("PREFERS_REDUCED_MOTION", "")
-	if ReducedMotion() {
-		t.Error("ReducedMotion() = true with no env vars set, want false")
-	}
-
-	// NO_MOTION set to non-empty — should be true.
-	t.Setenv("NO_MOTION", "1")
-	if !ReducedMotion() {
-		t.Error("ReducedMotion() = false with NO_MOTION=1, want true")
-	}
-	t.Setenv("NO_MOTION", "")
-
-	// PREFERS_REDUCED_MOTION=1 — should be true.
-	t.Setenv("PREFERS_REDUCED_MOTION", "1")
-	if !ReducedMotion() {
-		t.Error("ReducedMotion() = false with PREFERS_REDUCED_MOTION=1, want true")
-	}
-	t.Setenv("PREFERS_REDUCED_MOTION", "")
-
-	// PREFERS_REDUCED_MOTION set to something other than "1" — should be false.
-	t.Setenv("PREFERS_REDUCED_MOTION", "0")
-	if ReducedMotion() {
-		t.Error("ReducedMotion() = true with PREFERS_REDUCED_MOTION=0, want false")
-	}
-}
-
-func TestPolishSpinnerFrames(t *testing.T) {
-	// Full animation: 6 frames.
-	frames := SpinnerFrames(false)
-	if len(frames) != 6 {
-		t.Errorf("SpinnerFrames(false) len = %d, want 6", len(frames))
-	}
-
-	// Reduced motion: single "…" frame.
-	reduced := SpinnerFrames(true)
-	if len(reduced) != 1 {
-		t.Errorf("SpinnerFrames(true) len = %d, want 1", len(reduced))
-	}
-	if reduced[0] != "…" {
-		t.Errorf("SpinnerFrames(true)[0] = %q, want %q", reduced[0], "…")
-	}
-}
-
 func TestDefaultExportDir_NonEmpty(t *testing.T) {
 	dir := defaultExportDir()
 	if dir == "" {

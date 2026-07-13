@@ -27,7 +27,6 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/messagebubble"
 	"go-agent-harness/cmd/harnesscli/tui/components/modelswitcher"
 	"go-agent-harness/cmd/harnesscli/tui/components/permissionspanel"
-	"go-agent-harness/cmd/harnesscli/tui/components/planoverlay"
 	"go-agent-harness/cmd/harnesscli/tui/components/profilepicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/sessionpicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/slashcomplete"
@@ -303,10 +302,6 @@ type Model struct {
 	// toolApproval.active is true when the overlay is shown.
 	toolApproval toolApprovalState
 
-	// planOverlay is the plan mode overlay component (immutable value semantics).
-	// It is visible when planOverlay.IsVisible() returns true.
-	planOverlay planoverlay.Model
-
 	// planMode tracks whether plan mode is toggled on (ctrl+o when idle).
 	planMode bool
 
@@ -331,7 +326,6 @@ func New(cfg TUIConfig) Model {
 		spinner:         spinner.New(time.Now().UnixNano()),
 		thinkingBar:     thinkingbar.New(),
 		interruptBanner: interruptui.New(),
-		planOverlay:     planoverlay.New(),
 		selectedModel:   cfg.Model,
 	}
 	m.modelSwitcher = modelswitcher.New(cfg.Model)
@@ -650,11 +644,6 @@ func (m Model) InterruptBannerVisible() bool {
 // InterruptBannerState returns the current state of the interrupt banner (for testing).
 func (m Model) InterruptBannerState() interruptui.State {
 	return m.interruptBanner.CurrentState()
-}
-
-// PlanOverlayVisible returns true when the plan overlay is currently visible (for testing).
-func (m Model) PlanOverlayVisible() bool {
-	return m.planOverlay.IsVisible()
 }
 
 // AskUserQuestions returns the pending questions for the active AskUserQuestion overlay (for testing).
@@ -1770,28 +1759,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toolApproval = newState
 			if cmd != nil {
 				cmds = append(cmds, cmd)
-			}
-			return m, tea.Batch(cmds...)
-		}
-		// Plan overlay has second-highest key priority when visible.
-		if m.planOverlay.IsVisible() {
-			switch {
-			case msg.Type == tea.KeyRunes && string(msg.Runes) == "y":
-				m.planOverlay = m.planOverlay.Approve()
-				m.planOverlay = m.planOverlay.Hide()
-				m.overlayActive = false
-			case msg.Type == tea.KeyRunes && string(msg.Runes) == "n":
-				m.planOverlay = m.planOverlay.Reject()
-				m.planOverlay = m.planOverlay.Hide()
-				m.overlayActive = false
-			case msg.Type == tea.KeyEsc:
-				m.planOverlay = m.planOverlay.Hide()
-				m.overlayActive = false
-			case msg.Type == tea.KeyUp:
-				m.planOverlay = m.planOverlay.ScrollUp()
-			case msg.Type == tea.KeyDown:
-				lines := strings.Count(m.planOverlay.PlanText, "\n") + 1
-				m.planOverlay = m.planOverlay.ScrollDown(lines)
 			}
 			return m, tea.Batch(cmds...)
 		}
@@ -2911,24 +2878,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "run.resumed":
 			// Dismiss the ask-user overlay when the run resumes.
 			m.askUser = askUserState{}
-		case "plan.proposed":
-			// Forward-looking stub: if the server ever emits a plan.proposed event,
-			// show the plan overlay. The server does not emit this event yet; this
-			// case is harmless until it does (no live test drives it via SSE).
-			var p struct {
-				Plan    string `json:"plan"`
-				Content string `json:"content"`
-			}
-			if err := json.Unmarshal(msg.Raw, &p); err == nil {
-				planText := p.Plan
-				if planText == "" {
-					planText = p.Content
-				}
-				if planText != "" {
-					m.planOverlay = m.planOverlay.Show(planText)
-					m.overlayActive = true
-				}
-			}
 		}
 		// Continue polling the SSE channel.
 		if m.sseCh != nil {
@@ -2971,12 +2920,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.sseCh != nil {
 			cmds = append(cmds, pollSSECmd(m.sseCh))
 		}
-
-	case PlanProposedMsg:
-		// Show the plan overlay. Driven by tests via PlanProposedMsg directly;
-		// the SSE "plan.proposed" case below is the forward-looking server stub.
-		m.planOverlay = m.planOverlay.Show(msg.Plan)
-		m.overlayActive = true
 
 	case AskUserPendingMsg:
 		// Pending questions fetched — populate the overlay and start deadline timer.
@@ -3285,17 +3228,6 @@ func (m Model) View() string {
 		overlayLines := m.renderToolApprovalOverlay()
 		if len(overlayLines) > 0 {
 			mainContent = m.vp.View() + "\n" + strings.Join(overlayLines, "\n")
-		} else {
-			mainContent = m.vp.View()
-		}
-	} else if m.planOverlay.IsVisible() {
-		// Plan overlay has second-highest priority — render on top of viewport.
-		po := m.planOverlay
-		po.Width = m.width
-		po.Height = m.layout.ViewportHeight
-		overlayView := po.View()
-		if overlayView != "" {
-			mainContent = m.vp.View() + "\n" + overlayView
 		} else {
 			mainContent = m.vp.View()
 		}

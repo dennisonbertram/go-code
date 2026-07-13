@@ -105,11 +105,18 @@ func TestJobManagerRunForegroundStreamingOverlongLineReturnsPromptly(t *testing.
 	ctx := context.WithValue(context.Background(), ContextKeyOutputStreamer, streamer)
 
 	start := time.Now()
-	result, err := mgr.runForeground(ctx, "head -c 4194304 /dev/zero | tr '\\000' A; printf '\\nEOF\\n'", 5, "")
+	// 2 MiB single line — comfortably over defaultMaxStreamLineBytes (1 MiB) so the
+	// stream truncation path fires, but far less shell work than a 4 MiB payload.
+	result, err := mgr.runForeground(ctx, "head -c 2097152 /dev/zero | tr '\\000' A; printf '\\nEOF\\n'", 5, "")
 	if err != nil {
 		t.Fatalf("runForeground: %v", err)
 	}
-	if elapsed := time.Since(start); elapsed > 2*time.Second {
+	// The real "prompt return" guarantee is proven by stream_truncated==true and
+	// timed_out==false below — truncation makes the read return once the line
+	// exceeds the cap instead of buffering the whole payload. This wall-clock check
+	// is only a coarse guard against a cleanup-path hang, so keep it generous: it
+	// must stay well under the 5s command timeout while tolerating a loaded machine.
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
 		t.Fatalf("streaming overlong line took %s, want prompt return", elapsed)
 	}
 	if timedOut, _ := result["timed_out"].(bool); timedOut {

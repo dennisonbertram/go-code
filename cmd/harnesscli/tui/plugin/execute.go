@@ -18,13 +18,6 @@ const (
 	truncationMarker = "\n...[truncated output]...\n"
 )
 
-// ExecutionContext is a minimal interface for communicating results back to the
-// UI layer without importing the tui package (which would cause a circular import).
-type ExecutionContext interface {
-	// AppendOutput adds text to the viewport/output area.
-	AppendOutput(text string)
-}
-
 // CommandResult carries the outcome of executing a plugin command.
 type CommandResult struct {
 	Output  string

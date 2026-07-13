@@ -1,8 +1,6 @@
 PREFIX ?= $(HOME)/.local
 
 # Packages exercised by the race detector: the concurrency-critical core.
-# Excludes internal/cloudscheduler, which has pre-existing Docker-dependent
-# tests that require a live Docker daemon.
 RACE_PKGS := ./internal/harness/... ./internal/server/... ./internal/workflow/... ./cmd/harnessd/... ./cmd/harnesscli/...
 
 .PHONY: build install install-system uninstall clean test test-race test-e2e

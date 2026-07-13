@@ -1,9 +1,8 @@
 package tui_test
 
 // planmode_test.go — TUI #660
-// Behavioral tests for plan mode: ctrl+o toggle (when idle), plan overlay
-// approval/rejection via 'y'/'n', and regression guard that ctrl+o still
-// expands an active tool call when one is in-flight.
+// Behavioral tests for plan mode: ctrl+o toggle (when idle), and regression
+// guard that ctrl+o still expands an active tool call when one is in-flight.
 
 import (
 	"strings"
@@ -101,94 +100,5 @@ func TestPlanMode_ActiveTool_CtrlOExpandsNotPlanMode(t *testing.T) {
 	view := model.View()
 	if !strings.Contains(view, "$ echo hi") {
 		t.Errorf("expected expanded bash header after ctrl+o with active tool; view=%q", view)
-	}
-}
-
-// ─── PlanProposedMsg drives overlay ──────────────────────────────────────────
-
-// TestPlanMode_PlanProposedMsg_ShowsOverlay verifies that sending a
-// PlanProposedMsg makes the plan overlay visible and the view contains the plan.
-func TestPlanMode_PlanProposedMsg_ShowsOverlay(t *testing.T) {
-	m := initModel(t, 80, 24)
-
-	m2, _ := m.Update(tui.PlanProposedMsg{Plan: "step 1\nstep 2"})
-	model := m2.(tui.Model)
-
-	if !model.PlanOverlayVisible() {
-		t.Error("expected PlanOverlayVisible()=true after PlanProposedMsg")
-	}
-
-	view := model.View()
-	if !strings.Contains(view, "step 1") {
-		t.Errorf("expected plan text 'step 1' in view; view=%q", view)
-	}
-	if !strings.Contains(view, "step 2") {
-		t.Errorf("expected plan text 'step 2' in view; view=%q", view)
-	}
-}
-
-// ─── 'y' approves the plan overlay ───────────────────────────────────────────
-
-// TestPlanMode_Y_ApprovesOverlay verifies that pressing 'y' when the plan
-// overlay is visible hides the overlay (PlanOverlayVisible() becomes false).
-func TestPlanMode_Y_ApprovesOverlay(t *testing.T) {
-	m := initModel(t, 80, 24)
-
-	m2, _ := m.Update(tui.PlanProposedMsg{Plan: "step 1\nstep 2"})
-	model := m2.(tui.Model)
-
-	if !model.PlanOverlayVisible() {
-		t.Fatal("precondition: overlay must be visible before pressing 'y'")
-	}
-
-	// Press 'y' to approve.
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
-	model = m3.(tui.Model)
-
-	if model.PlanOverlayVisible() {
-		t.Error("expected PlanOverlayVisible()=false after pressing 'y' (approve)")
-	}
-}
-
-// ─── 'n' rejects the plan overlay ────────────────────────────────────────────
-
-// TestPlanMode_N_RejectsOverlay verifies that pressing 'n' when the plan
-// overlay is visible hides the overlay (PlanOverlayVisible() becomes false).
-func TestPlanMode_N_RejectsOverlay(t *testing.T) {
-	m := initModel(t, 80, 24)
-
-	m2, _ := m.Update(tui.PlanProposedMsg{Plan: "step 1\nstep 2"})
-	model := m2.(tui.Model)
-
-	if !model.PlanOverlayVisible() {
-		t.Fatal("precondition: overlay must be visible before pressing 'n'")
-	}
-
-	// Press 'n' to reject.
-	m3, _ := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
-	model = m3.(tui.Model)
-
-	if model.PlanOverlayVisible() {
-		t.Error("expected PlanOverlayVisible()=false after pressing 'n' (reject)")
-	}
-}
-
-// ─── Plan overlay view contains plan text ─────────────────────────────────────
-
-// TestPlanMode_ViewContainsPlanText verifies that when the plan overlay is
-// visible, View() renders the plan text (not just an empty overlay).
-func TestPlanMode_ViewContainsPlanText(t *testing.T) {
-	m := initModel(t, 80, 24)
-
-	plan := "Do the thing\nThen check it\nThen ship it"
-	m2, _ := m.Update(tui.PlanProposedMsg{Plan: plan})
-	model := m2.(tui.Model)
-
-	view := model.View()
-	if !strings.Contains(view, "Do the thing") {
-		t.Errorf("plan line 1 not in view; view=%q", view)
-	}
-	if !strings.Contains(view, "Then check it") {
-		t.Errorf("plan line 2 not in view; view=%q", view)
 	}
 }
