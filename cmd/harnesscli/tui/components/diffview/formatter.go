@@ -31,6 +31,7 @@ type DiffLine struct {
 // Parse parses a unified diff string into a slice of DiffLines.
 // Returns nil on empty input without error.
 func Parse(diff string) []DiffLine {
+	diff = sanitizeText(diff)
 	if strings.TrimSpace(diff) == "" {
 		return nil
 	}

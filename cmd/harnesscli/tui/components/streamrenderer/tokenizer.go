@@ -11,6 +11,7 @@ func WrapText(text string, width int) []string {
 	if width <= 0 {
 		width = 80
 	}
+	text = sanitizeText(text)
 	if text == "" {
 		return []string{""}
 	}

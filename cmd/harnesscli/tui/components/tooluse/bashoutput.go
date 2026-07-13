@@ -4,14 +4,30 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // ansiEscapeRe matches ANSI CSI escape sequences (e.g. \x1b[32m, \x1b[0m).
 var ansiEscapeRe = regexp.MustCompile(`\x1b\[[0-9;]*[A-Za-z]`)
 
-// StripANSI removes ANSI CSI escape sequences from s.
+// StripANSI removes ANSI CSI escape sequences and other C0/C1 control
+// characters (preserving newline and tab) from s, replacing any invalid
+// UTF-8 byte sequences with the Unicode replacement character. This guards
+// the terminal against hostile tool output that could otherwise move the
+// cursor, recolor the screen, or corrupt the display.
 func StripANSI(s string) string {
-	return ansiEscapeRe.ReplaceAllString(s, "")
+	s = ansiEscapeRe.ReplaceAllString(s, "")
+	s = strings.ToValidUTF8(s, "�")
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case '\n', '\t':
+			return r
+		}
+		if r < 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 const (
@@ -59,7 +75,11 @@ func (b BashOutput) View() string {
 	// Guard against OOM from extremely large outputs.
 	output := b.Output
 	if len(output) > 512*1024 {
-		output = output[:512*1024] + "\n[output truncated at 512KB]"
+		limit := 512 * 1024
+		for limit > 0 && !utf8.RuneStart(output[limit]) {
+			limit--
+		}
+		output = output[:limit] + "\n[output truncated at 512KB]"
 	}
 
 	// Strip ANSI from output before processing.

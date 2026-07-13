@@ -13,7 +13,7 @@ type State int
 const (
 	StateIdle      State = iota
 	StateThinking        // extended thinking phase
-	StateStreaming        // streaming assistant text
+	StateStreaming       // streaming assistant text
 	StateComplete        // finished streaming
 )
 
@@ -93,12 +93,12 @@ func (m *Model) AppendDelta(delta string) {
 	if m.state == StateIdle {
 		m.state = StateStreaming
 	}
-	m.content = append(m.content, delta)
+	m.content = append(m.content, sanitizeText(delta))
 }
 
 // AppendThinkingDelta adds a thinking chunk.
 func (m *Model) AppendThinkingDelta(delta string) {
-	m.thinkingChunks = append(m.thinkingChunks, delta)
+	m.thinkingChunks = append(m.thinkingChunks, sanitizeText(delta))
 }
 
 // Complete transitions to complete state with token + timing metadata.
