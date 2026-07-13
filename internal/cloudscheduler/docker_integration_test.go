@@ -3,6 +3,7 @@ package cloudscheduler_test
 import (
 	"context"
 	"fmt"
+	"os"
 	osexec "os/exec"
 	"strings"
 	"sync"
@@ -28,6 +29,14 @@ var (
 // probe is memoized so it runs at most once per package test binary.
 func requireDocker(t *testing.T) {
 	t.Helper()
+	// These deep tests drive real alpine containers and are inherently
+	// environment-sensitive (image pulls, per-container timing, resource
+	// contention), so they are opt-in: they run only when HARNESS_RUN_DOCKER_TESTS
+	// is set, keeping the default `go test ./...` deterministic. cloudscheduler is
+	// an unwired POC, so gating them out of the default run masks no shipped code.
+	if os.Getenv("HARNESS_RUN_DOCKER_TESTS") == "" {
+		t.Skip("skipping real-container integration test: set HARNESS_RUN_DOCKER_TESTS=1 to run")
+	}
 	dockerProbeOnce.Do(func() {
 		if _, err := osexec.LookPath("docker"); err != nil {
 			dockerSkipReason = "docker CLI not found"
