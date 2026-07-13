@@ -551,6 +551,45 @@ func fetchSessionRunsCmd(baseURL, conversationID string) tea.Cmd {
 	}
 }
 
+// fetchConversationMessagesCmd fetches the message history for a resumed
+// conversation from GET /v1/conversations/{id}/messages. On success it emits
+// ConversationHistoryMsg; on failure it emits ConversationHistoryErrorMsg.
+func fetchConversationMessagesCmd(baseURL, conversationID string) tea.Cmd {
+	return func() tea.Msg {
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/conversations/" + url.PathEscape(conversationID) + "/messages"
+		req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+		if err != nil {
+			return ConversationHistoryErrorMsg{ConversationID: conversationID, Err: err.Error()}
+		}
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return ConversationHistoryErrorMsg{ConversationID: conversationID, Err: err.Error()}
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return ConversationHistoryErrorMsg{ConversationID: conversationID, Err: "read response: " + err.Error()}
+		}
+		if resp.StatusCode != http.StatusOK {
+			return ConversationHistoryErrorMsg{ConversationID: conversationID, Err: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))}
+		}
+		var payload struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return ConversationHistoryErrorMsg{ConversationID: conversationID, Err: "decode response: " + err.Error()}
+		}
+		messages := make([]ConversationMessage, len(payload.Messages))
+		for i, msg := range payload.Messages {
+			messages[i] = ConversationMessage{Role: msg.Role, Content: msg.Content}
+		}
+		return ConversationHistoryMsg{ConversationID: conversationID, Messages: messages}
+	}
+}
+
 // sseEventsURL builds the SSE endpoint URL for a given run ID.
 func sseEventsURL(baseURL, runID string) string {
 	return strings.TrimRight(baseURL, "/") + "/v1/runs/" + runID + "/events"

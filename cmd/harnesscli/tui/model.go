@@ -373,6 +373,9 @@ func New(cfg TUIConfig) Model {
 	m = m.WithAutocompleteProvider(buildCombinedProvider(m.commandRegistry))
 	// Wire slash-complete dropdown.
 	m.slashComplete = buildSlashComplete(m.commandRegistry)
+	if cfg.ResumeConversationID != "" {
+		m.conversationID = cfg.ResumeConversationID
+	}
 	return m
 }
 
@@ -1655,6 +1658,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.vp.SetSize(msg.Width, m.layout.ViewportHeight)
 		} else {
 			m.vp = viewport.New(msg.Width, m.layout.ViewportHeight)
+			// On resume, fetch the prior conversation only after the viewport
+			// exists (first init runs exactly once, since m.ready is now true),
+			// so the rendered history cannot be wiped by this viewport creation.
+			if m.config.ResumeConversationID != "" {
+				cmds = append(cmds, fetchConversationMessagesCmd(m.config.BaseURL, m.conversationID))
+			}
 		}
 		// Preserve current history across window resizes: on subsequent resizes
 		// (alreadyReady == true), sync historyStore from the live input state so
@@ -1720,18 +1729,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					// First Ctrl+C: show the confirmation banner, do NOT cancel yet.
 					m.interruptBanner = m.interruptBanner.Show()
 					m.interruptBanner.Width = m.width
-					cmds = append(cmds, m.setStatusMsg("Press ctrl+c again to interrupt"))
+					cmds = append(cmds, m.setStatusMsg("Press ctrl+c again to interrupt (esc to keep going)"))
 					return m, tea.Batch(cmds...)
 				}
-				// Second Ctrl+C (banner already showing): confirm the interrupt.
+				// Second Ctrl+C (banner already showing): confirm the interrupt and
+				// cancel the run both server-side and locally.
 				m.interruptBanner = m.interruptBanner.Hide()
+				if m.RunID != "" {
+					cmds = append(cmds, cancelRunCmd(m.config.BaseURL, m.RunID))
+				}
 				if m.cancelRun != nil {
 					m.cancelRun()
 					m.cancelRun = nil
 				}
 				m.interruptActiveToolCall()
 				m.runActive = false
-				cmds = append(cmds, m.setStatusMsg("Interrupted"))
+				cmds = append(cmds, m.setStatusMsg("Run interrupted — press ctrl+c again to quit"))
 				return m, tea.Batch(cmds...)
 			}
 			// No active run: hide banner if somehow visible, then quit.
@@ -3102,6 +3115,37 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Content:   msg.Content,
 			Timestamp: time.Now(),
 		})
+
+	case ConversationHistoryMsg:
+		for _, entry := range msg.Messages {
+			switch entry.Role {
+			case "user":
+				m.transcript = append(m.transcript, transcriptexport.TranscriptEntry{
+					Role:      "user",
+					Content:   entry.Content,
+					Timestamp: time.Now(),
+				})
+				m.appendMessageBubble(messagebubble.RoleUser, entry.Content)
+			case "assistant":
+				if entry.Content == "" {
+					continue
+				}
+				m.transcript = append(m.transcript, transcriptexport.TranscriptEntry{
+					Role:      "assistant",
+					Content:   entry.Content,
+					Timestamp: time.Now(),
+				})
+				m.appendMessageBubble(messagebubble.RoleAssistant, entry.Content)
+			}
+		}
+		shortID := msg.ConversationID
+		if len(shortID) > 8 {
+			shortID = shortID[:8]
+		}
+		cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Resumed conversation %s (%d messages)", shortID, len(msg.Messages))))
+
+	case ConversationHistoryErrorMsg:
+		cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Could not load conversation %s: %s", msg.ConversationID, msg.Err)))
 	}
 
 	return m, tea.Batch(cmds...)

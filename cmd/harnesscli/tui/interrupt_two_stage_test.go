@@ -103,7 +103,9 @@ func TestTUI669_SecondCtrlC_BannerHidden(t *testing.T) {
 	}
 }
 
-// TestTUI669_SecondCtrlC_StatusInterrupted asserts statusMsg="Interrupted" after second ctrl+c.
+// TestTUI669_SecondCtrlC_StatusInterrupted asserts the status message reports
+// the run was interrupted after the second ctrl+c, and invites a further
+// ctrl+c to quit the app.
 func TestTUI669_SecondCtrlC_StatusInterrupted(t *testing.T) {
 	m := activeModel(t, func() {})
 
@@ -111,8 +113,11 @@ func TestTUI669_SecondCtrlC_StatusInterrupted(t *testing.T) {
 	m3, _ := m2.(tui.Model).Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	after := m3.(tui.Model)
 
-	if after.StatusMsg() != "Interrupted" {
-		t.Errorf("statusMsg after second ctrl+c = %q, want 'Interrupted'", after.StatusMsg())
+	if !strings.Contains(after.StatusMsg(), "interrupted") {
+		t.Errorf("statusMsg after second ctrl+c = %q, want it to mention the run was interrupted", after.StatusMsg())
+	}
+	if !strings.Contains(after.StatusMsg(), "ctrl+c again to quit") {
+		t.Errorf("statusMsg after second ctrl+c = %q, want it to invite another ctrl+c to quit", after.StatusMsg())
 	}
 }
 

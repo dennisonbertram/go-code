@@ -150,6 +150,7 @@ func run(args []string) int {
 	promptCustom := flags.String("prompt-custom", "", "custom prompt extension text")
 	workspace := flags.String("workspace", "", "workspace directory for this run (defaults to current working directory)")
 	enableTUI := flags.Bool("tui", false, "launch interactive BubbleTea TUI (experimental)")
+	resume := flags.String("resume", "", "resume an existing conversation by ID in the TUI (implies --tui)")
 	listProfiles := flags.Bool("list-profiles", false, "list available profiles and exit")
 	var behaviorFlags csvListFlag
 	var talentFlags csvListFlag
@@ -168,7 +169,7 @@ func run(args []string) int {
 	workspacePath := resolveWorkspacePath(*workspace)
 
 	if *enableTUI {
-		if err := runTUI(*baseURL, workspacePath); err != nil {
+		if err := runTUI(*baseURL, workspacePath, *resume); err != nil {
 			fmt.Fprintf(stderr, "harnesscli: tui: %v\n", err)
 			return 1
 		}
@@ -481,27 +482,38 @@ func resolveWorkspacePath(workspace string) string {
 	return workspacePath
 }
 
-func newTUIConfig(baseURL, workspace string) tui.TUIConfig {
+func newTUIConfig(baseURL, workspace, resumeConversationID string) tui.TUIConfig {
 	return tui.TUIConfig{
-		BaseURL:      baseURL,
-		Workspace:    workspace,
-		EnableTUI:    true,
-		ColorProfile: "truecolor",
-		AltScreen:    true,
+		BaseURL:              baseURL,
+		Workspace:            workspace,
+		EnableTUI:            true,
+		ColorProfile:         "truecolor",
+		AltScreen:            true,
+		ResumeConversationID: resumeConversationID,
 	}
 }
 
-func runTUI(baseURL, workspace string) error {
+func runTUI(baseURL, workspace, resumeConversationID string) error {
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
 		return fmt.Errorf("--tui requires a terminal; pipe output or use without --tui for streaming mode")
 	}
-	tuiCfg := newTUIConfig(baseURL, workspace)
+	tuiCfg := newTUIConfig(baseURL, workspace, resumeConversationID)
 	p := tea.NewProgram(
 		tui.New(tuiCfg),
 		tea.WithAltScreen(),
 	)
-	_, err := p.Run()
-	return err
+	finalModel, err := p.Run()
+	if err != nil {
+		return err
+	}
+	if m, ok := finalModel.(tui.Model); ok {
+		if convID := m.ConversationID(); convID != "" {
+			fmt.Fprintln(stdout)
+			fmt.Fprintln(stdout, "Resume this conversation:")
+			fmt.Fprintf(stdout, "  go-code --resume %s\n", convID)
+		}
+	}
+	return nil
 }
 
 // profileListResponse is the JSON shape returned by GET /v1/profiles.

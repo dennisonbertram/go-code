@@ -240,3 +240,24 @@ type TranscriptEntryMsg struct {
 	Role    string
 	Content string
 }
+
+// ConversationMessage is a minimal view of harness.Message used to render
+// resumed conversation history in the TUI transcript.
+type ConversationMessage struct {
+	Role    string
+	Content string
+}
+
+// ConversationHistoryMsg carries the message history for a resumed
+// conversation, fetched from GET /v1/conversations/{id}/messages.
+type ConversationHistoryMsg struct {
+	ConversationID string
+	Messages       []ConversationMessage
+}
+
+// ConversationHistoryErrorMsg signals that fetching a resumed conversation's
+// history failed.
+type ConversationHistoryErrorMsg struct {
+	ConversationID string
+	Err            string
+}
