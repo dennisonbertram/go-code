@@ -17,6 +17,8 @@ type Model struct {
 	mcpFails int
 	running  bool
 	costUSD  float64
+	ctxUsed  int
+	ctxTotal int
 }
 
 // New creates a new status bar model for the given terminal width.
@@ -32,6 +34,14 @@ func (m *Model) SetMCPFailures(n int)    { m.mcpFails = n }
 func (m *Model) SetRunning(r bool)       { m.running = r }
 func (m *Model) SetCost(usd float64)     { m.costUSD = usd }
 func (m *Model) SetWidth(w int)          { m.width = w }
+
+// SetContext records the current context-window usage so the status bar can
+// render a compact meter (e.g. "◫ 28%/200K"). Both used and total must be
+// positive for the segment to render; otherwise it is omitted.
+func (m *Model) SetContext(used, total int) {
+	m.ctxUsed = used
+	m.ctxTotal = total
+}
 
 // Styles for status bar segments.
 var (
@@ -55,7 +65,7 @@ func (m Model) View() string {
 	sep := dimStyle.Render(" ~ ")
 	sepLen := 3 // plain rune width of " ~ "
 
-	// Segments in priority order: model > running > cost > perm > branch > workdir > mcpFails
+	// Segments in priority order: model > context > running > cost > perm > branch > workdir > mcpFails
 	type segment struct {
 		text     string
 		priority int // lower = higher priority (kept last when trimming)
@@ -65,24 +75,33 @@ func (m Model) View() string {
 	if m.model != "" {
 		segs = append(segs, segment{boldStyle.Render(truncate(m.model, 24)), 1})
 	}
+	if m.ctxUsed > 0 && m.ctxTotal > 0 {
+		pct := int(float64(m.ctxUsed)/float64(m.ctxTotal)*100 + 0.5)
+		text := fmt.Sprintf("◫ %d%%/%s", pct, formatCompactTokens(m.ctxTotal))
+		style := dimStyle
+		if pct >= 80 {
+			style = warnStyle
+		}
+		segs = append(segs, segment{style.Render(text), 2})
+	}
 	if m.running {
-		segs = append(segs, segment{dimStyle.Render("..."), 2})
+		segs = append(segs, segment{dimStyle.Render("..."), 3})
 	}
 	if m.costUSD > 0 {
-		segs = append(segs, segment{dimStyle.Render(fmt.Sprintf("$%.4f", m.costUSD)), 3})
+		segs = append(segs, segment{dimStyle.Render(fmt.Sprintf("$%.4f", m.costUSD)), 4})
 	}
 	if m.permMode != "" && m.permMode != "default" {
-		segs = append(segs, segment{warnStyle.Render("[" + m.permMode + "]"), 4})
+		segs = append(segs, segment{warnStyle.Render("[" + m.permMode + "]"), 5})
 	}
 	if m.branch != "" {
-		segs = append(segs, segment{dimStyle.Render("(" + m.branch + ")"), 5})
+		segs = append(segs, segment{dimStyle.Render("(" + m.branch + ")"), 6})
 	}
 	if m.workdir != "" {
 		dir := shortenPath(m.workdir, 20)
-		segs = append(segs, segment{dimStyle.Render(dir), 6})
+		segs = append(segs, segment{dimStyle.Render(dir), 7})
 	}
 	if m.mcpFails > 0 {
-		segs = append(segs, segment{warnStyle.Render(fmt.Sprintf("%d MCP fail", m.mcpFails)), 7})
+		segs = append(segs, segment{warnStyle.Render(fmt.Sprintf("%d MCP fail", m.mcpFails)), 8})
 	}
 
 	// Build line progressively, dropping lowest-priority segments when over width.
@@ -147,6 +166,26 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return string(runes[:max-1]) + "..."
+}
+
+// formatCompactTokens renders a token count in a compact human-readable form,
+// e.g. 200000 -> "200K", 1500000 -> "1.5M", 900 -> "900".
+func formatCompactTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return trimTrailingZero(float64(n)/1_000_000) + "M"
+	case n >= 1_000:
+		return trimTrailingZero(float64(n)/1_000) + "K"
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
+// trimTrailingZero formats v with one decimal place, dropping the decimal
+// entirely when it is ".0" (e.g. 200.0 -> "200", 1.5 -> "1.5").
+func trimTrailingZero(v float64) string {
+	s := fmt.Sprintf("%.1f", v)
+	return strings.TrimSuffix(s, ".0")
 }
 
 func shortenPath(path string, max int) string {

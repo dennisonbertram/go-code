@@ -25,6 +25,10 @@ const durationThreshold = 2 * time.Second
 // completion line after Stop(). At ~100ms per tick this is roughly 1 second.
 const completionFramesDefault = 10
 
+// CancelHint is the persistent hint appended to the active spinner line so
+// the user always knows how to interrupt the current run.
+const CancelHint = "(esc to interrupt)"
+
 // SpinnerTickMsg triggers a spinner frame advance.
 // This is the local equivalent of tui.SpinnerTickMsg; spinner-specific
 // so the package has no import cycle with the parent tui package.
@@ -36,6 +40,7 @@ type SpinnerTickMsg struct{ T time.Time }
 type Model struct {
 	frame            int        // current frame index [0, len(frames))
 	verb             string     // current displayed verb
+	action           string     // current activity label (e.g. running tool name); overrides verb when set
 	startTime        time.Time  // when spinner started (for duration)
 	tokens           int        // token count stored on Stop()
 	active           bool       // true while spinner is running
@@ -118,6 +123,16 @@ func (m Model) Stop(tokens int) Model {
 	return m
 }
 
+// SetAction sets the current activity label (e.g. the name of a running tool
+// or a short step description). When non-empty, View() displays it in place
+// of the rotating verb so the user sees what is actually happening rather
+// than a generic placeholder. Pass "" to fall back to verb rotation.
+// Returns a new Model; the receiver is unchanged.
+func (m Model) SetAction(action string) Model {
+	m.action = action
+	return m
+}
+
 // IsActive returns true while the spinner is running (between Start and Stop).
 func (m Model) IsActive() bool { return m.active }
 
@@ -142,7 +157,9 @@ func (m Model) ElapsedSeconds() float64 {
 // maximum character width; the view degrades gracefully at narrow widths.
 //
 // States:
-//   - Active: "✻ Thinking..." or "✻ Thinking... (2.3s)" once durationThreshold passes.
+//   - Active: "✻ Thinking... (esc to interrupt)", or with a known action,
+//     "✻ Running bash (esc to interrupt)"; a duration is inserted once
+//     durationThreshold passes.
 //   - ShowsCompletion() true: CompletionLine using ElapsedSeconds().
 //   - Done and silent (completionFrames == 0): returns "".
 func (m Model) View(width int) string {
@@ -161,8 +178,13 @@ func (m Model) View(width int) string {
 
 	currentFrame := frames[m.frame]
 
-	// Build the base text.
-	base := currentFrame + " " + m.verb + "..."
+	// Build the base text. When a current action is known, show it instead of
+	// the rotating verb so the user sees what is actually happening.
+	label := m.verb + "..."
+	if m.action != "" {
+		label = m.action
+	}
+	base := currentFrame + " " + label
 
 	// Append duration if we've exceeded the threshold.
 	if m.active && !m.startTime.IsZero() {
@@ -170,6 +192,11 @@ func (m Model) View(width int) string {
 		if elapsed >= durationThreshold {
 			base += " " + formatDuration(elapsed)
 		}
+	}
+
+	// Always surface how to cancel while active.
+	if m.active {
+		base += " " + CancelHint
 	}
 
 	style := lipgloss.NewStyle().Faint(true)

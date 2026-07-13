@@ -1,10 +1,10 @@
 # TUI-024 Spinner Snapshot 200x50
 --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 ## Active (no duration)
-✽ Computing...
+✽ Computing... (esc to interrupt)
 
 ## Active (5s elapsed)
-✽ Computing... (5.0s)
+✽ Computing... (5.0s) (esc to interrupt)
 
 ## Completion Line
 ✽ Worked for 5.0s

@@ -131,6 +131,55 @@ func TestTUI011_StatusbarDefaultModeHidden(t *testing.T) {
 	}
 }
 
+func TestStatusbarShowsContextMeter(t *testing.T) {
+	sb := statusbar.New(80)
+	sb.SetModel("gpt-4.1-mini")
+	sb.SetContext(56000, 200000)
+	view := sb.View()
+	if !strings.Contains(view, "◫ 28%/200K") {
+		t.Errorf("status bar missing context meter, want '◫ 28%%/200K': %q", view)
+	}
+}
+
+func TestStatusbarContextMeterOmittedWhenUnset(t *testing.T) {
+	sb := statusbar.New(80)
+	sb.SetModel("gpt-4.1-mini")
+	view := sb.View()
+	if strings.Contains(view, "◫") {
+		t.Errorf("status bar should not show context meter when unset: %q", view)
+	}
+}
+
+func TestStatusbarContextMeterOmittedWhenZero(t *testing.T) {
+	sb := statusbar.New(80)
+	sb.SetModel("gpt-4.1-mini")
+	sb.SetContext(0, 0)
+	view := sb.View()
+	if strings.Contains(view, "◫") {
+		t.Errorf("status bar should not show context meter when used/total are 0: %q", view)
+	}
+}
+
+func TestStatusbarContextMeterWarnStyleWhenHigh(t *testing.T) {
+	sb := statusbar.New(80)
+	sb.SetModel("gpt-4.1-mini")
+	sb.SetContext(180000, 200000)
+	view := sb.View()
+	if !strings.Contains(view, "◫ 90%/200K") {
+		t.Errorf("status bar missing high-usage context meter, want '◫ 90%%/200K': %q", view)
+	}
+}
+
+func TestStatusbarContextMeterCompactMillions(t *testing.T) {
+	sb := statusbar.New(80)
+	sb.SetModel("gpt-4.1-mini")
+	sb.SetContext(500000, 1000000)
+	view := sb.View()
+	if !strings.Contains(view, "◫ 50%/1M") {
+		t.Errorf("status bar missing compact million total, want '◫ 50%%/1M': %q", view)
+	}
+}
+
 // stripANSI removes ANSI escape sequences for length testing.
 func stripANSI(s string) string {
 	var result strings.Builder
