@@ -123,6 +123,11 @@ type ServerOptions struct {
 	// registration and heartbeats. When provided, the /v1/relay/workers endpoints
 	// are enabled.
 	RelayWorkerStore relay.WorkerStore
+	// RelayControl is the optional self-contained relay control plane (placement
+	// router, contract composer, capability policy, operator views, capability +
+	// event stores). When provided, the /v1/relay control-plane endpoints are
+	// enabled.
+	RelayControl *relay.ControlPlane
 	// RolloutDir is the configured root directory for JSONL rollout files. When
 	// set (and auth is enabled), POST /v1/runs/replay enforces two-part safety:
 	//  1. Read-safety containment: the caller-supplied rollout_path must resolve
@@ -179,6 +184,7 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		slackAdapter:      opts.SlackAdapter,
 		linearAdapter:     opts.LinearAdapter,
 		relayWorkerStore:  opts.RelayWorkerStore,
+		relayControl:      opts.RelayControl,
 		rolloutDir:        opts.RolloutDir,
 		maxBodyBytes:      opts.MaxRequestBodyBytes,
 		replayBodyBytes:   opts.ReplayMaxRequestBodyBytes,
@@ -294,6 +300,17 @@ func (s *Server) buildMux() http.Handler {
 	mux.Handle("/v1/relay/workers", auth(http.HandlerFunc(s.handleRelayWorkersRoot)))
 	mux.Handle("/v1/relay/workers/", auth(http.HandlerFunc(s.handleRelayWorkerByID)))
 
+	// /v1/relay control plane — placement, contract composition, capability
+	// policy, worker capability inventories, and operator visibility. Scope is
+	// enforced per-method inside each handler (reads: runs:read, writes:
+	// runs:write). Enabled only when a control plane is wired.
+	mux.Handle("/v1/relay/placements", auth(http.HandlerFunc(s.handleRelayPlacements)))
+	mux.Handle("/v1/relay/contracts", auth(http.HandlerFunc(s.handleRelayContracts)))
+	mux.Handle("/v1/relay/policy/check", auth(http.HandlerFunc(s.handleRelayPolicyCheck)))
+	mux.Handle("/v1/relay/policy/filter", auth(http.HandlerFunc(s.handleRelayPolicyFilter)))
+	mux.Handle("/v1/relay/operator/workers", auth(http.HandlerFunc(s.handleRelayOperatorWorkers)))
+	mux.Handle("/v1/relay/capabilities/", auth(http.HandlerFunc(s.handleRelayCapabilitiesByWorker)))
+
 	return s.hardenHandler(mux)
 }
 
@@ -365,6 +382,9 @@ type Server struct {
 	// relayWorkerStore is an optional persistence layer for Go Relay worker
 	// registration and heartbeats.
 	relayWorkerStore relay.WorkerStore
+	// relayControl is the optional self-contained relay control plane enabling
+	// the /v1/relay placement, contract, policy, capability, and operator routes.
+	relayControl *relay.ControlPlane
 	// rolloutDir is the configured root directory for JSONL rollout files. When
 	// set (and auth is enabled), POST /v1/runs/replay enforces read-safety
 	// containment (rollout_path must resolve under this dir after symlink

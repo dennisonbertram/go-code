@@ -76,6 +76,7 @@ type httpRuntimeOptions struct {
 	providerRegistry     *catalog.ProviderRegistry
 	runStore             istore.Store
 	relayWorkerStore     relay.WorkerStore
+	relayControl         *relay.ControlPlane
 	todos                deferred.TodoManager
 	triggers             triggerRuntime
 	callbackStarter      *callbackRunStarter
@@ -182,6 +183,7 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		providerRegistry: opts.providerRegistry,
 		runStore:         opts.runStore,
 		relayWorkerStore: opts.relayWorkerStore,
+		relayControl:     opts.relayControl,
 		todos:            opts.todos,
 		triggers:         opts.triggers,
 		rolloutDir:       opts.runnerCfg.RolloutDir,

@@ -222,6 +222,7 @@ type persistenceBootstrap struct {
 	runStore          istore.Store
 	conversationStore harness.ConversationStore
 	relayWorkerStore  relay.WorkerStore
+	relayControl      *relay.ControlPlane
 	convCleanerCancel context.CancelFunc
 }
 
@@ -315,7 +316,16 @@ func buildPersistenceBootstrap(opts persistenceBootstrapOptions) (_ persistenceB
 			return persistenceBootstrap{}, err
 		}
 		bootstrap.relayWorkerStore = relayStore
-		opts.logger("relay worker persistence enabled: %s", relayDBPath)
+
+		// Build the self-contained control plane (capability + event stores,
+		// placement router, composer, policy, operator views) over the same DB.
+		control, controlErr := relay.NewControlPlane(context.Background(), relayStore)
+		if controlErr != nil {
+			err = fmt.Errorf("build relay control plane: %w", controlErr)
+			return persistenceBootstrap{}, err
+		}
+		bootstrap.relayControl = control
+		opts.logger("relay worker persistence + control plane enabled: %s", relayDBPath)
 	}
 
 	return bootstrap, nil
@@ -374,6 +384,7 @@ type serverBootstrapOptions struct {
 	providerRegistry *catalog.ProviderRegistry
 	runStore         istore.Store
 	relayWorkerStore relay.WorkerStore
+	relayControl     *relay.ControlPlane
 	todos            deferred.TodoManager
 	triggers         triggerRuntime
 	rolloutDir       string
@@ -395,6 +406,7 @@ func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
 		ProviderRegistry: opts.providerRegistry,
 		Store:            opts.runStore,
 		RelayWorkerStore: opts.relayWorkerStore,
+		RelayControl:     opts.relayControl,
 		Todos:            opts.todos,
 		Validators:       opts.triggers.validators,
 		GitHubAdapter:    opts.triggers.github,
