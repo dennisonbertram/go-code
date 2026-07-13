@@ -146,6 +146,35 @@ stop_server() {
   rm -f "$PID_FILE"
 }
 
+# port_in_use returns 0 (success) when something is already listening on the
+# given TCP port on the loopback interface. Uses lsof when available and falls
+# back to a bash /dev/tcp connect probe.
+port_in_use() {
+  local port="$1"
+  if command -v lsof >/dev/null 2>&1; then
+    lsof -nP -iTCP:"${port}" -sTCP:LISTEN >/dev/null 2>&1
+    return
+  fi
+  (exec 3<>"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1 || return 1
+  exec 3>&- 3<&- 2>/dev/null || true
+  return 0
+}
+
+# find_free_port echoes the first free TCP port at or above the given start
+# port, scanning up to 50 candidates. Returns non-zero if none is free.
+find_free_port() {
+  local port="$1"
+  local tries=0
+  while port_in_use "$port"; do
+    port=$((port + 1))
+    tries=$((tries + 1))
+    if [[ $tries -ge 50 ]]; then
+      return 1
+    fi
+  done
+  echo "$port"
+}
+
 start_server() {
   local port="${1}"
   local base_url="${2}"
@@ -172,7 +201,7 @@ start_server() {
       die "server did not become healthy within 10 s"
     fi
     if ! kill -0 "$pid" 2>/dev/null; then
-      die "harnessd process (pid ${pid}) died before becoming healthy"
+      die "harnessd (pid ${pid}) exited before becoming healthy on port ${port}. If the port is already in use (see the harnessd log above), free it or run on another port with HARNESS_ADDR=:PORT (e.g. HARNESS_ADDR=:9090 go-code)."
     fi
   done
   info "server is ready"
@@ -289,16 +318,31 @@ main() {
 
   configure_runtime_assets
 
-  # Parse the port from HARNESS_ADDR (default :8080).
+  # Parse the port from HARNESS_ADDR (default :8080). Track whether the caller
+  # set HARNESS_ADDR explicitly, so we only auto-relocate off the default port.
+  local addr_explicit=0
+  [[ -n "${HARNESS_ADDR:-}" ]] && addr_explicit=1
   local addr="${HARNESS_ADDR:-:8080}"
   local port="${addr##*:}"
   local base_url="http://127.0.0.1:${port}"
 
   # Ensure a server is reachable.
-  if ! curl -sf "${base_url}/healthz" >/dev/null 2>&1; then
-    start_server "$port" "$base_url"
-  else
+  if curl -sf "${base_url}/healthz" >/dev/null 2>&1; then
     info "server already running at ${base_url}"
+  else
+    # Nothing healthy answered. If the port is held by a foreign process (e.g.
+    # a container runtime), harnessd cannot bind there.
+    if port_in_use "$port"; then
+      if [[ "$addr_explicit" -eq 1 ]]; then
+        die "port ${port} is already in use by another process and is not a go-code server. Free it, or set HARNESS_ADDR to a different port (e.g. HARNESS_ADDR=:9090)."
+      fi
+      local free_port
+      free_port="$(find_free_port "$port")" || die "port ${port} is in use and no free port was found nearby; set HARNESS_ADDR to a free port."
+      warn "port ${port} is in use by another process; using free port ${free_port} instead (set HARNESS_ADDR to override)"
+      port="$free_port"
+      base_url="http://127.0.0.1:${port}"
+    fi
+    start_server "$port" "$base_url"
   fi
 
   # Resolve the project root for -workspace.
