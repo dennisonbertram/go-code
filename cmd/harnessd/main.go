@@ -656,6 +656,7 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	if relayWorkerStore != nil {
 		defer relayWorkerStore.Close()
 	}
+	relayControl := persistenceBootstrap.relayControl
 	convCleanerCancel := persistenceBootstrap.convCleanerCancel
 	if convCleanerCancel != nil {
 		defer convCleanerCancel()
@@ -888,6 +889,7 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		providerRegistry:     providerRegistry,
 		runStore:             runStore,
 		relayWorkerStore:     relayWorkerStore,
+		relayControl:         relayControl,
 		todos:                todoManager,
 		triggers:             triggerRuntime,
 		callbackStarter:      callbackStarter,
