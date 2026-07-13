@@ -9,9 +9,12 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"go-agent-harness/internal/harness"
+	"go-agent-harness/internal/provider"
 	"go-agent-harness/internal/provider/pricing"
 )
 
@@ -1541,5 +1544,207 @@ func TestOpenRouterHeadersEmptyWhenConfigBlank(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("complete: %v", err)
+	}
+}
+
+func testRetryConfig() *provider.RetryConfig {
+	return &provider.RetryConfig{
+		MaxAttempts: 3,
+		BaseDelay:   1 * time.Millisecond,
+		MaxDelay:    10 * time.Millisecond,
+		MaxTotal:    100 * time.Millisecond,
+		Jitter:      false,
+	}
+}
+
+func TestClientRetriesOn429(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int64
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte("rate limited"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(minimalJSONResponse())
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{
+		APIKey:  "test-key",
+		BaseURL: testServer.URL,
+		Retry:   testRetryConfig(),
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got)
+	}
+}
+
+func TestClientRetriesOn503(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int64
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("unavailable"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(minimalJSONResponse())
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{
+		APIKey:  "test-key",
+		BaseURL: testServer.URL,
+		Retry:   testRetryConfig(),
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got)
+	}
+}
+
+func TestClientDoesNotRetryOn400(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int64
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("bad request"))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{
+		APIKey:  "test-key",
+		BaseURL: testServer.URL,
+		Retry:   testRetryConfig(),
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hello"}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("expected 1 attempt, got %d", got)
+	}
+	if !strings.Contains(err.Error(), "400") {
+		t.Fatalf("expected 400 in error, got: %v", err)
+	}
+}
+
+func TestClientStreamingRetriesInitialError(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int64
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"ok"}}]}`,
+			``,
+			`data: [DONE]`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{
+		APIKey:  "test-key",
+		BaseURL: testServer.URL,
+		Retry:   testRetryConfig(),
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var deltas []harness.CompletionDelta
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hello"}},
+		Stream: func(delta harness.CompletionDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.Content != "ok" {
+		t.Fatalf("unexpected content: %q", result.Content)
+	}
+	if got := attempts.Load(); got != 2 {
+		t.Fatalf("expected 2 attempts, got %d", got)
+	}
+	if len(deltas) != 1 || deltas[0].Content != "ok" {
+		t.Fatalf("unexpected deltas: %+v", deltas)
+	}
+}
+
+func TestClientContextCancellationAbortsRetry(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int64
+	ctx, cancel := context.WithCancel(context.Background())
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if attempts.Add(1) == 1 {
+			cancel()
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{
+		APIKey:  "test-key",
+		BaseURL: testServer.URL,
+		Retry: &provider.RetryConfig{
+			MaxAttempts: 3,
+			BaseDelay:   10 * time.Second,
+			MaxDelay:    10 * time.Second,
+			MaxTotal:    10 * time.Second,
+			Jitter:      false,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	_, err = client.Complete(ctx, harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hello"}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("expected 1 attempt, got %d", got)
 	}
 }

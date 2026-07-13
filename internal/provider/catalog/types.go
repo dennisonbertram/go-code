@@ -8,13 +8,16 @@ type Catalog struct {
 
 // ProviderEntry describes one LLM provider and its available models.
 type ProviderEntry struct {
-	DisplayName string            `json:"display_name"`
-	BaseURL     string            `json:"base_url"`
-	APIKeyEnv   string            `json:"api_key_env"`
-	Protocol    string            `json:"protocol"`
-	Quirks      []string          `json:"quirks,omitempty"`
-	Models      map[string]Model  `json:"models"`
-	Aliases     map[string]string `json:"aliases,omitempty"`
+	DisplayName string `json:"display_name"`
+	BaseURL     string `json:"base_url"`
+	APIKeyEnv   string `json:"api_key_env"`
+	// APIKeyOptional marks providers (e.g. local Ollama/LM Studio servers) that
+	// do not require an API key to resolve or create a client.
+	APIKeyOptional bool              `json:"api_key_optional,omitempty"`
+	Protocol       string            `json:"protocol"`
+	Quirks         []string          `json:"quirks,omitempty"`
+	Models         map[string]Model  `json:"models"`
+	Aliases        map[string]string `json:"aliases,omitempty"`
 }
 
 // Model describes a single LLM model's capabilities and metadata.

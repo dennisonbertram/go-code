@@ -3,10 +3,12 @@ package catalog
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ProviderClient is the interface that provider clients must implement.
@@ -78,7 +80,8 @@ func (r *ProviderRegistry) SetAPIKey(provider, key string) {
 }
 
 // IsConfigured returns true if the named provider has an API key available,
-// either via a runtime override or the environment variable.
+// either via a runtime override, the environment variable, or an optional
+// local-provider configuration that does not require a key.
 func (r *ProviderRegistry) IsConfigured(providerName string) bool {
 	r.mu.RLock()
 	if k := r.overrideKeys[providerName]; k != "" {
@@ -89,6 +92,9 @@ func (r *ProviderRegistry) IsConfigured(providerName string) bool {
 	entry, ok := r.catalog.Providers[providerName]
 	if !ok {
 		return false
+	}
+	if entry.APIKeyOptional {
+		return true
 	}
 	return r.getenv(entry.APIKeyEnv) != ""
 }
@@ -123,11 +129,20 @@ func (r *ProviderRegistry) GetClient(providerName string) (ProviderClient, error
 		apiKey = r.getenv(entry.APIKeyEnv)
 	}
 	if apiKey == "" {
-		return nil, fmt.Errorf("provider %q: API key env %q is not set", providerName, entry.APIKeyEnv)
+		if !entry.APIKeyOptional {
+			return nil, fmt.Errorf("provider %q: API key env %q is not set", providerName, entry.APIKeyEnv)
+		}
+		apiKey = providerName
 	}
 
 	if r.clientFactory == nil {
 		return nil, fmt.Errorf("provider %q: no client factory configured", providerName)
+	}
+
+	if entry.APIKeyOptional {
+		if err := checkLocalServerReachable(providerName, entry); err != nil {
+			return nil, err
+		}
 	}
 
 	client, err := r.clientFactory(apiKey, entry.BaseURL, providerName)
@@ -380,6 +395,47 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// checkLocalServerReachable probes the local provider's OpenAI-compatible
+// /v1/models endpoint. If the server is not reachable, it returns a clear,
+// actionable error naming the provider, its base URL, and how to start it.
+func checkLocalServerReachable(providerName string, entry ProviderEntry) error {
+	client := &http.Client{Timeout: 2 * time.Second}
+	baseURL := strings.TrimRight(entry.BaseURL, "/")
+	url := baseURL + "/models"
+
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("no %s server reachable at %s — is %s running?: %w", entry.DisplayName, serverBaseURL(entry.BaseURL), localServerHint(providerName), err)
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("no %s server reachable at %s — is %s running?", entry.DisplayName, serverBaseURL(entry.BaseURL), localServerHint(providerName))
+	}
+	defer resp.Body.Close()
+	return nil
+}
+
+func serverBaseURL(baseURL string) string {
+	u := strings.TrimRight(baseURL, "/")
+	u = strings.TrimSuffix(u, "/v1")
+	if u == "" {
+		return baseURL
+	}
+	return u
+}
+
+func localServerHint(providerName string) string {
+	switch providerName {
+	case "ollama":
+		return "`ollama serve`"
+	case "lmstudio":
+		return "LM Studio"
+	default:
+		return "the server"
+	}
 }
 
 // ModelAliasesContext returns aliases keyed by canonical model id for the given provider.
