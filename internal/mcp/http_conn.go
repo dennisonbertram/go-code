@@ -135,6 +135,31 @@ func (c *httpConn) CallTool(ctx context.Context, name string, args json.RawMessa
 	return extractToolCallResult(raw)
 }
 
+// ListResources queries the server for its resource list.
+func (c *httpConn) ListResources(ctx context.Context) ([]ResourceDef, error) {
+	raw, err := c.sendRequest(ctx, "resources/list", nil)
+	if err != nil {
+		if isMethodNotFoundError(err) {
+			return nil, fmt.Errorf("mcp: server %q does not support resources", c.name)
+		}
+		return nil, err
+	}
+	return parseResourcesListResult(raw)
+}
+
+// ReadResource reads a resource's content by URI.
+func (c *httpConn) ReadResource(ctx context.Context, uri string) (string, error) {
+	params := map[string]any{"uri": uri}
+	raw, err := c.sendRequest(ctx, "resources/read", params)
+	if err != nil {
+		if isMethodNotFoundError(err) {
+			return "", fmt.Errorf("mcp: server %q does not support resources", c.name)
+		}
+		return "", err
+	}
+	return extractResourceReadResult(raw)
+}
+
 // Close releases resources. It is idempotent and safe for concurrent use.
 func (c *httpConn) Close() error {
 	c.mu.Lock()

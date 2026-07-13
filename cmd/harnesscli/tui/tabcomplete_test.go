@@ -143,7 +143,7 @@ func TestTabCompletion_AllRegisteredCommands(t *testing.T) {
 	}{
 		{"/cle", "/clear "},
 		{"/hel", "/help "},
-		{"/con", "/context "},
+		{"/cont", "/context "},
 		{"/mod", "/model "},
 		{"/sta", "/stats "},
 		{"/suba", "/subagents "},

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,7 +17,9 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	harnessconfig "go-agent-harness/cmd/harnesscli/config"
+	"go-agent-harness/cmd/harnesscli/tui/components/configpanel"
 	"go-agent-harness/cmd/harnesscli/tui/components/contextgrid"
+	"go-agent-harness/cmd/harnesscli/tui/components/costdisplay"
 	"go-agent-harness/cmd/harnesscli/tui/components/helpdialog"
 	"go-agent-harness/cmd/harnesscli/tui/components/inputarea"
 	"go-agent-harness/cmd/harnesscli/tui/components/interruptui"
@@ -275,6 +278,13 @@ type Model struct {
 	contextGrid contextgrid.Model
 	statsPanel  statspanel.Model
 
+	// costDisplay is the /cost overlay showing running token usage and cost.
+	costDisplay costdisplay.Model
+
+	// configPanel is the /config overlay: a read-only view of the current
+	// session's configuration (base URL, model, workspace, etc.).
+	configPanel configpanel.Model
+
 	// spinner drives the persistent in-progress indicator shown while a run
 	// is active and the thinking bar has no streamed text to display (e.g.
 	// while a tool call is executing). Shows the current action (running
@@ -317,6 +327,7 @@ func New(cfg TUIConfig) Model {
 		theme:           DefaultTheme(),
 		contextGrid:     contextgrid.New(),
 		statsPanel:      statspanel.New(nil),
+		costDisplay:     costdisplay.New(),
 		spinner:         spinner.New(time.Now().UnixNano()),
 		thinkingBar:     thinkingbar.New(),
 		interruptBanner: interruptui.New(),
@@ -1336,6 +1347,69 @@ func executeStatsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	return []tea.Cmd{func() tea.Msg { return OverlayOpenMsg{Kind: "stats"} }}, false
 }
 
+// costSnapshotFromModel builds a costdisplay.CostSnapshot from the model's
+// current cumulative cost/token state. The model only tracks a combined
+// running token total (not a separate input/output split), so the total is
+// surfaced as OutputTokens rather than fabricating a breakdown.
+func costSnapshotFromModel(m *Model) costdisplay.CostSnapshot {
+	return costdisplay.CostSnapshot{
+		OutputTokens: m.totalTokens,
+		TotalCostUSD: m.cumulativeCostUSD,
+		Model:        m.selectedModel,
+	}
+}
+
+// executeCostCommand toggles the /cost overlay showing running token usage
+// and cost.
+func executeCostCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	if m.overlayActive && m.activeOverlay == "cost" {
+		m.costDisplay = m.costDisplay.Hide()
+		m.overlayActive = false
+		m.activeOverlay = ""
+		return nil, false
+	}
+	m.costDisplay = m.costDisplay.Update(costSnapshotFromModel(m)).Show()
+	m.overlayActive = true
+	m.activeOverlay = "cost"
+	return []tea.Cmd{func() tea.Msg { return OverlayOpenMsg{Kind: "cost"} }}, false
+}
+
+// configEntriesFromModel builds the read-only config entries shown by the
+// /config overlay from the current session's configuration.
+func configEntriesFromModel(m *Model) []configpanel.ConfigEntry {
+	gateway := m.selectedGateway
+	if gateway == "" {
+		gateway = "direct"
+	}
+	reasoning := m.selectedReasoningEffort
+	if reasoning == "" {
+		reasoning = "default"
+	}
+	model := m.selectedModel
+	if model == "" {
+		model = m.config.Model
+	}
+	return []configpanel.ConfigEntry{
+		{Key: "base_url", Value: m.config.BaseURL, Description: "harnessd server URL", ReadOnly: true},
+		{Key: "model", Value: model, Description: "Active LLM model", ReadOnly: true},
+		{Key: "workspace", Value: m.config.Workspace, Description: "Workspace root path", ReadOnly: true},
+		{Key: "max_steps", Value: strconv.Itoa(m.config.MaxSteps), Description: "Max agent steps per run", ReadOnly: true},
+		{Key: "theme", Value: m.config.Theme, Description: "Color theme", ReadOnly: true},
+		{Key: "color_profile", Value: m.config.ColorProfile, Description: "Terminal color depth", ReadOnly: true},
+		{Key: "gateway", Value: gateway, Description: "Model routing gateway", ReadOnly: true},
+		{Key: "reasoning_effort", Value: reasoning, Description: "Reasoning effort level", ReadOnly: true},
+	}
+}
+
+// executeConfigCommand opens the /config overlay: a read-only view of the
+// current session configuration.
+func executeConfigCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	m.configPanel = configpanel.New(configEntriesFromModel(m)).Open()
+	m.overlayActive = true
+	m.activeOverlay = "config"
+	return []tea.Cmd{func() tea.Msg { return OverlayOpenMsg{Kind: "config"} }}, false
+}
+
 func executeQuitCommand(_ *Model, _ Command) ([]tea.Cmd, bool) {
 	return nil, true
 }
@@ -1832,6 +1906,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.activeOverlay == "permissions" {
 				m.permissionsPanel = m.permissionsPanel.Close()
+				m.overlayActive = false
+				m.activeOverlay = ""
+				return m, tea.Batch(cmds...)
+			}
+			if m.activeOverlay == "cost" {
+				m.costDisplay = m.costDisplay.Hide()
+				m.overlayActive = false
+				m.activeOverlay = ""
+				return m, tea.Batch(cmds...)
+			}
+			if m.activeOverlay == "config" {
+				m.configPanel = m.configPanel.Close()
 				m.overlayActive = false
 				m.activeOverlay = ""
 				return m, tea.Batch(cmds...)
@@ -2809,6 +2895,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// Update context grid token count.
 				m.contextGrid.UsedTokens = m.totalTokens
 				m.statusBar.SetContext(m.totalTokens, m.contextWindowTotal())
+				// Keep the /cost overlay's snapshot current even while it is open.
+				m.costDisplay = m.costDisplay.Update(costSnapshotFromModel(&m))
 			}
 		case "run.waiting_for_user":
 			// Extract run_id from the event payload, then fetch pending questions.
@@ -3227,6 +3315,16 @@ func (m Model) View() string {
 				raw = "Context grid not available"
 			}
 			mainContent = boxOverlay(raw, m.width)
+		case "cost":
+			cd := m.costDisplay
+			cd.Width = m.width - 2
+			raw := cd.View()
+			if raw == "" {
+				raw = "No cost data yet"
+			}
+			mainContent = boxOverlay(raw, m.width)
+		case "config":
+			mainContent = m.configPanel.View(m.width, m.layout.ViewportHeight)
 		case "model":
 			if m.modelConfigMode {
 				mainContent = m.viewModelConfigPanel()

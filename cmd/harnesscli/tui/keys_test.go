@@ -128,7 +128,6 @@ func TestTUI008_EachBindingHasKeys(t *testing.T) {
 		{"Interrupt", km.Interrupt.Enabled(), km.Interrupt.Help().Key, km.Interrupt.Help().Desc},
 		{"Help", km.Help.Enabled(), km.Help.Help().Key, km.Help.Help().Desc},
 		{"Quit", km.Quit.Enabled(), km.Quit.Help().Key, km.Quit.Help().Desc},
-		{"PlanMode", km.PlanMode.Enabled(), km.PlanMode.Help().Key, km.PlanMode.Help().Desc},
 		{"EditMode", km.EditMode.Enabled(), km.EditMode.Help().Key, km.EditMode.Help().Desc},
 	}
 

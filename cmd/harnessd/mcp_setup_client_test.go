@@ -17,11 +17,12 @@ import (
 // a real subprocess or network connection. It is intentionally local to this
 // file so the main package tests don't depend on harness-package internals.
 type testFakeMCPConn struct {
-	name    string
-	tools   []mcp.ToolDef
-	callErr error // if non-nil, CallTool returns this error
-	listErr error // if non-nil, ListTools returns this error
-	id      int64
+	name      string
+	tools     []mcp.ToolDef
+	resources []mcp.ResourceDef
+	callErr   error // if non-nil, CallTool returns this error
+	listErr   error // if non-nil, ListTools returns this error
+	id        int64
 }
 
 func newTestFakeMCPConn(name string, tools []mcp.ToolDef) *testFakeMCPConn {
@@ -50,6 +51,39 @@ func (f *testFakeMCPConn) NextID() int64 {
 }
 
 func (f *testFakeMCPConn) Close() error { return nil }
+
+func (f *testFakeMCPConn) ListResources(_ context.Context) ([]mcp.ResourceDef, error) {
+	return f.resources, nil
+}
+
+func (f *testFakeMCPConn) ReadResource(_ context.Context, uri string) (string, error) {
+	return fmt.Sprintf("content:%s", uri), nil
+}
+
+var _ mcp.ResourceCapableConn = (*testFakeMCPConn)(nil)
+
+// testFakeMCPConnNoResources implements mcp.Conn but not mcp.ResourceCapableConn,
+// simulating a server connection with no resources support.
+type testFakeMCPConnNoResources struct {
+	id int64
+}
+
+func (f *testFakeMCPConnNoResources) Initialize(_ context.Context) error { return nil }
+
+func (f *testFakeMCPConnNoResources) ListTools(_ context.Context) ([]mcp.ToolDef, error) {
+	return nil, nil
+}
+
+func (f *testFakeMCPConnNoResources) CallTool(_ context.Context, _ string, _ json.RawMessage) (string, error) {
+	return "", nil
+}
+
+func (f *testFakeMCPConnNoResources) NextID() int64 {
+	f.id++
+	return f.id
+}
+
+func (f *testFakeMCPConnNoResources) Close() error { return nil }
 
 // --- Interface compliance check ---
 
@@ -209,28 +243,84 @@ func TestClientManagerRegistry_CallTool_UnknownServer(t *testing.T) {
 
 // --- ListResources tests ---
 
-// TestClientManagerRegistry_ListResources_AlwaysEmpty verifies that
-// ListResources always returns nil, nil regardless of server name.
-func TestClientManagerRegistry_ListResources_AlwaysEmpty(t *testing.T) {
+// TestClientManagerRegistry_ListResources_UnknownServer verifies that
+// ListResources returns an error for a server that was never registered.
+func TestClientManagerRegistry_ListResources_UnknownServer(t *testing.T) {
 	t.Parallel()
 
 	cm := mcp.NewClientManager()
 	reg := &clientManagerRegistry{cm: cm}
 
-	resources, err := reg.ListResources(context.Background(), "any-server")
-	if err != nil {
-		t.Fatalf("ListResources returned unexpected error: %v", err)
+	_, err := reg.ListResources(context.Background(), "any-server")
+	if err == nil {
+		t.Fatal("expected error for unknown server, got nil")
 	}
-	if resources != nil {
-		t.Errorf("expected nil resources, got %v", resources)
+	if !strings.Contains(err.Error(), "any-server") {
+		t.Errorf("expected error to mention server name, got: %v", err)
+	}
+}
+
+// TestClientManagerRegistry_ListResources_WithServer verifies that resources
+// from a resource-capable connection are delegated through and mapped onto
+// htools.MCPResource correctly.
+func TestClientManagerRegistry_ListResources_WithServer(t *testing.T) {
+	t.Parallel()
+
+	cm := mcp.NewClientManager()
+	err := cm.AddServerWithConn("res-server", func() (mcp.Conn, error) {
+		return &testFakeMCPConn{
+			name: "res-server",
+			resources: []mcp.ResourceDef{
+				{URI: "file:///a.txt", Name: "a", Description: "file a", MimeType: "text/plain"},
+			},
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("AddServerWithConn: %v", err)
+	}
+
+	reg := &clientManagerRegistry{cm: cm}
+	resources, err := reg.ListResources(context.Background(), "res-server")
+	if err != nil {
+		t.Fatalf("ListResources: %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("expected 1 resource, got %d", len(resources))
+	}
+	if resources[0].URI != "file:///a.txt" || resources[0].Name != "a" {
+		t.Errorf("unexpected resource: %+v", resources[0])
+	}
+}
+
+// TestClientManagerRegistry_ListResources_NotSupported verifies that a server
+// connection without resources support yields a clean error, not a panic.
+func TestClientManagerRegistry_ListResources_NotSupported(t *testing.T) {
+	t.Parallel()
+
+	cm := mcp.NewClientManager()
+	err := cm.AddServerWithConn("no-res-server", func() (mcp.Conn, error) {
+		return &testFakeMCPConnNoResources{}, nil
+	})
+	if err != nil {
+		t.Fatalf("AddServerWithConn: %v", err)
+	}
+
+	reg := &clientManagerRegistry{cm: cm}
+	_, err = reg.ListResources(context.Background(), "no-res-server")
+	if err == nil {
+		t.Fatal("expected error for server without resources support, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not support resources") {
+		t.Errorf("expected 'does not support resources' in error, got: %v", err)
 	}
 }
 
 // --- ReadResource tests ---
 
-// TestClientManagerRegistry_ReadResource_AlwaysError verifies that
-// ReadResource always returns an error that mentions the server name.
-func TestClientManagerRegistry_ReadResource_AlwaysError(t *testing.T) {
+// TestClientManagerRegistry_ReadResource_UnknownServer verifies that
+// ReadResource returns an error that mentions the server name for a server
+// that was never registered.
+func TestClientManagerRegistry_ReadResource_UnknownServer(t *testing.T) {
 	t.Parallel()
 
 	cm := mcp.NewClientManager()
@@ -245,5 +335,51 @@ func TestClientManagerRegistry_ReadResource_AlwaysError(t *testing.T) {
 	// The error message should reference the server name.
 	if !strings.Contains(err.Error(), serverName) {
 		t.Errorf("expected error to mention server name %q, got: %v", serverName, err)
+	}
+}
+
+// TestClientManagerRegistry_ReadResource_WithServer verifies that ReadResource
+// delegates to the underlying connection and returns its content.
+func TestClientManagerRegistry_ReadResource_WithServer(t *testing.T) {
+	t.Parallel()
+
+	cm := mcp.NewClientManager()
+	err := cm.AddServerWithConn("res-server", func() (mcp.Conn, error) {
+		return &testFakeMCPConn{name: "res-server"}, nil
+	})
+	if err != nil {
+		t.Fatalf("AddServerWithConn: %v", err)
+	}
+
+	reg := &clientManagerRegistry{cm: cm}
+	content, err := reg.ReadResource(context.Background(), "res-server", "file:///a.txt")
+	if err != nil {
+		t.Fatalf("ReadResource: %v", err)
+	}
+	if content != "content:file:///a.txt" {
+		t.Errorf("unexpected content: %q", content)
+	}
+}
+
+// TestClientManagerRegistry_ReadResource_NotSupported verifies that a server
+// connection without resources support yields a clean error, not a panic.
+func TestClientManagerRegistry_ReadResource_NotSupported(t *testing.T) {
+	t.Parallel()
+
+	cm := mcp.NewClientManager()
+	err := cm.AddServerWithConn("no-res-server", func() (mcp.Conn, error) {
+		return &testFakeMCPConnNoResources{}, nil
+	})
+	if err != nil {
+		t.Fatalf("AddServerWithConn: %v", err)
+	}
+
+	reg := &clientManagerRegistry{cm: cm}
+	_, err = reg.ReadResource(context.Background(), "no-res-server", "file:///a.txt")
+	if err == nil {
+		t.Fatal("expected error for server without resources support, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not support resources") {
+		t.Errorf("expected 'does not support resources' in error, got: %v", err)
 	}
 }

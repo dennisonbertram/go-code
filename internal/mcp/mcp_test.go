@@ -31,8 +31,15 @@ type inProcessMCPServer struct {
 	// serverWriter is the mock's stdout writer (writes to clientReader).
 	serverWriter *io.PipeWriter
 
-	tools []mcp.ToolDef
-	done  chan struct{}
+	tools     []mcp.ToolDef
+	resources []mcp.ResourceDef
+	// resourceContents maps a resource URI to the text returned by resources/read.
+	resourceContents map[string]string
+	// supportsResources controls whether resources/list and resources/read are
+	// handled at all; when false the mock falls through to the default
+	// method-not-found response, simulating a server without the capability.
+	supportsResources bool
+	done              chan struct{}
 }
 
 func newInProcessMCPServer(tools []mcp.ToolDef) *inProcessMCPServer {
@@ -131,6 +138,52 @@ func (s *inProcessMCPServer) serve() {
 				"result": map[string]any{
 					"content": []map[string]any{
 						{"type": "text", "text": fmt.Sprintf(`{"tool":"%s","called":true}`, callParams.Name)},
+					},
+				},
+			}
+		case "resources/list":
+			if !s.supportsResources {
+				resp = map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"error":   map[string]any{"code": -32601, "message": "method not found"},
+				}
+				break
+			}
+			resourceList := make([]map[string]any, 0, len(s.resources))
+			for _, r := range s.resources {
+				resourceList = append(resourceList, map[string]any{
+					"uri":         r.URI,
+					"name":        r.Name,
+					"description": r.Description,
+					"mimeType":    r.MimeType,
+				})
+			}
+			resp = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result":  map[string]any{"resources": resourceList},
+			}
+		case "resources/read":
+			if !s.supportsResources {
+				resp = map[string]any{
+					"jsonrpc": "2.0",
+					"id":      req.ID,
+					"error":   map[string]any{"code": -32601, "message": "method not found"},
+				}
+				break
+			}
+			var readParams struct {
+				URI string `json:"uri"`
+			}
+			_ = json.Unmarshal(req.Params, &readParams)
+			text := s.resourceContents[readParams.URI]
+			resp = map[string]any{
+				"jsonrpc": "2.0",
+				"id":      req.ID,
+				"result": map[string]any{
+					"contents": []map[string]any{
+						{"uri": readParams.URI, "mimeType": "text/plain", "text": text},
 					},
 				},
 			}
@@ -549,6 +602,243 @@ func TestStdioConn_IDUniqueness(t *testing.T) {
 			t.Errorf("duplicate ID: %d", id)
 		}
 		seen[id] = true
+	}
+}
+
+// TestMCPProtocol_ListResources tests that resources/list returns the expected resources.
+func TestMCPProtocol_ListResources(t *testing.T) {
+	t.Parallel()
+
+	srv := newInProcessMCPServer(nil)
+	srv.supportsResources = true
+	srv.resources = []mcp.ResourceDef{
+		{URI: "file:///a.txt", Name: "a", Description: "file a", MimeType: "text/plain"},
+		{URI: "file:///b.txt", Name: "b", Description: "file b", MimeType: "text/plain"},
+	}
+	srv.start()
+	defer srv.stop()
+
+	conn, err := mcp.NewStdioConn("test-server", srv.clientReader, srv.clientWriter)
+	if err != nil {
+		t.Fatalf("NewStdioConn: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := conn.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	rc, ok := conn.(mcp.ResourceCapableConn)
+	if !ok {
+		t.Fatal("expected conn to implement ResourceCapableConn")
+	}
+
+	resources, err := rc.ListResources(ctx)
+	if err != nil {
+		t.Fatalf("ListResources: %v", err)
+	}
+	if len(resources) != 2 {
+		t.Fatalf("expected 2 resources, got %d", len(resources))
+	}
+	if resources[0].URI != "file:///a.txt" || resources[0].Name != "a" {
+		t.Errorf("unexpected resource[0]: %+v", resources[0])
+	}
+	if resources[1].URI != "file:///b.txt" || resources[1].Name != "b" {
+		t.Errorf("unexpected resource[1]: %+v", resources[1])
+	}
+}
+
+// TestMCPProtocol_ReadResource tests that resources/read returns the text content.
+func TestMCPProtocol_ReadResource(t *testing.T) {
+	t.Parallel()
+
+	srv := newInProcessMCPServer(nil)
+	srv.supportsResources = true
+	srv.resourceContents = map[string]string{
+		"file:///a.txt": "hello from a.txt",
+	}
+	srv.start()
+	defer srv.stop()
+
+	conn, err := mcp.NewStdioConn("test-server", srv.clientReader, srv.clientWriter)
+	if err != nil {
+		t.Fatalf("NewStdioConn: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := conn.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	rc, ok := conn.(mcp.ResourceCapableConn)
+	if !ok {
+		t.Fatal("expected conn to implement ResourceCapableConn")
+	}
+
+	content, err := rc.ReadResource(ctx, "file:///a.txt")
+	if err != nil {
+		t.Fatalf("ReadResource: %v", err)
+	}
+	if content != "hello from a.txt" {
+		t.Errorf("ReadResource content = %q, want %q", content, "hello from a.txt")
+	}
+}
+
+// TestMCPProtocol_ListResources_NotSupported tests that a server without the
+// resources capability yields a clean error, not a panic, from a method-not-found
+// JSON-RPC response.
+func TestMCPProtocol_ListResources_NotSupported(t *testing.T) {
+	t.Parallel()
+
+	srv := newInProcessMCPServer(nil) // supportsResources defaults to false
+	srv.start()
+	defer srv.stop()
+
+	conn, err := mcp.NewStdioConn("test-server", srv.clientReader, srv.clientWriter)
+	if err != nil {
+		t.Fatalf("NewStdioConn: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := conn.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	rc, ok := conn.(mcp.ResourceCapableConn)
+	if !ok {
+		t.Fatal("expected conn to implement ResourceCapableConn")
+	}
+
+	_, err = rc.ListResources(ctx)
+	if err == nil {
+		t.Fatal("expected error for server without resources capability, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not support resources") {
+		t.Errorf("expected 'does not support resources' in error, got %q", err.Error())
+	}
+}
+
+// TestMCPProtocol_ReadResource_NotSupported tests that reading a resource from
+// a server without the resources capability yields a clean error.
+func TestMCPProtocol_ReadResource_NotSupported(t *testing.T) {
+	t.Parallel()
+
+	srv := newInProcessMCPServer(nil) // supportsResources defaults to false
+	srv.start()
+	defer srv.stop()
+
+	conn, err := mcp.NewStdioConn("test-server", srv.clientReader, srv.clientWriter)
+	if err != nil {
+		t.Fatalf("NewStdioConn: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := conn.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	rc, ok := conn.(mcp.ResourceCapableConn)
+	if !ok {
+		t.Fatal("expected conn to implement ResourceCapableConn")
+	}
+
+	_, err = rc.ReadResource(ctx, "file:///missing.txt")
+	if err == nil {
+		t.Fatal("expected error for server without resources capability, got nil")
+	}
+	if !strings.Contains(err.Error(), "does not support resources") {
+		t.Errorf("expected 'does not support resources' in error, got %q", err.Error())
+	}
+}
+
+// TestClientManager_ListResources tests ClientManager.ListResources using an
+// in-process server.
+func TestClientManager_ListResources(t *testing.T) {
+	t.Parallel()
+
+	srv := newInProcessMCPServer(nil)
+	srv.supportsResources = true
+	srv.resources = []mcp.ResourceDef{
+		{URI: "mem://note", Name: "note"},
+	}
+	srv.start()
+	defer srv.stop()
+
+	cm := mcp.NewClientManager()
+	if err := cm.AddServerWithConn("res-server", func() (mcp.Conn, error) {
+		return mcp.NewStdioConn("res-server", srv.clientReader, srv.clientWriter)
+	}); err != nil {
+		t.Fatalf("AddServerWithConn: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resources, err := cm.ListResources(ctx, "res-server")
+	if err != nil {
+		t.Fatalf("ListResources: %v", err)
+	}
+	if len(resources) != 1 || resources[0].URI != "mem://note" {
+		t.Fatalf("unexpected resources: %v", resources)
+	}
+}
+
+// TestClientManager_ReadResource tests ClientManager.ReadResource using an
+// in-process server.
+func TestClientManager_ReadResource(t *testing.T) {
+	t.Parallel()
+
+	srv := newInProcessMCPServer(nil)
+	srv.supportsResources = true
+	srv.resourceContents = map[string]string{"mem://note": "note body"}
+	srv.start()
+	defer srv.stop()
+
+	cm := mcp.NewClientManager()
+	if err := cm.AddServerWithConn("res-server", func() (mcp.Conn, error) {
+		return mcp.NewStdioConn("res-server", srv.clientReader, srv.clientWriter)
+	}); err != nil {
+		t.Fatalf("AddServerWithConn: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	content, err := cm.ReadResource(ctx, "res-server", "mem://note")
+	if err != nil {
+		t.Fatalf("ReadResource: %v", err)
+	}
+	if content != "note body" {
+		t.Errorf("ReadResource content = %q, want %q", content, "note body")
+	}
+}
+
+// TestClientManager_ListResources_UnknownServer tests that ListResources returns
+// an error for unknown servers.
+func TestClientManager_ListResources_UnknownServer(t *testing.T) {
+	t.Parallel()
+
+	cm := mcp.NewClientManager()
+
+	ctx := context.Background()
+	_, err := cm.ListResources(ctx, "nonexistent")
+	if err == nil {
+		t.Fatal("expected error for unknown server")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Errorf("expected 'not found' in error, got %q", err.Error())
 	}
 }
 

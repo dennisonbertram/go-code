@@ -3,7 +3,9 @@ Command Registry - 200x50
 /attach — Attach file context with @path tokens
 /cancel — Cancel a harness run
 /clear — Clear conversation history
+/config — View current session configuration
 /context — View context window usage
+/cost — Show running cost and token usage
 /doctor — Show local harness diagnostic commands
 /export — Export conversation to markdown
 /help — Show help dialog
