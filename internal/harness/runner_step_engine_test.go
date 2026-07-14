@@ -1,8 +1,13 @@
 package harness
 
 import (
+	"context"
+	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
+
+	"go-agent-harness/internal/systemprompt"
 )
 
 // TestRunnerStepLoop_SteeringDrainBeforeTurnRequest characterizes the current
@@ -111,4 +116,154 @@ func TestRunnerStepLoop_SteeringDrainBeforeTurnRequest(t *testing.T) {
 	if !found {
 		t.Fatalf("steering message not found in second LLM call messages: %v", secondCallMsgs)
 	}
+}
+
+// TestRunnerStepEngine_ResetContextBreaksRemainingToolResults verifies that
+// when a reset_context result is returned by a non-first tool call in a turn,
+// the remaining tool results of that turn are not appended to the reset seed.
+func TestRunnerStepEngine_ResetContextBreaksRemainingToolResults(t *testing.T) {
+	t.Parallel()
+
+	reg := makeResetContextRegistry()
+	for _, name := range []string{"toolA", "toolB"} {
+		n := name
+		if err := reg.Register(ToolDefinition{
+			Name:        n,
+			Description: "test tool",
+			Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		}, func(_ context.Context, _ json.RawMessage) (string, error) {
+			return n + "-output", nil
+		}); err != nil {
+			t.Fatalf("Register %s: %v", n, err)
+		}
+	}
+
+	provider := &capturingProvider{
+		turns: []CompletionResult{
+			{
+				ToolCalls: []ToolCall{
+					{ID: "c1", Name: "toolA", Arguments: `{}`},
+					{ID: "c2", Name: "reset_context", Arguments: `{"persist":{}}`},
+					{ID: "c3", Name: "toolB", Arguments: `{}`},
+				},
+			},
+			{Content: "all done"},
+		},
+	}
+
+	runner := NewRunner(provider, reg, RunnerConfig{
+		DefaultModel:        "test",
+		DefaultSystemPrompt: "system prompt",
+		MaxSteps:            10,
+	})
+
+	run, err := runner.StartRun(RunRequest{Prompt: "start"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	waitForRunCompletion(t, runner, run.ID)
+
+	msgs := runner.GetRunMessages(run.ID)
+	foundReset := false
+	for _, m := range msgs {
+		if m.Role == "user" && strings.Contains(m.Content, "Context Reset") {
+			foundReset = true
+		}
+		if m.Role == "tool" {
+			t.Errorf("unexpected tool message after reset: name=%s content=%q", m.Name, m.Content)
+		}
+		if strings.Contains(m.Content, "toolA-output") || strings.Contains(m.Content, "toolB-output") {
+			t.Errorf("tool output leaked into messages after reset: %q", m.Content)
+		}
+	}
+	if !foundReset {
+		t.Errorf("reset opening message not found in messages: %+v", msgs)
+	}
+}
+
+// TestRunnerStepEngine_AutoCompactRebuildPreservesDynamicRuleAndRuntimeContext
+// verifies that the auto-compact rebuild block re-injects the dynamic-rule
+// content and the runtime-context block that were computed for the turn.
+func TestRunnerStepEngine_AutoCompactRebuildPreservesDynamicRuleAndRuntimeContext(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	if err := registry.Register(ToolDefinition{
+		Name:        "trigger_tool",
+		Description: "test tool",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+	}, func(_ context.Context, _ json.RawMessage) (string, error) {
+		return "trigger result", nil
+	}); err != nil {
+		t.Fatalf("Register trigger_tool: %v", err)
+	}
+
+	provider := &capturingProvider{
+		turns: []CompletionResult{
+			{
+				ToolCalls: []ToolCall{{ID: "c1", Name: "trigger_tool", Arguments: `{}`}},
+			},
+			{Content: "done"},
+		},
+	}
+
+	engine := &promptEngineStub{resolved: systemprompt.ResolvedPrompt{
+		StaticPrompt:   "STATIC_PROMPT",
+		ResolvedIntent: "general",
+	}}
+
+	// Large prompt forces auto-compaction on step 2.
+	largePrompt := strings.Repeat("word ", 200)
+
+	runner := NewRunner(provider, registry, RunnerConfig{
+		DefaultModel:         "test",
+		DefaultAgentIntent:   "general",
+		MaxSteps:             5,
+		PromptEngine:         engine,
+		AutoCompactEnabled:   true,
+		ModelContextWindow:   20,
+		AutoCompactThreshold: 0.5,
+		AutoCompactKeepLast:  10,
+		AutoCompactMode:      "strip",
+	})
+
+	run, err := runner.StartRun(RunRequest{
+		Prompt: largePrompt,
+		DynamicRules: []DynamicRule{
+			{
+				ID:       "fire-once-rule",
+				Trigger:  RuleTrigger{ToolNames: []string{"trigger_tool"}},
+				Content:  "INJECTED-RULE-CONTENT",
+				FireOnce: true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	waitForRunCompletion(t, runner, run.ID)
+
+	if len(provider.calls) < 2 {
+		t.Fatalf("expected at least 2 provider calls, got %d", len(provider.calls))
+	}
+	step2Req := provider.calls[1]
+
+	foundRule := false
+	foundRuntime := false
+	for _, m := range step2Req.Messages {
+		if m.Role == "system" && strings.Contains(m.Content, "INJECTED-RULE-CONTENT") {
+			foundRule = true
+		}
+		if m.Role == "system" && strings.Contains(m.Content, "runtime-step-2") {
+			foundRuntime = true
+		}
+	}
+	if !foundRule {
+		t.Errorf("dynamic rule content missing from step 2 request messages: %+v", step2Req.Messages)
+	}
+	if !foundRuntime {
+		t.Errorf("runtime context missing from step 2 request messages: %+v", step2Req.Messages)
+	}
+
+	_ = run
 }

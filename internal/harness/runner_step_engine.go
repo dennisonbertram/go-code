@@ -209,6 +209,7 @@ func (se *stepEngine) run() {
 		if injected := injectedRuleContent.String(); injected != "" {
 			turnMessages = append(turnMessages, Message{Role: "system", Content: injected})
 		}
+		var runtimeContext string
 		if resolvedPrompt != nil && r.config.PromptEngine != nil {
 			usageTotals, costTotals := r.accountingTotals(runID)
 
@@ -234,7 +235,7 @@ func (se *stepEngine) run() {
 					}
 				}
 			}
-			runtimeContext := strings.TrimSpace(r.config.PromptEngine.RuntimeContext(systemprompt.RuntimeContextInput{
+			runtimeContext = strings.TrimSpace(r.config.PromptEngine.RuntimeContext(systemprompt.RuntimeContextInput{
 				RunStartedAt:           runStartedAt,
 				Now:                    time.Now().UTC(),
 				Step:                   step,
@@ -298,6 +299,12 @@ func (se *stepEngine) run() {
 					}
 					if systemPrompt != "" {
 						turnMessages = append(turnMessages, Message{Role: "system", Content: systemPrompt})
+					}
+					if injected := injectedRuleContent.String(); injected != "" {
+						turnMessages = append(turnMessages, Message{Role: "system", Content: injected})
+					}
+					if runtimeContext != "" {
+						turnMessages = append(turnMessages, Message{Role: "system", Content: runtimeContext})
 					}
 					turnMessages = append(turnMessages, copyMessages(messages)...)
 					r.emit(runID, EventAutoCompactCompleted, map[string]any{
@@ -1221,7 +1228,7 @@ func (se *stepEngine) run() {
 					}
 					messages = resetMessages
 					r.setMessages(runID, messages)
-					continue
+					break
 				}
 			}
 
