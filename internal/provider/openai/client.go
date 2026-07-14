@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -278,6 +279,33 @@ func (c *Client) decodeCompletionResponse(model string, responseBody []byte) (ha
 	return c.resultFromCompletionResponse(model, response)
 }
 
+// wrapStreamError converts a *streamAPIError (a mid-stream `{"error": {...}}`
+// SSE payload recognized by processStreamBlock) into a
+// *harness.ProviderHTTPError so it matches the type the non-streaming path
+// returns and provider fallback triggers the same way. Any other error is
+// passed through unchanged.
+func (c *Client) wrapStreamError(err error) error {
+	var streamErr *streamAPIError
+	if !errors.As(err, &streamErr) {
+		return err
+	}
+	statusCode := streamErr.StatusCode
+	if statusCode == 0 {
+		// No usable status code was embedded in the payload. Default to 503
+		// (Service Unavailable) rather than a client-error code: mid-stream
+		// failures after a 200 response has already started are, in
+		// practice, almost always transient upstream failures worth
+		// retrying against a fallback provider rather than treating as a
+		// permanent client-side error.
+		statusCode = http.StatusServiceUnavailable
+	}
+	return &harness.ProviderHTTPError{
+		Provider:   c.providerName,
+		StatusCode: statusCode,
+		Body:       strings.TrimSpace(streamErr.Raw),
+	}
+}
+
 func (c *Client) decodeStreamingResponse(model string, body io.Reader, streamFn func(harness.CompletionDelta)) (harness.CompletionResult, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
@@ -290,7 +318,7 @@ func (c *Client) decodeStreamingResponse(model string, body io.Reader, streamFn 
 		if line == "" {
 			done, err := processStreamBlock(strings.Join(lines, "\n"), &state, streamFn)
 			if err != nil {
-				return harness.CompletionResult{}, err
+				return harness.CompletionResult{}, c.wrapStreamError(err)
 			}
 			if done {
 				receivedDone = true
@@ -307,7 +335,7 @@ func (c *Client) decodeStreamingResponse(model string, body io.Reader, streamFn 
 	if !receivedDone {
 		done, err := processStreamBlock(strings.Join(lines, "\n"), &state, streamFn)
 		if err != nil {
-			return harness.CompletionResult{}, err
+			return harness.CompletionResult{}, c.wrapStreamError(err)
 		}
 		receivedDone = done
 	}
@@ -451,6 +479,23 @@ type completionResponse struct {
 type completionChunk struct {
 	Choices []chunkChoice `json:"choices"`
 	Usage   *usage        `json:"usage,omitempty"`
+	// Error carries a mid-stream `{"error": {...}}` SSE payload. Some
+	// providers (and OpenAI itself under certain failure modes) emit this
+	// instead of a normal choices delta when generation fails partway
+	// through a stream. Without recognizing it, the payload is silently
+	// skipped by the decoder, the stream ends, and the caller receives an
+	// empty or truncated "successful" result instead of an error.
+	Error *streamChunkError `json:"error,omitempty"`
+}
+
+// streamChunkError is the body of a mid-stream SSE error payload.
+type streamChunkError struct {
+	Message string `json:"message"`
+	Type    string `json:"type,omitempty"`
+	// Code is loosely typed because providers are inconsistent about whether
+	// it is a numeric HTTP status, a string HTTP status, or an opaque error
+	// code string (e.g. "rate_limit_exceeded").
+	Code any `json:"code,omitempty"`
 }
 
 type choice struct {
@@ -505,6 +550,45 @@ type streamedToolCall struct {
 	Arguments strings.Builder
 }
 
+// streamAPIError is an internal sentinel error carrying a mid-stream
+// `{"error": {...}}` SSE payload. decodeStreamingResponse recognizes it and
+// wraps it into a *harness.ProviderHTTPError (with the client's configured
+// provider name) so that provider fallback triggers the same way it does
+// for a non-streaming HTTP error response.
+type streamAPIError struct {
+	Message    string
+	StatusCode int
+	Raw        string
+}
+
+func (e *streamAPIError) Error() string {
+	return fmt.Sprintf("stream error: %s", e.Message)
+}
+
+// parseStreamErrorStatusCode extracts a plausible HTTP status code from a
+// stream error's loosely-typed "code" field. Providers are inconsistent
+// about whether this is a numeric HTTP status, a stringified HTTP status, or
+// an opaque error code (e.g. "rate_limit_exceeded"), so any value that does
+// not parse as an integer in the valid HTTP status range is ignored.
+func parseStreamErrorStatusCode(code any) int {
+	var s string
+	switch v := code.(type) {
+	case nil:
+		return 0
+	case float64:
+		s = strconv.Itoa(int(v))
+	case string:
+		s = v
+	default:
+		s = fmt.Sprint(v)
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 100 || n > 599 {
+		return 0
+	}
+	return n
+}
+
 func processStreamBlock(raw string, state *streamedCompletionState, streamFn func(harness.CompletionDelta)) (bool, error) {
 	if strings.TrimSpace(raw) == "" {
 		return false, nil
@@ -531,6 +615,13 @@ func processStreamBlock(raw string, state *streamedCompletionState, streamFn fun
 	var chunk completionChunk
 	if err := json.Unmarshal([]byte(data), &chunk); err != nil {
 		return false, fmt.Errorf("decode stream chunk: %w", err)
+	}
+	if chunk.Error != nil {
+		return false, &streamAPIError{
+			Message:    chunk.Error.Message,
+			StatusCode: parseStreamErrorStatusCode(chunk.Error.Code),
+			Raw:        data,
+		}
 	}
 	if chunk.Usage != nil {
 		state.usage = chunk.Usage
