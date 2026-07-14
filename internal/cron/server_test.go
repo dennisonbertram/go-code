@@ -251,6 +251,55 @@ func TestServerUpdateJobSchedule(t *testing.T) {
 	}
 }
 
+// TestServerUpdateJobSchedule_PausedJobNotReArmed (BT-005, P2) reproduces
+// BUG 4: PATCHing only the schedule of a PAUSED job re-arms it in the live
+// scheduler. The re-arm condition in handleUpdateJob (~line 239) is
+// `req.Schedule != nil && (req.Status == nil || *req.Status == StatusActive)`.
+// A schedule-only PATCH leaves req.Status nil, so a paused job is added
+// back to the live scheduler even though its stored status remains
+// "paused" — a paused job starts firing (or, after the BUG-2 fix, at least
+// sits incorrectly registered in the scheduler's live entry set).
+//
+// This test fails before the fix (the job ends up in scheduler.entries)
+// and passes after the fix (gating on the job's effective post-update
+// status rather than the request's status field).
+func TestServerUpdateJobSchedule_PausedJobNotReArmed(t *testing.T) {
+	store := &mockStore{}
+	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	executor := &mockExecutor{}
+	scheduler := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
+	handler := NewServer(store, scheduler, clock)
+
+	// j is already paused and, per the real job lifecycle, was removed
+	// from the live scheduler when it was paused — it is NOT in
+	// scheduler.entries at the start of this test.
+	j := testJob("patch-paused-schedule")
+	j.Status = StatusPaused
+
+	store.GetJobFunc = func(_ context.Context, id string) (Job, error) {
+		return j, nil
+	}
+	store.UpdateJobFunc = func(_ context.Context, job Job) error { return nil }
+
+	// PATCH only the schedule — no "status" field in the request body.
+	newSchedule := "0 * * * *"
+	payload := fmt.Sprintf(`{"schedule":"%s"}`, newSchedule)
+	req := httptest.NewRequest(http.MethodPatch, "/v1/jobs/"+j.ID, strings.NewReader(payload))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	scheduler.mu.Lock()
+	_, scheduled := scheduler.entries[j.ID]
+	scheduler.mu.Unlock()
+	if scheduled {
+		t.Fatal("expected a schedule-only PATCH on a paused job to NOT re-arm it in the live scheduler, but it was added to scheduler.entries")
+	}
+}
+
 func TestServerUpdateJobPause(t *testing.T) {
 	handler, store := newTestServer(t)
 	j := testJob("pause-test")
