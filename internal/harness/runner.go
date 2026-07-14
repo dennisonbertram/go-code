@@ -3856,12 +3856,21 @@ func (r *Runner) transcriptSnapshot(runID string, limit int, includeTools bool) 
 		if !includeTools && msg.Role == "tool" {
 			continue
 		}
+		toolCalls := make([]htools.ToolCall, len(msg.ToolCalls))
+		for j, tc := range msg.ToolCalls {
+			toolCalls[j] = htools.ToolCall{
+				ID:        tc.ID,
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+			}
+		}
 		items = append(items, htools.TranscriptMessage{
 			Index:      int64(i),
 			Role:       msg.Role,
 			Name:       msg.Name,
 			ToolCallID: msg.ToolCallID,
 			Content:    msg.Content,
+			ToolCalls:  toolCalls,
 		})
 	}
 	if limit > 0 && len(items) > limit {
@@ -4148,12 +4157,21 @@ func messagesAsTranscriptSnapshot(msgs []Message) []htools.TranscriptMessage {
 		if m.IsMeta {
 			continue
 		}
+		toolCalls := make([]htools.ToolCall, len(m.ToolCalls))
+		for j, tc := range m.ToolCalls {
+			toolCalls[j] = htools.ToolCall{
+				ID:        tc.ID,
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+			}
+		}
 		tm := htools.TranscriptMessage{
 			Index:      int64(i),
 			Role:       m.Role,
 			Content:    m.Content,
 			Name:       m.Name,
 			ToolCallID: m.ToolCallID,
+			ToolCalls:  toolCalls,
 		}
 		result = append(result, tm)
 	}
@@ -4165,11 +4183,20 @@ func messagesAsTranscriptSnapshot(msgs []Message) []htools.TranscriptMessage {
 func transcriptMessagesToHarness(msgs []htools.TranscriptMessage) []Message {
 	result := make([]Message, 0, len(msgs))
 	for _, m := range msgs {
+		toolCalls := make([]ToolCall, len(m.ToolCalls))
+		for i, tc := range m.ToolCalls {
+			toolCalls[i] = ToolCall{
+				ID:        tc.ID,
+				Name:      tc.Name,
+				Arguments: tc.Arguments,
+			}
+		}
 		result = append(result, Message{
 			Role:       m.Role,
 			Content:    m.Content,
 			Name:       m.Name,
 			ToolCallID: m.ToolCallID,
+			ToolCalls:  toolCalls,
 		})
 	}
 	return result

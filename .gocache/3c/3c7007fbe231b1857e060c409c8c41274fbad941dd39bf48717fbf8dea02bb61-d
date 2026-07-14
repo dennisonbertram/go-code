@@ -1,0 +1,3 @@
+./catalog.go
+./resolver.go
+./types.go

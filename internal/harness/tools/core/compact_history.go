@@ -438,6 +438,17 @@ func transcriptMsgsToMaps(msgs []tools.TranscriptMessage) []map[string]any {
 		if m.ToolCallID != "" {
 			entry["tool_call_id"] = m.ToolCallID
 		}
+		if len(m.ToolCalls) > 0 {
+			toolCalls := make([]map[string]any, len(m.ToolCalls))
+			for j, tc := range m.ToolCalls {
+				toolCalls[j] = map[string]any{
+					"id":        tc.ID,
+					"name":      tc.Name,
+					"arguments": tc.Arguments,
+				}
+			}
+			entry["tool_calls"] = toolCalls
+		}
 		result[i] = entry
 	}
 	return result

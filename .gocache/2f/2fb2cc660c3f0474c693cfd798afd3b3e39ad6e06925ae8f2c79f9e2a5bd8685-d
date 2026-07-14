@@ -1,0 +1,6 @@
+./discovery.go
+./loader.go
+./query.go
+./registry.go
+./resolver.go
+./types.go

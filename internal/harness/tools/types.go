@@ -577,12 +577,21 @@ type RunMetadata struct {
 	AgentID        string
 }
 
+// ToolCall mirrors harness.ToolCall in the tools package so the tools package
+// does not need to import harness (which would create an import cycle).
+type ToolCall struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
 type TranscriptMessage struct {
-	Index      int64  `json:"index"`
-	Role       string `json:"role"`
-	Name       string `json:"name,omitempty"`
-	ToolCallID string `json:"tool_call_id,omitempty"`
-	Content    string `json:"content,omitempty"`
+	Index      int64      `json:"index"`
+	Role       string     `json:"role"`
+	Name       string     `json:"name,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Content    string     `json:"content,omitempty"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
 }
 
 type TranscriptSnapshot struct {
