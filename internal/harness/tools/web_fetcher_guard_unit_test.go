@@ -138,3 +138,34 @@ func TestGuardedWebFetcher_Search_NoBaseConfigured_ReturnsError(t *testing.T) {
 		t.Fatal("expected an error when no base WebFetcher is configured for Search")
 	}
 }
+
+// TestRegression_GuardedWebFetcher_NoBase_RedirectToBlockedDestination_Refused
+// proves the no-base Fetch path (fetchDirect) retains the fetch/download
+// tools' redirect safety: a request to an allowlisted origin that redirects
+// to a non-allowlisted destination must still fail, because both hops share
+// the same guarded Transport (NewGuardedHTTPClient), and the dial-time
+// Control check runs again for the redirect target. If a future change
+// swapped fetchDirect's client for a plain (unguarded) one, or built a fresh
+// http.Client per-request instead of reusing the guarded one, this is what
+// would catch it — mirroring
+// TestSSRFGuard_GuardedClient_RedirectToBlockedDestination_Refused for the
+// underlying NewGuardedHTTPClient in ssrf_guard_test.go.
+func TestRegression_GuardedWebFetcher_NoBase_RedirectToBlockedDestination_Refused(t *testing.T) {
+	blocked := newLoopbackServerOn(t, "127.0.0.1", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("should never be reached"))
+	})
+	defer blocked.Close()
+
+	allowed := newLoopbackServerOn(t, "::1", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, blocked.URL, http.StatusFound)
+	})
+	defer allowed.Close()
+
+	// Only the redirect ORIGIN address (::1) is allowlisted — the redirect
+	// target (127.0.0.1) is not.
+	fetcher := NewGuardedWebFetcher(nil, []string{"::1"})
+	_, err := fetcher.Fetch(context.Background(), allowed.URL)
+	if err == nil {
+		t.Fatal("expected redirect to a non-allowlisted blocked destination to fail")
+	}
+}
