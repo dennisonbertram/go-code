@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go-agent-harness/internal/harness"
@@ -134,6 +135,54 @@ func defaultHTTPClient() *http.Client {
 	}
 }
 
+// idleStreamTimeout bounds the gap between successive reads from a streaming
+// response body. It is deliberately NOT the same kind of guard as the
+// whole-request Client.Timeout removed for BUG1: it resets on every byte
+// received, so a stream that keeps producing tokens (however slowly, and
+// however long in total) is never killed by it. Only a stream that goes
+// completely silent — connection open, headers already received, but no
+// further bytes — for this long is treated as stalled. It is a package-level
+// var (not a const) so tests can shrink it and callers could override it.
+var idleStreamTimeout = 120 * time.Second
+
+// idleTimeoutReader wraps a streaming response body so that if no Read call
+// returns data for idleStreamTimeout, cancel is invoked (which aborts the
+// in-flight HTTP request/response via its context, unblocking any pending
+// Read) and stalled is set so the caller can distinguish "stalled" from any
+// other read failure (clean EOF, upstream error payload, caller-driven
+// cancellation of the parent context, etc).
+type idleTimeoutReader struct {
+	r       io.Reader
+	cancel  context.CancelFunc
+	stalled *atomic.Bool
+	timer   *time.Timer
+}
+
+func newIdleTimeoutReader(r io.Reader, cancel context.CancelFunc, stalled *atomic.Bool) *idleTimeoutReader {
+	ir := &idleTimeoutReader{r: r, cancel: cancel, stalled: stalled}
+	ir.timer = time.AfterFunc(idleStreamTimeout, func() {
+		stalled.Store(true)
+		cancel()
+	})
+	return ir
+}
+
+func (ir *idleTimeoutReader) Read(p []byte) (int, error) {
+	n, err := ir.r.Read(p)
+	if n > 0 {
+		ir.timer.Reset(idleStreamTimeout)
+	}
+	return n, err
+}
+
+// stop releases the idle timer. Must be called (typically via defer) once
+// the stream is done being read, whether it succeeded, failed, or stalled,
+// so the timer goroutine does not fire and call cancel() on an
+// already-finished request.
+func (ir *idleTimeoutReader) stop() {
+	ir.timer.Stop()
+}
+
 // hasQuirk returns true if the named quirk is present in the client's quirk list.
 func (c *Client) hasQuirk(name string) bool {
 	return slices.Contains(c.quirks, name)
@@ -190,7 +239,16 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 		return harness.CompletionResult{}, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	// streamCtx/cancelStream let the idle-stream watchdog (below) abort just
+	// this request/response when the stream stalls, without requiring the
+	// caller's ctx to carry any deadline of its own. cancelStream is a no-op
+	// once the request completes normally (deferred here for the
+	// non-streaming path and also referenced by decodeStreamingResponse's
+	// idle timer for the streaming path).
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+
+	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("create request: %w", err)
 	}
@@ -207,7 +265,7 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 
 	requestStart := time.Now()
 
-	httpRes, err := provider.DoWithRetry(ctx, c.client, httpReq, c.retry)
+	httpRes, err := provider.DoWithRetry(streamCtx, c.client, httpReq, c.retry)
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("request failed: %w", err)
 	}
@@ -236,8 +294,23 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 			}
 			origStream(delta)
 		}
-		result, err := c.decodeStreamingResponse(model, httpRes.Body, timedStream)
+		// Idle-stream watchdog: aborts streamCtx (and therefore the
+		// in-flight body read) only if no bytes arrive for idleStreamTimeout.
+		// A stream that keeps producing tokens, however slowly and however
+		// long in total, is never touched by this — only genuine silence
+		// after headers are already flowing is treated as a failure.
+		var stalled atomic.Bool
+		idleBody := newIdleTimeoutReader(httpRes.Body, cancelStream, &stalled)
+		defer idleBody.stop()
+		result, err := c.decodeStreamingResponse(model, idleBody, timedStream)
 		if err != nil {
+			if stalled.Load() {
+				return harness.CompletionResult{}, &harness.ProviderHTTPError{
+					Provider:   c.providerName,
+					StatusCode: http.StatusServiceUnavailable,
+					Body:       fmt.Sprintf("stream stalled: no data received for %s", idleStreamTimeout),
+				}
+			}
 			return result, err
 		}
 		result.TTFTMs = ttftMs
@@ -1188,7 +1261,13 @@ func (c *Client) completeWithResponsesAPI(ctx context.Context, req harness.Compl
 		return harness.CompletionResult{}, fmt.Errorf("marshal responses request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/responses", bytes.NewReader(body))
+	// See the identical pattern in Complete(): streamCtx/cancelStream let the
+	// idle-stream watchdog abort just this request/response on a stall,
+	// without requiring the caller's ctx to carry any deadline.
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+
+	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, c.baseURL+"/v1/responses", bytes.NewReader(body))
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("create responses request: %w", err)
 	}
@@ -1205,7 +1284,7 @@ func (c *Client) completeWithResponsesAPI(ctx context.Context, req harness.Compl
 
 	requestStart := time.Now()
 
-	httpRes, err := provider.DoWithRetry(ctx, c.client, httpReq, c.retry)
+	httpRes, err := provider.DoWithRetry(streamCtx, c.client, httpReq, c.retry)
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("responses request failed: %w", err)
 	}
@@ -1237,8 +1316,18 @@ func (c *Client) completeWithResponsesAPI(ctx context.Context, req harness.Compl
 				origStream(delta)
 			}
 		}
-		result, err := c.decodeResponsesStreamingResponse(model, httpRes.Body, timedStream)
+		var stalled atomic.Bool
+		idleBody := newIdleTimeoutReader(httpRes.Body, cancelStream, &stalled)
+		defer idleBody.stop()
+		result, err := c.decodeResponsesStreamingResponse(model, idleBody, timedStream)
 		if err != nil {
+			if stalled.Load() {
+				return harness.CompletionResult{}, &harness.ProviderHTTPError{
+					Provider:   "openai",
+					StatusCode: http.StatusServiceUnavailable,
+					Body:       fmt.Sprintf("stream stalled: no data received for %s", idleStreamTimeout),
+				}
+			}
 			return result, err
 		}
 		result.TTFTMs = ttftMs
