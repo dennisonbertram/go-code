@@ -140,30 +140,48 @@ func TestSSRFGuard_GuardedClient_DNSNameResolvingToLoopback_RefusedAtDialTime(t 
 	}
 }
 
+// newLoopbackServerOn starts an httptest server bound to a specific loopback
+// address (rather than httptest's default, always-127.0.0.1 listener) so two
+// servers in the same test can be distinguished by IP for allowlist purposes.
+// Both "127.0.0.1" and "::1" are loopback addresses active by default on
+// every supported platform, so this needs no special host configuration.
+func newLoopbackServerOn(t *testing.T, ip string, handler http.HandlerFunc) *httptest.Server {
+	t.Helper()
+	l, err := net.Listen("tcp", net.JoinHostPort(ip, "0"))
+	if err != nil {
+		t.Skipf("cannot listen on %s: %v", ip, err)
+	}
+	srv := httptest.NewUnstartedServer(handler)
+	_ = srv.Listener.Close()
+	srv.Listener = l
+	srv.Start()
+	return srv
+}
+
 // TestSSRFGuard_GuardedClient_RedirectToBlockedDestination_Refused proves
 // that a request to an allowlisted ("public-standing-in") host that then
 // redirects to a non-allowlisted ("private-standing-in") host is blocked —
 // because both hops go through the same guarded Transport, and the dial-time
-// Control check runs again for the redirect target.
+// Control check runs again for the redirect target. The two servers are
+// bound to distinct loopback addresses (::1 vs 127.0.0.1) so the allowlist,
+// which matches by address, can actually distinguish "allowed origin" from
+// "blocked redirect target" — using httptest's default listener for both
+// would put them on the identical IP and make the test meaningless.
 func TestSSRFGuard_GuardedClient_RedirectToBlockedDestination_Refused(t *testing.T) {
-	blocked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	blocked := newLoopbackServerOn(t, "127.0.0.1", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("should never be reached"))
-	}))
+	})
 	defer blocked.Close()
 
-	allowed := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	allowed := newLoopbackServerOn(t, "::1", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, blocked.URL, http.StatusFound)
-	}))
+	})
 	defer allowed.Close()
 
-	allowedHost, _, err := net.SplitHostPort(strings.TrimPrefix(strings.TrimPrefix(allowed.URL, "http://"), "https://"))
-	if err != nil {
-		t.Fatalf("parse allowed host: %v", err)
-	}
-
-	// Only the entry (redirect origin) host is allowlisted — the redirect target is not.
-	client := NewGuardedHTTPClient(&http.Client{Timeout: 5 * time.Second}, []string{allowedHost})
-	_, err = client.Get(allowed.URL)
+	// Only the redirect ORIGIN address (::1) is allowlisted — the redirect
+	// target (127.0.0.1) is not.
+	client := NewGuardedHTTPClient(&http.Client{Timeout: 5 * time.Second}, []string{"::1"})
+	_, err := client.Get(allowed.URL)
 	if err == nil {
 		t.Fatal("expected redirect to a non-allowlisted blocked destination to fail")
 	}

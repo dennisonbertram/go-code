@@ -367,7 +367,11 @@ func TestFetchAndDownloadTools(t *testing.T) {
 
 	workspace := t.TempDir()
 	client := server.Client()
-	list, err := BuildCatalog(BuildOptions{WorkspaceRoot: workspace, HTTPClient: client})
+	// server listens on loopback, which the SSRF guard (BUG-2) blocks by
+	// default — this test exercises the explicit opt-in NetworkAllowlist to
+	// reach it, proving the guard doesn't break legitimate, explicitly
+	// permitted local fetches.
+	list, err := BuildCatalog(BuildOptions{WorkspaceRoot: workspace, HTTPClient: client, NetworkAllowlist: []string{"127.0.0.1"}})
 	if err != nil {
 		t.Fatalf("BuildCatalog: %v", err)
 	}
