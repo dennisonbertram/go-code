@@ -144,16 +144,19 @@ func TestSubscribeDoesNotHoldEngineLockDuringHistoryCopy(t *testing.T) {
 }
 
 // A second, related property -- that a slow Subscribe on one run must not
-// block emits for a completely unrelated run, via memoryStore's per-run
-// locking -- is pinned structurally (not with wall-clock timing) by
-// TestMemoryStorePerRunEventLockIsIndependentPerRun in
-// store_coverage_test.go. An earlier version of this file attempted to
-// pin that property with a real-timing test (a Subscribe against a
-// 500,000-event run's history, asserting an unrelated run's Start
-// completed within a wall-clock bound); it was removed because, on
-// shared/loaded CI hardware, both the setup cost (building a 500k-event
-// history) and the comparison threshold were unreliable -- exactly the
-// class of flakiness the coordinator asked to avoid ("do not write a
-// timing test so tight it flakes in CI"), and exactly the class of
-// environmental noise that made the original regression this branch
-// fixes hard to diagnose in the first place.
+// block emits for a completely unrelated run -- was previously pinned only
+// by TestMemoryStorePerRunEventLockIsIndependentPerRun in
+// store_coverage_test.go, which asserts distinct runs get distinct lock
+// pointers. Third-round review correctly flagged that as a near-tautology:
+// it does not actually exercise the property (it passes even when
+// memoryStore.GetEvents holds its per-run RLock for the whole O(history)
+// copy, which -- via emit()'s AppendEvent call still running under e.mu --
+// transitively blocks e.mu, and therefore every OTHER run, for the same
+// duration). TestSlowSubscribeOnOneRunDoesNotBlockEmitOnAnotherRun in
+// engine_lock_safety_test.go (package workflow, not workflow_test --
+// it needs direct access to the unexported e.emit to control exactly
+// when an event is emitted on run A relative to the blocked GetEvents
+// call) replaces that coverage with a deterministic, non-timing-based
+// test: a Store whose GetEvents blocks on a test-controlled channel, so
+// there is no threshold to tune and nothing to flake on loaded CI
+// hardware.

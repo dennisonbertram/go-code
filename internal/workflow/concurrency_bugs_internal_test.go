@@ -468,8 +468,13 @@ func TestConcurrentResumeCriticalSectionIsAtomic(t *testing.T) {
 // client hangs forever.
 //
 // This test races emit() against Subscribe() for the same runID many
-// times (alternating which starts first) and asserts the event is always
-// observed either in history or on the live channel -- never neither.
+// times (alternating which starts first) and asserts the event is
+// observed EXACTLY ONCE across history + live channel -- never neither
+// (lost) and never both (duplicated). Third-round review correctly noted
+// the original version of this test only checked "found in history OR
+// live", which would have silently passed even if an event appeared in
+// BOTH sets -- the history/live split (Subscribe's Seq <= recordedSeq
+// trim) is load-bearing but was unguarded against double-counting.
 func TestSubscribeNeverMissesConcurrentEmit(t *testing.T) {
 	e := NewEngine(EngineOptions{Subagents: noopSubagentManager{}})
 	const iterations = 500
@@ -502,26 +507,36 @@ func TestSubscribeNeverMissesConcurrentEmit(t *testing.T) {
 
 		emitWG.Wait()
 
-		found := false
+		foundInHistory := 0
 		for _, ev := range history {
 			if ev.Type == EventWorkflowCompleted {
-				found = true
-				break
+				foundInHistory++
 			}
 		}
-		if !found {
+
+		foundLive := 0
+	drain:
+		for {
 			select {
-			case ev := <-ch:
+			case ev, ok := <-ch:
+				if !ok {
+					break drain
+				}
 				if ev.Type == EventWorkflowCompleted {
-					found = true
+					foundLive++
 				}
 			case <-time.After(200 * time.Millisecond):
+				break drain
 			}
 		}
 		cancel()
 
-		if !found {
+		total := foundInHistory + foundLive
+		if total == 0 {
 			t.Fatalf("iteration %d: terminal event lost — not in history and not delivered live", i)
+		}
+		if total > 1 {
+			t.Fatalf("iteration %d: terminal event duplicated — appeared %d times across history+live (history=%d live=%d)", i, total, foundInHistory, foundLive)
 		}
 	}
 }
