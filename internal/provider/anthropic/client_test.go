@@ -82,6 +82,61 @@ func TestNewClientDefaultsProviderName(t *testing.T) {
 	}
 }
 
+// --- NewClient default HTTP client transport (BUG 1: whole-request timeout) ---
+
+// TestNewClientDefaultHTTPClientHasNoWholeRequestTimeout verifies that the
+// client constructed when Config.Client is nil does NOT set http.Client.Timeout,
+// which bounds the entire exchange (including streaming body reads). A 90s
+// whole-request timeout force-closes long-running SSE streams mid-generation.
+// Instead, only per-phase timeouts (dial, TLS handshake, response headers,
+// expect-continue) should be set via a custom Transport, leaving overall
+// cancellation to the request's context.
+func TestNewClientDefaultHTTPClientHasNoWholeRequestTimeout(t *testing.T) {
+	t.Parallel()
+
+	c, err := NewClient(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	if c.client.Timeout != 0 {
+		t.Fatalf("expected no whole-request Client.Timeout (bounds entire exchange incl. streaming body), got %v", c.client.Timeout)
+	}
+
+	transport, ok := c.client.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		t.Fatalf("expected *http.Transport with per-phase timeouts, got %T", c.client.Transport)
+	}
+	if transport.TLSHandshakeTimeout != 10*time.Second {
+		t.Fatalf("expected TLSHandshakeTimeout=10s, got %v", transport.TLSHandshakeTimeout)
+	}
+	if transport.ResponseHeaderTimeout != 60*time.Second {
+		t.Fatalf("expected ResponseHeaderTimeout=60s, got %v", transport.ResponseHeaderTimeout)
+	}
+	if transport.ExpectContinueTimeout != 1*time.Second {
+		t.Fatalf("expected ExpectContinueTimeout=1s, got %v", transport.ExpectContinueTimeout)
+	}
+	if transport.DialContext == nil {
+		t.Fatal("expected DialContext to be set with a bounded dial timeout")
+	}
+}
+
+// TestNewClientRespectsConfigClientOverride is a regression guard: callers
+// that pass an explicit Config.Client must have it used verbatim, not
+// replaced by the default transport-timeout client.
+func TestNewClientRespectsConfigClientOverride(t *testing.T) {
+	t.Parallel()
+
+	custom := &http.Client{Timeout: 5 * time.Second}
+	c, err := NewClient(Config{APIKey: "test-key", Client: custom})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if c.client != custom {
+		t.Fatalf("expected Config.Client override to be used verbatim, got a different client")
+	}
+}
+
 // --- TestCompleteTextResponse ---
 
 func TestCompleteTextResponse(t *testing.T) {
