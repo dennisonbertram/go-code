@@ -248,7 +248,9 @@ func TestRunRequest_WorkspaceType_Worktree(t *testing.T) {
 }
 
 // TestRunRequest_WorkspaceType_WorktreeMissingRepoPath verifies that a run
-// with workspace_type="worktree" but no repo path configured fails the run.
+// with workspace_type="worktree" but no repo path configured is rejected
+// synchronously at StartRun (issue #561) — callers get an immediate error
+// instead of a queued run that fails during provisioning.
 func TestRunRequest_WorkspaceType_WorktreeMissingRepoPath(t *testing.T) {
 	t.Parallel()
 
@@ -261,25 +263,15 @@ func TestRunRequest_WorkspaceType_WorktreeMissingRepoPath(t *testing.T) {
 		},
 	)
 
-	run, err := runner.StartRun(RunRequest{
+	_, err := runner.StartRun(RunRequest{
 		Prompt:        "hello",
 		WorkspaceType: "worktree",
 	})
-	// StartRun should succeed (validates type name only, not provisioning).
-	if err != nil {
-		t.Fatalf("StartRun unexpectedly failed: %v", err)
+	if err == nil {
+		t.Fatal("StartRun should reject workspace_type=worktree when no RepoPath is configured")
 	}
-
-	events := drainRunEventsWS(t, runner, run.ID)
-
-	var gotFailed bool
-	for _, ev := range events {
-		if ev.Type == EventRunFailed {
-			gotFailed = true
-		}
-	}
-	if !gotFailed {
-		t.Error("expected run.failed when worktree provisioning lacks a repo path")
+	if !strings.Contains(err.Error(), "RepoPath") {
+		t.Errorf("error should point at the missing RepoPath, got: %v", err)
 	}
 }
 
@@ -338,12 +330,20 @@ func TestRunRequest_WorkspaceType_ValidTypes(t *testing.T) {
 
 	// "container" and "vm" pass validation (type name is known) but
 	// provisioning will fail at execute() time for lack of orchestrator config.
-	// StartRun itself must not reject them.
+	// StartRun itself must not reject them. "worktree" additionally requires a
+	// configured RepoPath — without one StartRun rejects it synchronously
+	// (issue #561), so this runner is configured with a real repo.
 	validTypes := []string{"", "local", "worktree", "container", "vm"}
 	runner := NewRunner(
 		&staticProviderWS{result: CompletionResult{Content: "done"}},
 		NewRegistry(),
-		RunnerConfig{MaxSteps: 1},
+		RunnerConfig{
+			MaxSteps: 1,
+			WorkspaceBaseOptions: WorkspaceProvisionOptions{
+				RepoPath:        initGitRepoForWS(t),
+				WorktreeRootDir: t.TempDir(),
+			},
+		},
 	)
 
 	for _, wsType := range validTypes {
