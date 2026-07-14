@@ -596,6 +596,30 @@ func newResponsesClient(t *testing.T, baseURL string) *Client {
 	return client
 }
 
+// newResponsesClientWithRetry is like newResponsesClient but uses a fast
+// bounded retry config, for tests that intentionally exercise the
+// non-2xx/retry path against a responses-routed model.
+func newResponsesClientWithRetry(t *testing.T, baseURL string) *Client {
+	t.Helper()
+	client, err := NewClient(Config{
+		APIKey:       "test-key",
+		BaseURL:      baseURL,
+		Model:        "gpt-5.1-codex-mini",
+		ProviderName: "openai",
+		ModelAPILookup: func(provider, model string) string {
+			if provider == "openai" && model == "gpt-5.1-codex-mini" {
+				return "responses"
+			}
+			return ""
+		},
+		Retry: testRetryConfig(),
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	return client
+}
+
 // TestResponsesAPIRoutingFlag verifies that usesResponsesAPI returns true/false correctly.
 func TestResponsesAPIRoutingFlag(t *testing.T) {
 	t.Parallel()
@@ -1073,6 +1097,87 @@ func TestResponsesAPIStreamingTextAndToolCalls(t *testing.T) {
 	}
 	if !slices.Equal(toolArgDeltas, []string{`{"loc`, `ation":"London"}`}) {
 		t.Fatalf("unexpected tool arg deltas: %v", toolArgDeltas)
+	}
+}
+
+// TestResponsesAPINonStreamingErrorReturnsTypedFailure is a BUG4 test: the
+// non-streaming Responses API error branch returned a plain fmt.Errorf
+// instead of the typed *harness.ProviderHTTPError the Chat Completions path
+// returns. Callers type-assert on ProviderHTTPError to decide whether to
+// fall back to another provider, so for responses-routed models on a
+// transient upstream failure (e.g. 429), fallback never triggered.
+func TestResponsesAPINonStreamingErrorReturnsTypedFailure(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limit exceeded"}}`))
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClientWithRetry(t, testServer.URL)
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if phe.Provider != "openai" {
+		t.Fatalf("expected provider %q, got %q", "openai", phe.Provider)
+	}
+	if phe.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected status 429, got %d", phe.StatusCode)
+	}
+	if !strings.Contains(phe.Body, "rate limit exceeded") {
+		t.Fatalf("expected body to contain upstream error message, got %q", phe.Body)
+	}
+}
+
+// TestResponsesAPIStreamingErrorReturnsTypedFailure is the streaming
+// counterpart of TestResponsesAPINonStreamingErrorReturnsTypedFailure:
+// the Responses API streaming branch's non-2xx handling also returned a
+// plain fmt.Errorf instead of *harness.ProviderHTTPError.
+func TestResponsesAPIStreamingErrorReturnsTypedFailure(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"stream":true`) {
+			t.Fatalf("expected stream=true in request, got: %s", body)
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limit exceeded"}}`))
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClientWithRetry(t, testServer.URL)
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if phe.Provider != "openai" {
+		t.Fatalf("expected provider %q, got %q", "openai", phe.Provider)
+	}
+	if phe.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected status 429, got %d", phe.StatusCode)
+	}
+	if !strings.Contains(phe.Body, "rate limit exceeded") {
+		t.Fatalf("expected body to contain upstream error message, got %q", phe.Body)
 	}
 }
 
