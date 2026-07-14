@@ -819,3 +819,78 @@ func TestScheduler_ConcurrentAddJobAndFireJob_NoDataRace(t *testing.T) {
 	wg.Wait()
 	s.wg.Wait()
 }
+
+// TestScheduler_ConcurrentUpdateJobScheduleAndFireJob_NoDataRace (regression
+// for BUG 1) exercises UpdateJobSchedule concurrently with fireJob under
+// -race. UpdateJobSchedule takes a different path than plain AddJob (it
+// removes the old entry, recomputes and re-writes s.jitterCache, then calls
+// AddJob again), so it is a distinct angle from the original red test: it
+// would fail (fatal "concurrent map read and map write", or be flagged by
+// -race) if fireJob ever went back to reading s.jitterCache directly instead
+// of using the jitter value captured in AddJob's/UpdateJobSchedule's closure.
+func TestScheduler_ConcurrentUpdateJobScheduleAndFireJob_NoDataRace(t *testing.T) {
+	store := &mockStore{
+		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
+			return exec, nil
+		},
+		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
+			return nil
+		},
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{}, ErrJobNotFound
+		},
+		UpdateJobFunc: func(ctx context.Context, job Job) error {
+			return nil
+		},
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {
+			return "ok", nil
+		},
+	}
+	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 10})
+	s.sleepFn = func(time.Duration) {} // no-op so fireJob returns quickly
+
+	fireTarget := testJob("update-schedule-race-target")
+	if err := s.AddJob(fireTarget); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	const iterations = 200
+
+	// Goroutines that repeatedly UpdateJobSchedule for an unrelated job,
+	// exercising RemoveJob + jitterCache re-write + AddJob.
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			job := testJob(fmt.Sprintf("update-schedule-race-%d", gid))
+			if err := s.AddJob(job); err != nil {
+				return
+			}
+			for i := 0; i < iterations; i++ {
+				job.Schedule = "*/5 * * * *"
+				_ = s.UpdateJobSchedule(job)
+				job.Schedule = "0 * * * *"
+				_ = s.UpdateJobSchedule(job)
+			}
+		}(g)
+	}
+
+	// Goroutines that repeatedly call fireJob for a stable, already
+	// registered job.
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				s.fireJob(fireTarget, 0)
+			}
+		}()
+	}
+
+	wg.Wait()
+	s.wg.Wait()
+}
