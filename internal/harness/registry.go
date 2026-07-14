@@ -294,6 +294,9 @@ func (r *Registry) RegisterMCPTools(serverName string, toolDefs []htools.MCPTool
 			Name:        toolName,
 			Description: td.Description,
 			Parameters:  deepClonePayload(td.Parameters),
+			// MCP servers are external, untrusted code; treat every tool as
+			// mutating unless explicitly proven otherwise.
+			Mutating: true,
 		}
 		handler := ToolHandler(func(ctx context.Context, args json.RawMessage) (string, error) {
 			return mcpReg.CallTool(ctx, regServer, origName, args)
@@ -304,6 +307,8 @@ func (r *Registry) RegisterMCPTools(serverName string, toolDefs []htools.MCPTool
 			tier:      htools.TierDeferred,
 			tags:      []string{"mcp", "integration", "external", "dynamic", "mcp_server:" + serverName},
 			inflight:  &sync.WaitGroup{},
+			// Conservative default: every MCP tool is mutating.
+			mutating:  true,
 			mcpServer: serverName,
 		}
 		registered = append(registered, toolName)
