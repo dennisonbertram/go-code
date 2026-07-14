@@ -126,8 +126,11 @@ type CompletionResult struct {
 	ModelVersion string `json:"model_version,omitempty"`
 	// FinishReason is a normalized signal for why the completion stopped,
 	// unifying OpenAI's finish_reason and Anthropic's stop_reason into a
-	// single vocabulary (see FinishReason's doc comment). Empty when the
-	// provider did not report a finish reason at all.
+	// single vocabulary — see FinishReason's doc comment for the exact
+	// per-provider/per-API coverage, which is NOT uniform: it is empty for
+	// every completion routed through OpenAI's Responses API (/v1/responses),
+	// even a truncated one, not just when the provider genuinely reported
+	// nothing.
 	//
 	// This field is purely additive: it does not change Complete()'s error
 	// contract. A response truncated by the model's max-tokens limit
@@ -138,12 +141,25 @@ type CompletionResult struct {
 }
 
 // FinishReason is a normalized representation of why a completion stopped,
-// unifying provider-specific vocabularies (OpenAI's finish_reason, Anthropic's
-// stop_reason) into a single set of values so callers don't need to branch on
-// provider. Populated by provider clients for both streaming and
-// non-streaming completions. The empty string means the provider did not
-// report a finish reason (distinct from FinishReasonOther, which means the
-// provider reported one but it did not map onto a recognized value).
+// unifying provider-specific vocabularies into a single set of values so
+// callers don't need to branch on provider. The empty string means the
+// provider did not report a finish reason (distinct from FinishReasonOther,
+// which means the provider reported one but it did not map onto a
+// recognized value).
+//
+// Coverage (deliberately incomplete — do not assume this is populated for
+// every provider/API path):
+//   - anthropic: populated for both streaming and non-streaming completions,
+//     from response.stop_reason (message_delta's stop_reason when streaming).
+//   - openai Chat Completions (/v1/chat/completions): populated for both
+//     streaming and non-streaming completions, from choices[].finish_reason.
+//   - openai Responses API (/v1/responses, used by o3/gpt-5-family models):
+//     NOT populated for either mode. The Responses API reports completion/
+//     truncation status via a different schema (response.status and
+//     response.incomplete_details.reason) that is not modeled or mapped
+//     onto FinishReason yet. A Responses-API completion always has
+//     FinishReason == "" ("provider did not report"), even when the
+//     response was in fact truncated by max_output_tokens.
 type FinishReason string
 
 const (
