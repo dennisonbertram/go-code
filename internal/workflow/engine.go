@@ -55,9 +55,32 @@ type Engine struct {
 	now            func() time.Time
 
 	mu        sync.Mutex
-	subs      map[string]map[chan Event]struct{}
+	subs      map[string]map[chan Event]*subEntry
 	eventSeqs map[string]int64
 	runs      map[string]*Run
+}
+
+// subEntry tracks one Subscribe call's live channel and, while it is
+// still copying history (the window between registration and Subscribe
+// returning), a buffer of events that arrived during that window.
+//
+// emit()'s fan-out send is non-blocking into a 64-slot channel, and the
+// subscribing goroutine cannot drain that channel until Subscribe()
+// itself returns (it hasn't been given the channel yet). So without this
+// buffer, any burst of more than 64 events emitted during the
+// (deliberately unlocked, O(history)) store.GetEvents copy would
+// overflow the channel send AND be excluded from Subscribe's history
+// trim (their Seq is > recordedSeq) -- reaching neither set. That is a
+// real gap, just a different route to it than the one BUG 5 originally
+// closed.
+//
+// pending non-nil means "this subscriber is still initializing": emit()
+// appends to it instead of attempting the channel send. Subscribe sets
+// it back to nil (under e.mu) once it has drained pending into the
+// returned history, after which emit() delivers live via the channel as
+// normal.
+type subEntry struct {
+	pending []Event
 }
 
 type registeredScript struct {
@@ -88,7 +111,7 @@ func NewEngine(opts EngineOptions) *Engine {
 		store:          opts.Store,
 		questions:      opts.QuestionResponder,
 		now:            opts.Now,
-		subs:           make(map[string]map[chan Event]struct{}),
+		subs:           make(map[string]map[chan Event]*subEntry),
 		eventSeqs:      make(map[string]int64),
 		runs:           make(map[string]*Run),
 	}
@@ -319,29 +342,45 @@ func (e *Engine) GetRun(runID string) (*Run, error) {
 // full event history under the global engine lock, blocking emits for
 // every run engine-wide."
 //
-// The gap-free property does not actually require holding the lock
-// across the copy — only across the *split point*. recordedSeq is read
-// atomically with channel registration, so:
+// Exactly-once guarantee, precisely: recordedSeq is read atomically with
+// channel registration, so:
 //   - any event with Seq <= recordedSeq was fully appended (AppendEvent
 //     runs under e.mu, before the seq counter that produced it could
 //     have been observed) before this Subscribe's critical section ran,
 //     and is therefore present in whatever store.GetEvents returns below;
 //   - any event with Seq > recordedSeq is emitted by a call to emit()
 //     that acquires e.mu strictly after this Subscribe's critical
-//     section released it — and since the channel is already registered
-//     in e.subs at that point, that emit()'s fan-out will deliver it
-//     live on ch.
-// history is trimmed to Seq <= recordedSeq so those two sets never
-// overlap: no event is ever lost (the gap this closes) and none is ever
-// duplicated.
+//     section released it.
+//
+// That second bullet is NOT the same as "delivered live on ch", and an
+// earlier version of this comment incorrectly claimed it was: emit()'s
+// fan-out send is non-blocking into ch's 64-slot buffer
+// (select/default), and this goroutine cannot drain ch until Subscribe
+// returns — it hasn't been given the channel yet. More than 64 events
+// emitted during the store.GetEvents call would silently overflow that
+// send AND be excluded from the history trim below (Seq > recordedSeq),
+// reaching neither set.
+//
+// The actual fix: every subscriber has a subEntry with a pending buffer
+// that starts non-nil ("still initializing"). While pending != nil,
+// emit()'s fan-out appends to it instead of attempting the channel send
+// — an unbounded, always-succeeding operation, unlike the fixed-size
+// channel. Once store.GetEvents returns, Subscribe folds pending (all
+// Seq > recordedSeq, accumulated in emit order) onto the trimmed
+// history and sets pending back to nil, after which emit() delivers
+// live via the channel as normal. The two sets (history, pending) never
+// overlap (the trim uses the same recordedSeq the pending buffer starts
+// capturing after), so no event is ever lost and none is ever
+// duplicated — including bursts far larger than the channel's buffer.
 func (e *Engine) Subscribe(runID string) ([]Event, <-chan Event, func(), error) {
 	ch := make(chan Event, 64)
+	entry := &subEntry{pending: []Event{}} // non-nil: this subscriber is initializing
 
 	e.mu.Lock()
 	if _, ok := e.subs[runID]; !ok {
-		e.subs[runID] = make(map[chan Event]struct{})
+		e.subs[runID] = make(map[chan Event]*subEntry)
 	}
-	e.subs[runID][ch] = struct{}{}
+	e.subs[runID][ch] = entry
 	recordedSeq := e.eventSeqs[runID]
 	e.mu.Unlock()
 
@@ -356,8 +395,12 @@ func (e *Engine) Subscribe(runID string) ([]Event, <-chan Event, func(), error) 
 	}
 
 	// allEvents is in append (ascending Seq) order; find the split
-	// point and trim. Events after it are (or will be) delivered live
-	// on ch instead — including them here too would duplicate them.
+	// point and trim. Events after it are captured in entry.pending
+	// instead (folded in below) — including them here too would
+	// duplicate them. The capped 3-index slice bounds capacity to
+	// length so the append below always allocates a fresh backing
+	// array, never silently reusing/overwriting allEvents' excluded
+	// tail.
 	cutoff := len(allEvents)
 	for i, ev := range allEvents {
 		if ev.Seq > recordedSeq {
@@ -365,7 +408,25 @@ func (e *Engine) Subscribe(runID string) ([]Event, <-chan Event, func(), error) 
 			break
 		}
 	}
-	history := allEvents[:cutoff]
+	history := allEvents[:cutoff:cutoff]
+
+	// Finalize: stop buffering into entry.pending and fold whatever
+	// accumulated there (all Seq > recordedSeq, in emit order) onto
+	// history. Read/reset entry.pending via the entry pointer captured
+	// at registration above — NOT a fresh e.subs[runID][ch] lookup —
+	// because a terminal event arriving while we were still
+	// initializing may already have caused emit() to close ch and
+	// delete this run's entire e.subs[runID] map (see emit()'s terminal
+	// handling below). entry itself remains valid and still holds
+	// whatever was buffered for us regardless of whether it's still
+	// reachable from e.subs.
+	e.mu.Lock()
+	pending := entry.pending
+	entry.pending = nil
+	e.mu.Unlock()
+	if len(pending) > 0 {
+		history = append(history, pending...)
+	}
 
 	cancel := func() {
 		e.mu.Lock()
@@ -603,7 +664,18 @@ func (e *Engine) emit(runID string, eventType EventType, payload map[string]any)
 
 	_ = e.store.AppendEvent(context.Background(), &event)
 
-	for ch := range e.subs[runID] {
+	for ch, entry := range e.subs[runID] {
+		if entry.pending != nil {
+			// This subscriber is still inside Subscribe's O(history)
+			// copy (its channel isn't drainable yet — Subscribe hasn't
+			// returned it to the caller). Buffer instead of the lossy
+			// channel send: pending grows unbounded, so a burst larger
+			// than the channel's 64-slot buffer is never dropped. See
+			// Subscribe's doc comment for the full exactly-once
+			// argument.
+			entry.pending = append(entry.pending, event)
+			continue
+		}
 		select {
 		case ch <- event:
 		default:
