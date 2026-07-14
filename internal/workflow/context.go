@@ -5,9 +5,15 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 )
+
+// subagentPollInterval controls how often Context.Agent polls a subagent's
+// status while waiting for it to complete. It is a var (not a const) so
+// tests can shrink it to keep polling tests fast and deterministic.
+var subagentPollInterval = 250 * time.Millisecond
 
 // Context is the execution context passed to workflow scripts.
 // It provides all orchestration primitives: agent(), parallel(), pipeline(),
@@ -79,7 +85,12 @@ func (c *Context) Agent(prompt string, opts *AgentOpts) (*AgentResult, error) {
 
 	phase := opts.Phase
 	if phase == "" {
+		// c.phase is written by Phase() under c.mu; Parallel()/Pipeline()
+		// goroutines share this Context, so a concurrent Phase() call
+		// from another thunk makes this a real race without the lock.
+		c.mu.Lock()
 		phase = c.phase
+		c.mu.Unlock()
 	}
 
 	c.emit(EventWorkflowAgentStarted, map[string]any{
@@ -112,15 +123,13 @@ func (c *Context) Agent(prompt string, opts *AgentOpts) (*AgentResult, error) {
 		return nil, err
 	}
 
-	// Wait for the subagent to complete by polling its status.
+	// Wait for the subagent to complete by polling its status. Each
+	// iteration blocks on either context cancellation or the poll
+	// interval elapsing — it must never spin, since this loop runs for
+	// the entire lifetime of every in-flight subagent.
 	completed := false
 	var finalResult SubagentResult
 	for !completed {
-		select {
-		case <-c.ctx.Done():
-			return nil, c.ctx.Err()
-		default:
-		}
 		finalResult, err = c.engine.subagents.Get(c.ctx, result.ID)
 		if err != nil {
 			c.emit(EventWorkflowAgentFailed, map[string]any{
@@ -135,11 +144,11 @@ func (c *Context) Agent(prompt string, opts *AgentOpts) (*AgentResult, error) {
 			completed = true
 		}
 		if !completed {
-			// Simple backoff polling — in production this would use streaming events.
+			// Backoff polling — in production this would use streaming events.
 			select {
 			case <-c.ctx.Done():
 				return nil, c.ctx.Err()
-			default:
+			case <-time.After(subagentPollInterval):
 			}
 		}
 	}
@@ -393,7 +402,13 @@ func (c *Context) Question(prompt string, choices []QuestionOption) (any, error)
 // Returns the nested workflow's result. Errors from the nested workflow
 // are propagated.
 func (c *Context) Workflow(name string, args any) (any, error) {
+	// c.engine.scripts is mutated by Engine.Register from arbitrary
+	// goroutines, so it must only be read under c.engine.mu — exactly as
+	// Engine.Start does. Copy the value out while holding the lock, then
+	// unlock before proceeding.
+	c.engine.mu.Lock()
 	meta, ok := c.engine.scripts[name]
+	c.engine.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("nested workflow %q not found", name)
 	}
