@@ -41,3 +41,38 @@ func TestMemoryStoreGetRunAndMaxConcurrency(t *testing.T) {
 		t.Fatalf("expected nil missing run, got %#v", missing)
 	}
 }
+
+// TestMemoryStorePerRunEventLockIsIndependentPerRun pins the structural
+// property behind the fix for the follow-up-review performance
+// regression: memoryStore.AppendEvent/GetEvents used to share ONE
+// RWMutex across every run's events, so a slow GetEvents (O(history),
+// unbounded for a long-running/high-frequency run) for run A would force
+// AppendEvent for a completely unrelated run B to wait too --
+// sync.RWMutex.Lock() must wait for all current readers regardless of
+// which run they're reading. In production this meant one long-running
+// workflow's Subscribe traffic could stall event delivery for every
+// other concurrently-running workflow.
+//
+// This is deliberately a structural assertion, not a timing test (timing
+// tests on shared/loaded CI hardware are exactly what caused the
+// regression this fix addresses to go unnoticed -- see the
+// fix/workflow-engine-concurrency branch history). Two different runs
+// must get two DIFFERENT *runEvents (and therefore two independent
+// locks, making cross-run blocking structurally impossible); the same
+// run must always get back the SAME *runEvents instance (otherwise the
+// per-run lock would be meaningless -- a fresh lock every call protects
+// nothing).
+func TestMemoryStorePerRunEventLockIsIndependentPerRun(t *testing.T) {
+	m := newMemoryStore()
+
+	reA := m.runEventsFor("run-a")
+	reB := m.runEventsFor("run-b")
+	if reA == reB {
+		t.Fatal("expected different runs to get independent *runEvents (and therefore independent locks); got the same instance for run-a and run-b")
+	}
+
+	reAAgain := m.runEventsFor("run-a")
+	if reA != reAAgain {
+		t.Fatal("expected repeated runEventsFor calls for the same run to return the same *runEvents instance (a fresh lock every call would protect nothing)")
+	}
+}

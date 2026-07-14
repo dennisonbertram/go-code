@@ -243,17 +243,34 @@ type Store interface {
 	GetEvents(ctx context.Context, runID string, afterSeq int64) ([]Event, error)
 }
 
+// runEvents holds one run's event history behind its own lock, so a slow
+// GetEvents (O(history), can be large for a long-running/high-frequency
+// run) on one run never blocks AppendEvent -- or GetEvents -- on any
+// OTHER run. Before this, memoryStore used a single RWMutex shared across
+// every run's events; a slow read for run A would force AppendEvent for
+// run B to wait too, since sync.RWMutex.Lock() must wait for all current
+// readers regardless of which run they're reading. That was a real
+// engine-wide production hazard: a Subscribe against one long-running
+// workflow's large history could stall event delivery for every other
+// concurrently-running workflow.
+type runEvents struct {
+	mu     sync.RWMutex
+	events []Event
+}
+
 // memoryStore is an in-memory Store implementation.
 type memoryStore struct {
-	mu     sync.RWMutex
-	runs   map[string]*Run
-	events map[string][]Event
+	mu   sync.Mutex // protects only the two maps below (run lookups/creation), never the O(history) work
+	runs map[string]*Run
+
+	eventsMu sync.Mutex // protects perRun (creation of new per-run entries) — never held during a history copy
+	perRun   map[string]*runEvents
 }
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{
 		runs:   make(map[string]*Run),
-		events: make(map[string][]Event),
+		perRun: make(map[string]*runEvents),
 	}
 }
 
@@ -274,8 +291,8 @@ func (m *memoryStore) UpdateRun(_ context.Context, run *Run) error {
 }
 
 func (m *memoryStore) GetRun(_ context.Context, id string) (*Run, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	run, ok := m.runs[id]
 	if !ok {
 		return nil, nil
@@ -284,19 +301,34 @@ func (m *memoryStore) GetRun(_ context.Context, id string) (*Run, error) {
 	return &cp, nil
 }
 
+// runEventsFor returns the per-run event log, creating it on first use.
+// Only the O(1) map lookup/creation happens under eventsMu; the returned
+// *runEvents has its own independent lock for the actual O(history) work.
+func (m *memoryStore) runEventsFor(runID string) *runEvents {
+	m.eventsMu.Lock()
+	defer m.eventsMu.Unlock()
+	re, ok := m.perRun[runID]
+	if !ok {
+		re = &runEvents{}
+		m.perRun[runID] = re
+	}
+	return re
+}
+
 func (m *memoryStore) AppendEvent(_ context.Context, event *Event) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.events[event.RunID] = append(m.events[event.RunID], *event)
+	re := m.runEventsFor(event.RunID)
+	re.mu.Lock()
+	defer re.mu.Unlock()
+	re.events = append(re.events, *event)
 	return nil
 }
 
 func (m *memoryStore) GetEvents(_ context.Context, runID string, afterSeq int64) ([]Event, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	source := m.events[runID]
-	out := make([]Event, 0, len(source))
-	for _, ev := range source {
+	re := m.runEventsFor(runID)
+	re.mu.RLock()
+	defer re.mu.RUnlock()
+	out := make([]Event, 0, len(re.events))
+	for _, ev := range re.events {
 		if ev.Seq > afterSeq {
 			out = append(out, ev)
 		}

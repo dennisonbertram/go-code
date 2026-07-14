@@ -47,30 +47,46 @@ func (noopSubagentManager) Get(context.Context, string) (SubagentResult, error) 
 // channel and panics. A `select`/`default` guard does NOT protect against
 // this — it only guards a full channel, not a closed one.
 //
-// This test concurrently emits (continuously) while subscribing and
-// immediately cancelling, many times, to force the interleaving that
-// triggers the panic. A panic in this non-recovered emitter goroutine will
-// crash the whole test binary — exactly the harnessd crash the bug causes
-// in production when an SSE client disconnects mid-stream.
+// This test concurrently emits (continuously, up to a bound) while
+// subscribing and immediately cancelling, many times, to force the
+// interleaving that triggers the panic. A panic in this non-recovered
+// emitter goroutine will crash the whole test binary — exactly the
+// harnessd crash the bug causes in production when an SSE client
+// disconnects mid-stream.
+//
+// The emitter is capped at maxEmits (rather than running unbounded until
+// `stop` closes) as a deliberate, environment-independent bound on this
+// run's event history. Earlier this test ran the emitter with NO cap: on
+// a machine where the surrounding Subscribe/cancel loop is slow (e.g.
+// under heavy contention or -race overhead), the emitter would keep
+// emitting for however long that takes, so the run's history could grow
+// completely unbounded — measured at over 9 MILLION events during
+// investigation of a real regression this caused (see the follow-up
+// review of fix/workflow-engine-concurrency: Subscribe's O(history)
+// store read, even after being moved outside e.mu, still made each
+// Subscribe call progressively more expensive as history grew, which in
+// turn gave the emitter more time to emit even more between Subscribes —
+// a runaway feedback loop). Capping the emitter keeps this a meaningful,
+// bounded stress test of the BUG 1 race regardless of how fast or slow
+// the machine running it is.
 func TestEmitCancelRaceDoesNotPanic(t *testing.T) {
 	e := NewEngine(EngineOptions{Subagents: noopSubagentManager{}})
 	const runID = "race-run"
 	const iterations = 2000
+	const maxEmits = 20000
 
 	stop := make(chan struct{})
 	var emitterWG sync.WaitGroup
 	emitterWG.Add(1)
 	go func() {
 		defer emitterWG.Done()
-		i := 0
-		for {
+		for i := 0; i < maxEmits; i++ {
 			select {
 			case <-stop:
 				return
 			default:
 			}
 			e.emit(runID, EventWorkflowLog, map[string]any{"i": i})
-			i++
 		}
 	}()
 

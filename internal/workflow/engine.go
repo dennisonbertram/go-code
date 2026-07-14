@@ -302,26 +302,70 @@ func (e *Engine) GetRun(runID string) (*Run, error) {
 // strictly need to call cancel() to observe termination, only to clean up
 // early/non-terminal subscriptions.
 //
-// The history read and the channel registration happen atomically under
-// e.mu, matching how emit() holds e.mu across its store append and
-// subscriber fan-out. This closes the gap where an event emitted between
-// "read history" and "register channel" would previously land in
-// neither — permanently lost, which is fatal if it's the terminal
-// workflow.completed/failed event (an SSE client would hang forever).
+// Locking: e.mu is held ONLY long enough to register the channel and
+// record the current per-run sequence number (recordedSeq) — both O(1).
+// The store.GetEvents call, which is O(history) and can be arbitrarily
+// large for a long-running run, happens AFTER releasing e.mu.
+//
+// This is deliberate: an earlier version held e.mu across the
+// store.GetEvents call too, on the theory that "read-history +
+// register-channel" needed to be one atomic step to avoid losing an
+// event emitted in between (see BUG 5). That was correct for closing the
+// gap, but wrong for performance — since emit() also needs e.mu for
+// every event on every run, an O(history) Subscribe blocked ALL emits
+// engine-wide for its duration, and repeated Subscribes against a
+// growing-history run made the total cost O(history^2). This is exactly
+// the production hazard: "every SSE client connect/reconnect copies the
+// full event history under the global engine lock, blocking emits for
+// every run engine-wide."
+//
+// The gap-free property does not actually require holding the lock
+// across the copy — only across the *split point*. recordedSeq is read
+// atomically with channel registration, so:
+//   - any event with Seq <= recordedSeq was fully appended (AppendEvent
+//     runs under e.mu, before the seq counter that produced it could
+//     have been observed) before this Subscribe's critical section ran,
+//     and is therefore present in whatever store.GetEvents returns below;
+//   - any event with Seq > recordedSeq is emitted by a call to emit()
+//     that acquires e.mu strictly after this Subscribe's critical
+//     section released it — and since the channel is already registered
+//     in e.subs at that point, that emit()'s fan-out will deliver it
+//     live on ch.
+// history is trimmed to Seq <= recordedSeq so those two sets never
+// overlap: no event is ever lost (the gap this closes) and none is ever
+// duplicated.
 func (e *Engine) Subscribe(runID string) ([]Event, <-chan Event, func(), error) {
 	ch := make(chan Event, 64)
 
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	history, err := e.store.GetEvents(context.Background(), runID, -1)
-	if err != nil {
-		return nil, nil, nil, err
-	}
 	if _, ok := e.subs[runID]; !ok {
 		e.subs[runID] = make(map[chan Event]struct{})
 	}
 	e.subs[runID][ch] = struct{}{}
+	recordedSeq := e.eventSeqs[runID]
+	e.mu.Unlock()
+
+	allEvents, err := e.store.GetEvents(context.Background(), runID, -1)
+	if err != nil {
+		e.mu.Lock()
+		if subsForRun, ok := e.subs[runID]; ok {
+			delete(subsForRun, ch)
+		}
+		e.mu.Unlock()
+		return nil, nil, nil, err
+	}
+
+	// allEvents is in append (ascending Seq) order; find the split
+	// point and trim. Events after it are (or will be) delivered live
+	// on ch instead — including them here too would duplicate them.
+	cutoff := len(allEvents)
+	for i, ev := range allEvents {
+		if ev.Seq > recordedSeq {
+			cutoff = i
+			break
+		}
+	}
+	history := allEvents[:cutoff]
 
 	cancel := func() {
 		e.mu.Lock()

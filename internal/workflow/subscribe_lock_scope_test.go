@@ -142,3 +142,18 @@ func TestSubscribeDoesNotHoldEngineLockDuringHistoryCopy(t *testing.T) {
 
 	<-subDone
 }
+
+// A second, related property -- that a slow Subscribe on one run must not
+// block emits for a completely unrelated run, via memoryStore's per-run
+// locking -- is pinned structurally (not with wall-clock timing) by
+// TestMemoryStorePerRunEventLockIsIndependentPerRun in
+// store_coverage_test.go. An earlier version of this file attempted to
+// pin that property with a real-timing test (a Subscribe against a
+// 500,000-event run's history, asserting an unrelated run's Start
+// completed within a wall-clock bound); it was removed because, on
+// shared/loaded CI hardware, both the setup cost (building a 500k-event
+// history) and the comparison threshold were unreliable -- exactly the
+// class of flakiness the coordinator asked to avoid ("do not write a
+// timing test so tight it flakes in CI"), and exactly the class of
+// environmental noise that made the original regression this branch
+// fixes hard to diagnose in the first place.
