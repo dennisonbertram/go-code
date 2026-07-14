@@ -809,3 +809,86 @@ func TestSSEBridgeAuth_5xxStillRetries(t *testing.T) {
 		t.Error("expected run inactive after run.completed")
 	}
 }
+
+// TestRegression_SSEBridgeAuthEndToEndInitialAndReconnect proves the actual
+// TUIConfig.APIKey → model.go call sites → bridge.go wiring, not just the
+// low-level bridge mechanism exercised by the tests above. It would fail if
+// a future change correctly implements SSEBridgeOptions.APIKey in bridge.go
+// but forgets to actually pass m.config.APIKey through at either of
+// model.go's two call sites (the initial startSSEForRun in the
+// RunStartedMsg case, or reconnectSSECmd in the SSEDoneMsg case) — a
+// mistake the compiler cannot catch since both parameters default to the
+// empty string.
+func TestRegression_SSEBridgeAuthEndToEndInitialAndReconnect(t *testing.T) {
+	var mu sync.Mutex
+	connCount := 0
+	var firstAuth, secondAuth, secondLastEventID string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		connCount++
+		n := connCount
+		mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		flusher, _ := w.(http.Flusher)
+
+		if n == 1 {
+			mu.Lock()
+			firstAuth = r.Header.Get("Authorization")
+			mu.Unlock()
+			// Deliver one event, then close without a terminal event to force
+			// the model's reconnect path.
+			fmt.Fprint(w, "id: run-e2e-auth:0\nevent: message\ndata: {\"type\":\"assistant.message.delta\",\"payload\":{\"content\":\"hi\"}}\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+			return
+		}
+
+		mu.Lock()
+		secondAuth = r.Header.Get("Authorization")
+		secondLastEventID = r.Header.Get("Last-Event-ID")
+		mu.Unlock()
+		fmt.Fprint(w, "id: run-e2e-auth:1\nevent: message\ndata: {\"type\":\"run.completed\",\"payload\":{}}\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	cfg := tui.DefaultTUIConfig()
+	cfg.BaseURL = srv.URL
+	cfg.APIKey = "e2e-secret"
+	m := tui.New(cfg)
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model := m2.(tui.Model)
+
+	model2, cmd := model.Update(tui.RunStartedMsg{RunID: "run-e2e-auth"})
+	model = model2.(tui.Model)
+
+	final := driveModel(t, model, cmd, 15*time.Second, func(m tui.Model, msg tea.Msg) bool {
+		if done, ok := msg.(tui.SSEDoneMsg); ok && done.EventType == "run.completed" {
+			return true
+		}
+		return !m.RunActive()
+	})
+
+	mu.Lock()
+	gotFirstAuth, gotSecondAuth, gotSecondLastID := firstAuth, secondAuth, secondLastEventID
+	mu.Unlock()
+
+	if gotFirstAuth != "Bearer e2e-secret" {
+		t.Errorf("expected initial connection Authorization = %q, got %q — TUIConfig.APIKey is not reaching the initial startSSEForRun call site", "Bearer e2e-secret", gotFirstAuth)
+	}
+	if gotSecondAuth != "Bearer e2e-secret" {
+		t.Errorf("expected reconnect Authorization = %q, got %q — TUIConfig.APIKey is not reaching reconnectSSECmd", "Bearer e2e-secret", gotSecondAuth)
+	}
+	if gotSecondLastID != "run-e2e-auth:0" {
+		t.Errorf("expected reconnect Last-Event-ID = %q, got %q", "run-e2e-auth:0", gotSecondLastID)
+	}
+	if final.RunActive() {
+		t.Error("expected run inactive after run.completed arrives via the authenticated reconnect")
+	}
+}
