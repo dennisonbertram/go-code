@@ -14,7 +14,23 @@ import (
 	"go-agent-harness/internal/harness"
 	"go-agent-harness/internal/store"
 	"go-agent-harness/internal/subagents"
+
+	"golang.org/x/crypto/bcrypt"
 )
+
+// minCostRehash replaces key.KeyHash with a MinCost bcrypt hash of rawToken so
+// that CompareHashAndPassword stays fast under -race. The production bcrypt cost
+// used by store.GenerateAPIKey is slow enough to blow the 30s handler timeout
+// under the race detector, which flakes these auth-heavy tests.
+func minCostRehash(t *testing.T, rawToken string, key store.APIKey) store.APIKey {
+	t.Helper()
+	h, err := bcrypt.GenerateFromPassword([]byte(rawToken), bcrypt.MinCost)
+	if err != nil {
+		t.Fatalf("bcrypt MinCost: %v", err)
+	}
+	key.KeyHash = string(h)
+	return key
+}
 
 // tenantFakeSubagentManager is a minimal in-memory subagents.Manager double
 // that stores whatever TenantID the caller passes on Create and never applies
@@ -101,7 +117,7 @@ func newSubagentTenantAPIKey(t *testing.T, tenantID, name string) (string, store
 	if err != nil {
 		t.Fatalf("GenerateAPIKey(%s): %v", tenantID, err)
 	}
-	return rawToken, key
+	return rawToken, minCostRehash(t, rawToken, key)
 }
 
 func doSubagentRequest(t *testing.T, ts *httptest.Server, method, token, path string, body []byte) (int, string) {
