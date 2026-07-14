@@ -193,15 +193,32 @@ func newIdleTimeoutReader(r io.Reader, cancel context.CancelFunc, stalled *atomi
 	return ir
 }
 
-// fire is invoked when the idle timer elapses with no Read activity.
+// fire is invoked when the idle timer elapses with no Read activity. It is
+// idempotent/one-shot via CompareAndSwap: only the first call actually
+// declares the stream stalled and cancels the request. This matters because
+// Go's time.Timer docs are explicit that Reset() cannot stop an
+// already-dispatched pending call to an AfterFunc callback — so Read() and
+// fire() can race at the boundary (a Read that returns fresh data at the
+// same moment fire() has already begun executing). Guarding with
+// CompareAndSwap ensures cancel is invoked exactly once and stalled
+// transitions cleanly from false->true exactly once, rather than tolerating
+// a double-fire if Read() and the timer race or fire() is otherwise
+// invoked more than once.
 func (ir *idleTimeoutReader) fire() {
-	ir.stalled.Store(true)
+	if !ir.stalled.CompareAndSwap(false, true) {
+		return
+	}
 	ir.cancel()
 }
 
 func (ir *idleTimeoutReader) Read(p []byte) (int, error) {
 	n, err := ir.r.Read(p)
-	if n > 0 {
+	// Skip Reset once the stream has already been declared stalled: fire()
+	// may have already run (or be running) concurrently with this Read, and
+	// a Read that "wins" a race against an already-latched stall should
+	// defer to that declaration rather than pretending the stream is
+	// healthy by re-arming the timer.
+	if n > 0 && !ir.stalled.Load() {
 		ir.timer.Reset(idleStreamTimeout)
 	}
 	return n, err
