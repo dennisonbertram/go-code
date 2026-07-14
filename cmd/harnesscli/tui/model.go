@@ -1858,8 +1858,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.modelConfigMode = false
 					return m, tea.Batch(cmds...)
 				}
-				// Escape with active search (any level): clear search, return to browse level state.
-				if m.modelSwitcher.SearchQuery() != "" {
+				// Escape with active search (any level, including right
+				// after "/" before any character has been typed): clear
+				// search, return to browse level state.
+				if m.modelSwitcher.SearchActive() {
 					m.modelSwitcher = m.modelSwitcher.SetSearch("")
 					return m, tea.Batch(cmds...)
 				}
@@ -2051,8 +2053,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					})
 					return m, tea.Batch(cmds...)
 				}
-				// Level 0 (provider list) with no search: Enter drills into the selected provider.
-				if m.modelSwitcher.BrowseLevel() == 0 && m.modelSwitcher.SearchQuery() == "" {
+				// Level 0 (provider list) with no active search: Enter drills into the selected provider.
+				if m.modelSwitcher.BrowseLevel() == 0 && !m.modelSwitcher.SearchActive() {
 					m.modelSwitcher = m.modelSwitcher.DrillIntoProvider()
 					return m, tea.Batch(cmds...)
 				}
@@ -2308,7 +2310,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// When the model overlay is active, Up navigates based on browse level and search state.
 			if m.overlayActive && m.activeOverlay == "model" && !m.modelConfigMode {
-				if m.modelSwitcher.BrowseLevel() == 0 && m.modelSwitcher.SearchQuery() == "" {
+				if m.modelSwitcher.BrowseLevel() == 0 && !m.modelSwitcher.SearchActive() {
 					m.modelSwitcher = m.modelSwitcher.ProviderUp()
 				} else {
 					m.modelSwitcher = m.modelSwitcher.SelectUp()
@@ -2339,7 +2341,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			// When the model overlay is active, Down navigates based on browse level and search state.
 			if m.overlayActive && m.activeOverlay == "model" && !m.modelConfigMode {
-				if m.modelSwitcher.BrowseLevel() == 0 && m.modelSwitcher.SearchQuery() == "" {
+				if m.modelSwitcher.BrowseLevel() == 0 && !m.modelSwitcher.SearchActive() {
 					m.modelSwitcher = m.modelSwitcher.ProviderDown()
 				} else {
 					m.modelSwitcher = m.modelSwitcher.SelectDown()
@@ -2446,8 +2448,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return m, tea.Batch(cmds...)
 				case tea.KeyRunes:
-					// j/k vim-style navigation when no search is active.
-					if m.modelSwitcher.SearchQuery() == "" {
+					// "/" explicitly enters search mode (matches what the
+					// level-0 and level-1 footers advertise). It never
+					// leaks into the query itself — HandleSearchKey also
+					// swallows it (fixes #667) — but unlike before, it now
+					// actually does something: it activates SearchActive()
+					// immediately so the very next keystroke (even "s" or
+					// "j"/"k") is treated as a literal query character
+					// instead of a browse-level shortcut (fixes BUG C:
+					// typing "sonnet" no longer stars the highlighted
+					// model on the leading "s").
+					if msg.String() == "/" {
+						m.modelSwitcher = m.modelSwitcher.EnterSearch()
+						return m, tea.Batch(cmds...)
+					}
+					// j/k vim-style navigation only when search is not active.
+					if !m.modelSwitcher.SearchActive() {
 						if msg.String() == "k" {
 							if m.modelSwitcher.BrowseLevel() == 0 {
 								m.modelSwitcher = m.modelSwitcher.ProviderUp()
@@ -2466,9 +2482,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 						}
 					}
 					// 's' toggles star only when browsing at level 1 with no active search.
-					// During search, 's' is treated as a literal character so users
-					// can type queries containing "s" (e.g. "deeps").
-					if msg.String() == "s" && m.modelSwitcher.BrowseLevel() == 1 && m.modelSwitcher.SearchQuery() == "" {
+					// Once search mode is active (explicitly via "/", or because a
+					// query is already non-empty), 's' is a literal character so users
+					// can type queries containing "s" (e.g. "sonnet", "deeps").
+					if msg.String() == "s" && m.modelSwitcher.BrowseLevel() == 1 && !m.modelSwitcher.SearchActive() {
 						m.modelSwitcher = m.modelSwitcher.ToggleStar()
 						// Persist to config.
 						if persistCfg, err := harnessconfig.Load(); err == nil {

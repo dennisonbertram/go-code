@@ -211,6 +211,17 @@ type Model struct {
 	// providerScrollOffset tracks the starting index of the visible window
 	// in the provider list (level 0).
 	providerScrollOffset int
+
+	// searchActive is true once search mode has been explicitly entered
+	// (via EnterSearch(), wired to the "/" key in tui/model.go), even
+	// before any character has been typed. searchQuery != "" always
+	// implies search is active too (see SearchActive()); this flag exists
+	// so pressing "/" makes the search UI (and the flat cross-provider
+	// list) visible immediately, and so the FIRST keystroke afterwards —
+	// including keys like "s" that otherwise toggle star or "j"/"k" that
+	// otherwise navigate — is treated as a literal query character rather
+	// than a browse-level shortcut.
+	searchActive bool
 }
 
 // New constructs a Model pre-loaded with DefaultModels, marking the entry
@@ -262,6 +273,7 @@ func (m Model) Close() Model {
 	m.IsOpen = false
 	m.reasoningMode = false
 	m.searchQuery = ""
+	m.searchActive = false
 	m.browseLevel = 0
 	m.activeProvider = ""
 	m.providerCursor = 0
@@ -484,23 +496,82 @@ func (m Model) modelsForActiveProvider() []ModelEntry {
 	return result
 }
 
+// matchTier ranks how well a query matched a field, best (lowest) first.
+type matchTier int
+
+const (
+	matchTierNone matchTier = iota - 1 // no match at all
+	matchTierExact
+	matchTierPrefix
+	matchTierSubstring
+	matchTierFuzzy // non-contiguous subsequence match
+)
+
+// bestMatchTier returns the best (lowest) matchTier across fields for query
+// q, or matchTierNone if q doesn't match any field at all. Callers pass
+// already-lowercased fields and q.
+func bestMatchTier(fields []string, q string) matchTier {
+	best := matchTierNone
+	for _, f := range fields {
+		var tier matchTier
+		switch {
+		case f == q:
+			tier = matchTierExact
+		case strings.HasPrefix(f, q):
+			tier = matchTierPrefix
+		case strings.Contains(f, q):
+			tier = matchTierSubstring
+		case isFuzzySubsequence(f, q):
+			tier = matchTierFuzzy
+		default:
+			continue
+		}
+		if best == matchTierNone || tier < best {
+			best = tier
+		}
+	}
+	return best
+}
+
+// isFuzzySubsequence reports whether every rune of q appears in f in order,
+// not necessarily contiguously (a "subsequence" match). This is the
+// last-resort autocomplete tier for large catalogs — e.g. OpenRouter's 300+
+// models — where a query like "gp4m" should still surface
+// "openai/gpt-4.1-mini" even though it is not a literal substring.
+func isFuzzySubsequence(f, q string) bool {
+	if q == "" {
+		return false
+	}
+	qr := []rune(q)
+	qi := 0
+	for _, r := range f {
+		if qi < len(qr) && r == qr[qi] {
+			qi++
+		}
+	}
+	return qi == len(qr)
+}
+
 // visibleModels returns the filtered + ordered model list.
-// - When searchQuery != "": flat cross-provider list filtered by query.
-// - When browseLevel == 1: models filtered to activeProvider only.
+// - When searchActive (query non-empty, or explicit EnterSearch()): flat
+//   cross-provider list filtered by query.
+// - When browseLevel == 1 and search is not active: models filtered to
+//   activeProvider only.
 // - When browseLevel == 0: all models (for Accept() compatibility).
 // Starred models appear first in all cases, filtered by searchQuery.
 // IsCurrent is set dynamically based on currentModelID.
 //
-// Search matches across DisplayName, ProviderLabel, Provider key, and model ID.
-// Results are ranked: prefix matches before substring matches, with starred
-// models first within each tier. This ensures queries like "d" or "de" surface
-// DeepSeek models ahead of e.g. Anthropic models that merely contain "d"/"de"
-// in their DisplayName.
+// Search matches across DisplayName, ProviderLabel, Provider key, and model
+// ID. Results are ranked exact > prefix > substring > fuzzy (non-contiguous
+// subsequence), with starred models first within each tier. This ensures
+// queries like "d" or "de" surface DeepSeek models ahead of e.g. Anthropic
+// models that merely contain "d"/"de" in their DisplayName, and abbreviated
+// queries like "gp4m" still surface a result instead of finding nothing.
 func (m Model) visibleModels() []ModelEntry {
 	q := strings.ToLower(m.searchQuery)
 
-	// When in level 1 with no search: return filtered-to-provider list (starred first).
-	if m.browseLevel == 1 && q == "" {
+	// When in level 1 with no active search: return filtered-to-provider list (starred first).
+	if m.browseLevel == 1 && q == "" && !m.searchActive {
 		providerModels := m.modelsForActiveProvider()
 		var starred, rest []ModelEntry
 		for _, e := range providerModels {
@@ -514,9 +585,8 @@ func (m Model) visibleModels() []ModelEntry {
 	}
 
 	// For browseLevel==0 OR search active: use full model list (with search filter when active).
-	// Search matches against DisplayName, ProviderLabel, Provider key, and model ID.
-	// Rank: prefix matches first (starred, then rest), then substring matches (starred, then rest).
-	var prefixStarred, prefixRest, substrStarred, substrRest []ModelEntry
+	var exactStarred, exactRest, prefixStarred, prefixRest []ModelEntry
+	var substrStarred, substrRest, fuzzyStarred, fuzzyRest []ModelEntry
 	for _, e := range m.Models {
 		e.IsCurrent = e.ID == m.currentModelID
 		if q != "" {
@@ -526,55 +596,57 @@ func (m Model) visibleModels() []ModelEntry {
 				strings.ToLower(e.Provider),
 				strings.ToLower(e.ID),
 			}
-			matched := false
-			isPrefix := false
-			for _, f := range queryFields {
-				if strings.HasPrefix(f, q) {
-					matched = true
-					isPrefix = true
-					break
-				}
-			}
-			if !isPrefix {
-				for _, f := range queryFields {
-					if strings.Contains(f, q) {
-						matched = true
-						break
-					}
-				}
-			}
-			if !matched {
+			tier := bestMatchTier(queryFields, q)
+			if tier == matchTierNone {
 				continue
 			}
 			starred := m.starred[e.ID]
-			if isPrefix {
+			switch tier {
+			case matchTierExact:
+				if starred {
+					exactStarred = append(exactStarred, e)
+				} else {
+					exactRest = append(exactRest, e)
+				}
+			case matchTierPrefix:
 				if starred {
 					prefixStarred = append(prefixStarred, e)
 				} else {
 					prefixRest = append(prefixRest, e)
 				}
-			} else {
+			case matchTierSubstring:
 				if starred {
 					substrStarred = append(substrStarred, e)
 				} else {
 					substrRest = append(substrRest, e)
 				}
+			case matchTierFuzzy:
+				if starred {
+					fuzzyStarred = append(fuzzyStarred, e)
+				} else {
+					fuzzyRest = append(fuzzyRest, e)
+				}
 			}
 		} else {
-			// No search query: preserve original order.
+			// No search query (browsing with search mode merely armed via
+			// EnterSearch(), no characters typed yet): preserve original order.
 			if m.starred[e.ID] {
-				prefixStarred = append(prefixStarred, e) // reuse prefixStarred for starred
+				exactStarred = append(exactStarred, e) // reuse exactStarred for starred
 			} else {
-				prefixRest = append(prefixRest, e) // reuse prefixRest for rest
+				exactRest = append(exactRest, e) // reuse exactRest for rest
 			}
 		}
 	}
 	// Concatenate in priority order.
 	var result []ModelEntry
+	result = append(result, exactStarred...)
+	result = append(result, exactRest...)
 	result = append(result, prefixStarred...)
 	result = append(result, prefixRest...)
 	result = append(result, substrStarred...)
 	result = append(result, substrRest...)
+	result = append(result, fuzzyStarred...)
+	result = append(result, fuzzyRest...)
 	return result
 }
 
@@ -952,12 +1024,39 @@ func (m Model) HandleSearchKey(key string) Model {
 }
 
 // SetSearch sets the search query and resets Selected and scroll offset to 0.
+// Setting a non-empty query implies search mode is active. Clearing the
+// query back to "" also exits explicit search mode (mirrors pressing
+// Escape / backspacing an empty query) so callers don't have to separately
+// track search-active state.
 func (m Model) SetSearch(q string) Model {
 	result := m
 	result.searchQuery = q
+	result.searchActive = q != ""
 	result.Selected = 0
 	result.scrollOffset = 0
 	return result
+}
+
+// EnterSearch explicitly activates search mode (wired to the "/" key in
+// tui/model.go), even before any character has been typed. This makes the
+// search UI (the flat cross-provider list with the "Filter:" bar)
+// discoverable and visible immediately, and — critically — means the very
+// first keystroke afterwards is routed as a literal query character rather
+// than a browse-level shortcut (fixes the "typing 'sonnet' stars the
+// highlighted model on the leading 's'" collision).
+func (m Model) EnterSearch() Model {
+	result := m
+	result.searchActive = true
+	result.Selected = 0
+	result.scrollOffset = 0
+	return result
+}
+
+// SearchActive reports whether search mode is active — either because a
+// query has been typed (SearchQuery() != "") or because EnterSearch() was
+// called explicitly (e.g. via "/") and no character has been typed yet.
+func (m Model) SearchActive() bool {
+	return m.searchActive || m.searchQuery != ""
 }
 
 // SearchQuery returns the current search query.

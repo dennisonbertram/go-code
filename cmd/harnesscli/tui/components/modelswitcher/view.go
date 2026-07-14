@@ -74,8 +74,10 @@ func (m Model) viewModelList(width int) string {
 	if width <= 0 {
 		width = 60
 	}
-	// When searching (any level): flat cross-provider search results.
-	if m.searchQuery != "" {
+	// When search is active (any level) — either a query has been typed, or
+	// search mode was explicitly entered via "/" and nothing has been typed
+	// yet — show the flat cross-provider search results.
+	if m.SearchActive() {
 		return m.viewFlatModelList(width)
 	}
 	// Level 0: provider list.
@@ -359,9 +361,10 @@ func (m Model) viewModelsForProvider(width int) string {
 		}
 	}
 
-	// Footer.
+	// Footer. Documents "/" (previously undocumented here even though any
+	// other printable key already started a search — see BUG C).
 	sb.WriteByte('\n')
-	sb.WriteString(dimStyle.Render("↑/↓ navigate  enter select  s star  esc back"))
+	sb.WriteString(dimStyle.Render("↑/↓ navigate  enter select  s star  / search  esc back"))
 
 	return boxStyle.Width(innerWidth).BorderForeground(lipgloss.Color("240")).Render(sb.String())
 }
@@ -383,8 +386,14 @@ func (m Model) viewFlatModelList(width int) string {
 	sb.WriteString(titleStyle.Render("Switch Model"))
 	sb.WriteByte('\n')
 	sb.WriteByte('\n')
+	// "Filter: " + query + a trailing cursor glyph. The cursor is rendered
+	// even with an empty query (immediately after "/" enters search mode)
+	// so the box is unambiguously a live, editable text field rather than a
+	// static label — the persistent "Filter: _" affordance called for by
+	// BUG C.
 	sb.WriteString(dimStyle.Render("Filter: "))
 	sb.WriteString(m.searchQuery)
+	sb.WriteString("▏")
 	sb.WriteByte('\n')
 	sb.WriteByte('\n')
 
