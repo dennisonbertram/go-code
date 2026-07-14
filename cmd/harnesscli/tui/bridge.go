@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -107,6 +108,9 @@ func runBridge(ctx context.Context, url string, opts SSEBridgeOptions, ch chan<-
 	if opts.LastEventID != "" {
 		req.Header.Set("Last-Event-ID", opts.LastEventID)
 	}
+	if opts.APIKey != "" {
+		req.Header.Set("Authorization", "Bearer "+opts.APIKey)
+	}
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -114,6 +118,30 @@ func runBridge(ctx context.Context, url string, opts SSEBridgeOptions, ch chan<-
 			send(ctx, ch, SSEErrorMsg{Err: err})
 			send(ctx, ch, SSEDoneMsg{EventType: "bridge.closed"})
 		}
+		return
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		resp.Body.Close()
+		if ctx.Err() != nil {
+			return
+		}
+		if isNonRetryableSSEStatus(resp.StatusCode) {
+			// A permanent rejection (bad/missing credentials, unknown run):
+			// retrying would just burn the bounded reconnect budget against
+			// the same outcome every time and confuse the user with 5
+			// backed-off attempts before finally giving up. Surface one
+			// clear, actionable error and end the run immediately instead.
+			send(ctx, ch, SSEErrorMsg{Err: nonRetryableSSEError(resp.StatusCode, body)})
+			send(ctx, ch, SSEDoneMsg{EventType: "bridge.fatal"})
+			return
+		}
+		// Anything else unexpected (5xx, unusual redirects, etc.) is treated
+		// as transient — recoverable via the caller's bounded reconnect,
+		// same as a dropped connection.
+		send(ctx, ch, SSEErrorMsg{Err: fmt.Errorf("SSE bridge: unexpected status %d from %s", resp.StatusCode, url)})
+		send(ctx, ch, SSEDoneMsg{EventType: "bridge.closed"})
 		return
 	}
 	defer resp.Body.Close()
@@ -214,6 +242,50 @@ func runBridge(ctx context.Context, url string, opts SSEBridgeOptions, ch chan<-
 	// recoverable and reconnects using Last-Event-ID rather than treating
 	// the run as finished.
 	send(ctx, ch, SSEDoneMsg{EventType: "bridge.closed"})
+}
+
+// isNonRetryableSSEStatus reports whether an HTTP status on the events
+// endpoint represents a permanent failure that a reconnect cannot fix:
+// 401/403 mean the credentials are missing or rejected, and 404 means the
+// run ID itself does not exist (or has expired) — none of these change on
+// retry. Everything else (5xx, unexpected redirects, etc.) is treated as
+// transient and keeps the caller's bounded reconnect behavior, since a
+// network blip or a momentarily overloaded server genuinely can recover.
+func isNonRetryableSSEStatus(status int) bool {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound:
+		return true
+	default:
+		return false
+	}
+}
+
+// nonRetryableSSEError builds a single, actionable error message for a
+// non-retryable SSE status so the user sees one clear explanation instead of
+// a generic "stream error" (or, before this fix, a storm of them from
+// burning the whole reconnect budget against the same permanent failure).
+func nonRetryableSSEError(status int, body []byte) error {
+	detail := strings.TrimSpace(string(body))
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		msg := fmt.Sprintf("SSE bridge: authentication rejected (HTTP %d) — the harnessd API key is missing or invalid; run \"harnesscli auth login\" to set one", status)
+		if detail != "" {
+			msg += ": " + detail
+		}
+		return errors.New(msg)
+	case http.StatusNotFound:
+		msg := fmt.Sprintf("SSE bridge: run not found (HTTP %d) — the run ID is invalid or the run has expired", status)
+		if detail != "" {
+			msg += ": " + detail
+		}
+		return errors.New(msg)
+	default:
+		msg := fmt.Sprintf("SSE bridge: non-retryable status %d", status)
+		if detail != "" {
+			msg += ": " + detail
+		}
+		return errors.New(msg)
+	}
 }
 
 type sseEnvelope struct {

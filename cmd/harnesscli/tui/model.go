@@ -2655,7 +2655,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cancelRun == nil {
 			m.lastEventID = ""
 			m.sseReconnectAttempts = 0
-			ch, cancel := startSSEForRun(m.config.BaseURL, msg.RunID)
+			ch, cancel := startSSEForRun(m.config.BaseURL, msg.RunID, m.config.APIKey)
 			m.sseCh = ch
 			m.cancelRun = cancel
 			cmds = append(cmds, pollSSECmd(m.sseCh))
@@ -2919,7 +2919,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case SSEDoneMsg:
-		isTerminal := msg.EventType == "run.completed" || msg.EventType == "run.failed"
+		// "bridge.fatal" marks a permanent failure (401/403/404 — see
+		// isNonRetryableSSEStatus in bridge.go) that a reconnect cannot fix;
+		// it is treated as terminal here specifically so it is NOT retried
+		// and does NOT get the generic "could not be re-established" message
+		// below (the SSEErrorMsg delivered immediately before this already
+		// carried a single, specific, actionable explanation).
+		isTerminal := msg.EventType == "run.completed" || msg.EventType == "run.failed" || msg.EventType == "bridge.fatal"
 
 		// The connection ended without a genuine run.completed/run.failed
 		// event — e.g. the server dropped the TCP connection mid-burst. The
@@ -2934,7 +2940,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelRun = nil
 			}
 			m.sseCh = nil
-			cmds = append(cmds, reconnectSSECmd(m.config.BaseURL, m.RunID, m.lastEventID, m.sseReconnectAttempts))
+			cmds = append(cmds, reconnectSSECmd(m.config.BaseURL, m.RunID, m.lastEventID, m.config.APIKey, m.sseReconnectAttempts))
 			return m, tea.Batch(cmds...)
 		}
 

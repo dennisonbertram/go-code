@@ -595,20 +595,25 @@ func sseEventsURL(baseURL, runID string) string {
 	return strings.TrimRight(baseURL, "/") + "/v1/runs/" + runID + "/events"
 }
 
-// startSSEForRun starts the SSE bridge for the given run and returns the channel
-// and cancel func.
-func startSSEForRun(baseURL, runID string) (<-chan tea.Msg, func()) {
+// startSSEForRun starts the SSE bridge for the given run and returns the
+// channel and cancel func. apiKey, if non-empty, is sent as
+// "Authorization: Bearer <apiKey>" (see SSEBridgeOptions) — the same
+// harnessd auth key sourced from ~/.harness/config.json via
+// cmd/harnesscli/auth.go's newAuthedRequest pattern and threaded into
+// TUIConfig.APIKey by cmd/harnesscli/main.go's newTUIConfig.
+func startSSEForRun(baseURL, runID, apiKey string) (<-chan tea.Msg, func()) {
 	url := sseEventsURL(baseURL, runID)
-	return StartSSEBridge(context.Background(), url)
+	return StartSSEBridgeWithOptions(context.Background(), url, SSEBridgeOptions{APIKey: apiKey})
 }
 
 // startSSEForRunFrom starts the SSE bridge for the given run, resuming from
-// lastEventID via the Last-Event-ID header (see StartSSEBridgeFrom). Used to
-// reconnect after the stream drops mid-run without losing or duplicating
-// events.
-func startSSEForRunFrom(baseURL, runID, lastEventID string) (<-chan tea.Msg, func()) {
+// lastEventID via the Last-Event-ID header and authenticating with apiKey
+// (see SSEBridgeOptions). Used to reconnect after the stream drops mid-run
+// without losing or duplicating events, and without dropping authentication
+// on the resumed connection.
+func startSSEForRunFrom(baseURL, runID, lastEventID, apiKey string) (<-chan tea.Msg, func()) {
 	url := sseEventsURL(baseURL, runID)
-	return StartSSEBridgeFrom(context.Background(), url, lastEventID)
+	return StartSSEBridgeWithOptions(context.Background(), url, SSEBridgeOptions{LastEventID: lastEventID, APIKey: apiKey})
 }
 
 // maxSSEReconnectAttempts bounds how many times the TUI will automatically
@@ -635,14 +640,15 @@ func sseReconnectBackoff(attempt int) time.Duration {
 
 // reconnectSSECmd schedules a bounded, backed-off SSE reconnect attempt for
 // the given run that resumes exactly where the previous connection left off
-// via lastEventID (see startSSEForRunFrom and internal/server/http_runs.go's
-// Last-Event-ID handling). It always yields SSEReconnectedMsg so Update()
-// can decide whether the reconnect is still wanted — the run may have been
-// cancelled or completed while the backoff was pending.
-func reconnectSSECmd(baseURL, runID, lastEventID string, attempt int) tea.Cmd {
+// via lastEventID and re-authenticates with apiKey (see startSSEForRunFrom
+// and internal/server/http_runs.go's Last-Event-ID handling). It always
+// yields SSEReconnectedMsg so Update() can decide whether the reconnect is
+// still wanted — the run may have been cancelled or completed while the
+// backoff was pending.
+func reconnectSSECmd(baseURL, runID, lastEventID, apiKey string, attempt int) tea.Cmd {
 	delay := sseReconnectBackoff(attempt)
 	return tea.Tick(delay, func(time.Time) tea.Msg {
-		ch, cancel := startSSEForRunFrom(baseURL, runID, lastEventID)
+		ch, cancel := startSSEForRunFrom(baseURL, runID, lastEventID, apiKey)
 		return SSEReconnectedMsg{Ch: ch, Cancel: cancel}
 	})
 }
