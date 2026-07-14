@@ -2,8 +2,10 @@ package cron
 
 import (
 	"context"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestShellExecutor_Success(t *testing.T) {
@@ -162,5 +164,59 @@ func TestShellExecutor_DefaultTimeout(t *testing.T) {
 	}
 	if strings.TrimSpace(output) != "fast" {
 		t.Fatalf("expected 'fast', got %q", output)
+	}
+}
+
+// TestShellExecutor_TimeoutWithOrphanedChildHoldingPipes (BT-007, P2)
+// reproduces BUG 5: ShellExecutor.Execute calls cmd.CombinedOutput() with
+// no WaitDelay set. When the context deadline kills the direct child (the
+// "sh" process) but a background grandchild it spawned still holds the
+// inherited stdout/stderr pipes open, Wait() blocks until that grandchild
+// exits and closes the pipes on its own — potentially forever (or, here,
+// bounded only by the grandchild's own sleep), even though the job's
+// configured timeout was 1 second.
+//
+// The shell command backgrounds a 30s sleep (`(sleep 30 &)`) that
+// inherits the parent's stdout/stderr, then the parent itself sleeps far
+// longer than the 1s job timeout. Before the fix, Execute does not return
+// until the orphaned "sleep 30" exits and releases the pipe — this test
+// bounds its wait at 10s (well under 30s) so a regression fails fast
+// instead of hanging the test suite for 30+ seconds.
+func TestShellExecutor_TimeoutWithOrphanedChildHoldingPipes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell backgrounding construct")
+	}
+
+	executor := &ShellExecutor{}
+	job := Job{
+		ExecConfig: `{"command":"(sleep 30 &) ; sleep 60"}`,
+		TimeoutSec: 1,
+	}
+
+	type result struct {
+		elapsed time.Duration
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		start := time.Now()
+		_, execErr := executor.Execute(context.Background(), job)
+		done <- result{elapsed: time.Since(start), err: execErr}
+	}()
+
+	select {
+	case r := <-done:
+		// cmd.WaitDelay (5s, once set) starts counting from the 1s
+		// context deadline, so total elapsed should land around 6s; allow
+		// generous headroom for CI/test-machine scheduling jitter while
+		// staying far below the orphaned child's 30s sleep.
+		if r.elapsed > 10*time.Second {
+			t.Fatalf("Execute took %v after a 1s job timeout; expected it to return in roughly job-timeout+WaitDelay, not block on an orphaned child holding the output pipes", r.elapsed)
+		}
+		if r.err == nil {
+			t.Fatal("expected an error for a command killed by its timeout")
+		}
+	case <-time.After(12 * time.Second):
+		t.Fatal("Execute did not return within 12s of a 1s timeout: a background child holding the output pipes open is blocking Wait() indefinitely")
 	}
 }
