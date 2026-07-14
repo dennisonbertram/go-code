@@ -293,10 +293,14 @@ func (e *Engine) GetRun(runID string) (*Run, error) {
 // The channel receives new events as they are emitted during execution.
 //
 // The cancel function unsubscribes and closes the channel. Callers MUST call
-// cancel when done to avoid goroutine leaks.
+// cancel when done to avoid goroutine leaks; it is always safe to call even
+// if the channel was already closed by a terminal event (see emit()).
 //
-// If the run completes or fails, the channel will stop receiving events;
-// subscribers should use the cancel function to clean up.
+// On a terminal event (workflow.completed/workflow.failed), emit() closes
+// and deregisters every subscriber channel for the run, so the channel
+// will also close on its own once the run finishes — subscribers don't
+// strictly need to call cancel() to observe termination, only to clean up
+// early/non-terminal subscriptions.
 //
 // The history read and the channel registration happen atomically under
 // e.mu, matching how emit() holds e.mu across its store append and
@@ -322,8 +326,22 @@ func (e *Engine) Subscribe(runID string) ([]Event, <-chan Event, func(), error) 
 	cancel := func() {
 		e.mu.Lock()
 		defer e.mu.Unlock()
-		delete(e.subs[runID], ch)
-		close(ch)
+		// Membership in e.subs is the single source of truth for
+		// "has this channel already been closed" — emit() removes a
+		// channel from e.subs in the SAME critical section where it
+		// closes it on a terminal event (see emit() below), so if
+		// it's already gone here, emit() got there first; closing
+		// again would panic ("close of closed channel"). Both close
+		// sites only ever mutate e.subs under e.mu, so this
+		// check-then-close is race-free without needing a separate
+		// sync.Once per channel — the existing map+lock already is
+		// the single point of coordination between the two closers.
+		if subsForRun, ok := e.subs[runID]; ok {
+			if _, present := subsForRun[ch]; present {
+				delete(subsForRun, ch)
+				close(ch)
+			}
+		}
 	}
 	return history, ch, cancel, nil
 }
@@ -510,6 +528,20 @@ func (e *Engine) transitionRunTerminal(runID string, scriptErr error, resultJSON
 // Engine, so holding e.mu across AppendEvent is bounded and safe. Sends to
 // subscriber channels remain non-blocking (select/default), so the
 // critical section stays bounded even if a store implementation is slower.
+//
+// On a terminal event (workflow.completed/workflow.failed), every
+// subscriber channel for the run is closed and deregistered, in the same
+// critical section, right after the fan-out. This makes the terminal
+// event undroppable: a subscriber whose 64-slot buffer is already full
+// silently loses the SEND above (by design, to avoid blocking the
+// emitter), but the immediately-following close() still reaches it — a
+// closed channel read (`ev, ok := <-ch`) returns immediately with
+// ok=false, which every subscriber (e.g. the SSE handler in
+// internal/server/http_script_workflows.go) already treats as "stream
+// ended". Without this, a slow subscriber that fills its buffer right
+// before completion would hang forever waiting for a completion that
+// already happened — the same failure mode BUG 5 fixed for the
+// history/live gap, via a different route.
 func (e *Engine) emit(runID string, eventType EventType, payload map[string]any) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -534,5 +566,12 @@ func (e *Engine) emit(runID string, eventType EventType, payload map[string]any)
 			// Drop event if subscriber channel is full — prevents a slow
 			// subscriber from stalling workflow execution.
 		}
+	}
+
+	if eventType == EventWorkflowCompleted || eventType == EventWorkflowFailed {
+		for ch := range e.subs[runID] {
+			close(ch)
+		}
+		delete(e.subs, runID)
 	}
 }
