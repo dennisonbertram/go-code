@@ -241,3 +241,100 @@ func TestConcurrentRegisterAndContextWorkflowNoRace(t *testing.T) {
 	close(stop)
 	registerWG.Wait()
 }
+
+// ---------------------------------------------------------------------
+// BUG 4: Resume TOCTOU allows double execution
+// ---------------------------------------------------------------------
+//
+// Resume checked run.Status != RunStatusFailed, unlocked, THEN mutated the
+// shared Run and spawned execution. Two concurrent Resume calls on the
+// same failed run both pass the check before either mutates state, so
+// both spawn `go e.execute` -- the script runs twice for one Resume
+// "event".
+func TestConcurrentResumeExecutesScriptExactlyOnce(t *testing.T) {
+	e := NewEngine(EngineOptions{Subagents: noopSubagentManager{}})
+
+	var executions atomic.Int64
+	e.Register("flaky", func(*Context) (any, error) {
+		executions.Add(1)
+		return nil, fmt.Errorf("boom")
+	})
+
+	run, err := e.Start(context.Background(), "flaky", nil)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForStatus(t, e, run.ID, RunStatusFailed)
+	if got := executions.Load(); got != 1 {
+		t.Fatalf("initial execution count = %d, want 1", got)
+	}
+
+	const concurrentResumes = 8
+	var wg sync.WaitGroup
+	errs := make([]error, concurrentResumes)
+	var ready sync.WaitGroup
+	ready.Add(concurrentResumes)
+	start := make(chan struct{})
+	for i := 0; i < concurrentResumes; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			ready.Done()
+			<-start
+			_, resumeErr := e.Resume(context.Background(), run.ID, nil)
+			errs[idx] = resumeErr
+		}(i)
+	}
+	ready.Wait()
+	close(start)
+	wg.Wait()
+
+	// Exactly one Resume call should have succeeded in transitioning the
+	// run; the rest must observe it's no longer Failed and error out.
+	successCount := 0
+	for _, resumeErr := range errs {
+		if resumeErr == nil {
+			successCount++
+		}
+	}
+	if successCount != 1 {
+		t.Fatalf("expected exactly 1 successful Resume, got %d (errs=%v)", successCount, errs)
+	}
+
+	waitForTerminal(t, e, run.ID)
+
+	// executions started at 1 (the initial failed Start). Exactly one more
+	// execution should have happened from the single successful Resume.
+	if got := executions.Load(); got != 2 {
+		t.Fatalf("total script executions = %d, want 2 (1 initial + 1 resume)", got)
+	}
+}
+
+// waitForStatus polls GetRun until the run reaches want or the deadline
+// expires.
+func waitForStatus(t *testing.T, e *Engine, runID string, want RunStatus) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		run, err := e.GetRun(runID)
+		if err == nil && run.Status == want {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("run %s did not reach status %s in time", runID, want)
+}
+
+// waitForTerminal polls GetRun until the run reaches a terminal status.
+func waitForTerminal(t *testing.T, e *Engine, runID string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		run, err := e.GetRun(runID)
+		if err == nil && (run.Status == RunStatusCompleted || run.Status == RunStatusFailed) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("run %s did not reach a terminal status in time", runID)
+}
