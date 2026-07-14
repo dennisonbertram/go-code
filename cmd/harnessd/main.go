@@ -1732,7 +1732,12 @@ func (a *embeddedCronAdapter) UpdateJob(ctx context.Context, id string, req htoo
 		}
 	}
 
-	if req.Schedule != nil && (req.Status == nil || *req.Status == cron.StatusActive) {
+	// Gate on job.Status (the EFFECTIVE post-update status), not on
+	// req.Status (the raw request field) — mirrors the fix in
+	// internal/cron/server.go's handleUpdateJob. A schedule-only update
+	// (req.Status == nil) must not re-arm a job whose stored status is
+	// paused: job.Status already reflects that live status in that case.
+	if req.Schedule != nil && job.Status == cron.StatusActive {
 		if err := a.scheduler.UpdateJobSchedule(job); err != nil {
 			return htools.CronJob{}, fmt.Errorf("scheduler: %w", err)
 		}

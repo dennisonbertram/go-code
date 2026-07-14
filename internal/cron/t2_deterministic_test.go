@@ -187,16 +187,34 @@ func TestNextRunTime_MonotonicSequence(t *testing.T) {
 // (b) fireJob-driven execution across N manual calls
 // ---------------------------------------------------------------------------
 
-// fireJobTracker collects the full sequence of UpdateJob calls so each
-// iteration's state can be inspected independently.
+// touchCall records one TouchJobRun invocation.
+type touchCall struct {
+	jobID     string
+	lastRun   time.Time
+	nextRun   time.Time
+	updatedAt time.Time
+}
+
+// fireJobTracker collects the full sequence of TouchJobRun calls so each
+// iteration's state can be inspected independently. It also serves a live
+// Job via GetJobFunc, as fireJob now re-reads current job state before
+// firing (BUG 2 fix) instead of trusting the stale snapshot captured at
+// schedule time.
 type fireJobTracker struct {
 	mu          sync.Mutex
 	execUpdates []Execution // all UpdateExecution calls (both status transitions)
-	jobUpdates  []Job       // one per fireJob call
+	touches     []touchCall // one per fireJob call that actually fires
+	job         Job         // the "live" job state returned by GetJob
 }
 
 func (tr *fireJobTracker) store() *mockStore {
 	return &mockStore{
+		GetJobFunc: func(_ context.Context, id string) (Job, error) {
+			tr.mu.Lock()
+			j := tr.job
+			tr.mu.Unlock()
+			return j, nil
+		},
 		CreateExecutionFunc: func(_ context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
@@ -206,9 +224,9 @@ func (tr *fireJobTracker) store() *mockStore {
 			tr.mu.Unlock()
 			return nil
 		},
-		UpdateJobFunc: func(_ context.Context, job Job) error {
+		TouchJobRunFunc: func(_ context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			tr.mu.Lock()
-			tr.jobUpdates = append(tr.jobUpdates, job)
+			tr.touches = append(tr.touches, touchCall{jobID, lastRun, nextRun, updatedAt})
 			tr.mu.Unlock()
 			return nil
 		},
@@ -217,10 +235,10 @@ func (tr *fireJobTracker) store() *mockStore {
 
 // TestFireJob_NSequentialCallsAdvanceState fires a job N times and asserts:
 //   - exactly N execution pairs (running+success) are recorded, i.e. 2*N UpdateExecution calls
-//   - exactly N UpdateJob calls are recorded
-//   - each successive jobUpdate's LastRunAt is >= the previous one (monotonically non-decreasing)
-//   - each successive jobUpdate's NextRunAt is computed from the stored schedule and is
-//     strictly after the corresponding LastRunAt
+//   - exactly N TouchJobRun calls are recorded
+//   - each successive touch's lastRun is >= the previous one (monotonically non-decreasing)
+//   - each successive touch's nextRun is computed from the stored schedule and is
+//     strictly after the corresponding lastRun
 func TestFireJob_NSequentialCallsAdvanceState(t *testing.T) {
 	const N = 5
 	schedule := "*/5 * * * *"
@@ -254,26 +272,24 @@ func TestFireJob_NSequentialCallsAdvanceState(t *testing.T) {
 		TimeoutSec: 30,
 		NextRunAt:  baseTime.Add(5 * time.Minute),
 	}
-
-	// Pre-populate jitter cache.
-	s.mu.Lock()
-	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = 0
-	s.mu.Unlock()
+	tr.mu.Lock()
+	tr.job = job
+	tr.mu.Unlock()
 
 	// Fire N times sequentially, advancing the mock clock by 5 minutes each time
 	// so each iteration has a distinct and predictable endTime.
 	for i := 0; i < N; i++ {
 		fireTime := baseTime.Add(time.Duration(i+1) * 5 * time.Minute)
 		clock.Set(fireTime)
-		s.fireJob(job)
+		s.fireJob(job, 0)
 		s.wg.Wait() // ensure goroutine completes before next iteration
 	}
 
 	tr.mu.Lock()
 	execUpdates := make([]Execution, len(tr.execUpdates))
 	copy(execUpdates, tr.execUpdates)
-	jobUpdates := make([]Job, len(tr.jobUpdates))
-	copy(jobUpdates, tr.jobUpdates)
+	touches := make([]touchCall, len(tr.touches))
+	copy(touches, tr.touches)
 	tr.mu.Unlock()
 
 	// --- Assertion 1: execution update count ---
@@ -282,9 +298,9 @@ func TestFireJob_NSequentialCallsAdvanceState(t *testing.T) {
 		t.Fatalf("expected %d execution updates (2 per fireJob), got %d", 2*N, got)
 	}
 
-	// --- Assertion 2: job update count ---
-	if got := len(jobUpdates); got != N {
-		t.Fatalf("expected %d job updates (1 per fireJob), got %d", N, got)
+	// --- Assertion 2: TouchJobRun call count ---
+	if got := len(touches); got != N {
+		t.Fatalf("expected %d TouchJobRun calls (1 per fireJob), got %d", N, got)
 	}
 
 	// --- Assertion 3: execution status pairs ---
@@ -299,58 +315,73 @@ func TestFireJob_NSequentialCallsAdvanceState(t *testing.T) {
 		}
 	}
 
-	// --- Assertion 4: LastRunAt is monotonically non-decreasing ---
+	// --- Assertion 4: lastRun is monotonically non-decreasing ---
 	for i := 1; i < N; i++ {
-		prev := jobUpdates[i-1].LastRunAt
-		cur := jobUpdates[i].LastRunAt
+		prev := touches[i-1].lastRun
+		cur := touches[i].lastRun
 		if cur.Before(prev) {
-			t.Errorf("iteration %d: LastRunAt went backwards: %v < %v", i, cur, prev)
+			t.Errorf("iteration %d: lastRun went backwards: %v < %v", i, cur, prev)
 		}
 	}
 
-	// --- Assertion 5: NextRunAt is correctly recomputed after each execution ---
-	// NextRunAt = NextRunTime(schedule, endTime) where endTime = clock.Now() at fire time.
-	for i, ju := range jobUpdates {
+	// --- Assertion 5: nextRun is correctly recomputed after each execution ---
+	// nextRun = NextRunTime(schedule, endTime) where endTime = clock.Now() at fire time.
+	for i, tc := range touches {
 		endTime := baseTime.Add(time.Duration(i+1) * 5 * time.Minute)
 		want, err := NextRunTime(schedule, endTime)
 		if err != nil {
 			t.Fatalf("iteration %d: NextRunTime error: %v", i, err)
 		}
-		if ju.NextRunAt.IsZero() {
-			t.Errorf("iteration %d: NextRunAt is zero", i)
+		if tc.nextRun.IsZero() {
+			t.Errorf("iteration %d: nextRun is zero", i)
 			continue
 		}
-		if !ju.NextRunAt.Equal(want) {
-			t.Errorf("iteration %d: NextRunAt = %v, want %v (endTime %v, schedule %q)",
-				i, ju.NextRunAt, want, endTime, schedule)
+		if !tc.nextRun.Equal(want) {
+			t.Errorf("iteration %d: nextRun = %v, want %v (endTime %v, schedule %q)",
+				i, tc.nextRun, want, endTime, schedule)
 		}
 	}
 
-	// --- Assertion 6: each NextRunAt is strictly after the corresponding LastRunAt ---
-	for i, ju := range jobUpdates {
-		if !ju.NextRunAt.After(ju.LastRunAt) {
-			t.Errorf("iteration %d: NextRunAt %v is not after LastRunAt %v",
-				i, ju.NextRunAt, ju.LastRunAt)
+	// --- Assertion 6: each nextRun is strictly after the corresponding lastRun ---
+	for i, tc := range touches {
+		if !tc.nextRun.After(tc.lastRun) {
+			t.Errorf("iteration %d: nextRun %v is not after lastRun %v",
+				i, tc.nextRun, tc.lastRun)
 		}
 	}
 }
 
-// TestFireJob_FailedExecution_DoesNotChangeNextRunAt verifies that on executor
-// failure the updated job's NextRunAt is still recomputed (P1 fix applies
-// regardless of success/failure — scheduler.go unconditionally sets it after
-// endTime is known; only a schedule parse error leaves it unchanged).
+// TestFireJob_FailedExecution_NextRunAtStillAdvanced verifies that on executor
+// failure the touched nextRun is still recomputed (P1 fix applies regardless
+// of success/failure — scheduler.go unconditionally calls TouchJobRun after
+// endTime is known; only a schedule parse error leaves nextRun unchanged).
 func TestFireJob_FailedExecution_NextRunAtStillAdvanced(t *testing.T) {
 	var mu sync.Mutex
-	var jobUpdate Job
+	var touched touchCall
+	var touchCalled bool
+
+	schedule := "0 * * * *"
+	job := Job{
+		ID:         "fail-job",
+		Name:       "fail",
+		Schedule:   schedule,
+		ExecType:   ExecTypeShell,
+		ExecConfig: `{"command":"false"}`,
+		Status:     StatusActive,
+	}
 
 	store := &mockStore{
+		GetJobFunc: func(_ context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(_ context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
 		UpdateExecutionFunc: func(_ context.Context, exec Execution) error { return nil },
-		UpdateJobFunc: func(_ context.Context, job Job) error {
+		TouchJobRunFunc: func(_ context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			mu.Lock()
-			jobUpdate = job
+			touched = touchCall{jobID, lastRun, nextRun, updatedAt}
+			touchCalled = true
 			mu.Unlock()
 			return nil
 		},
@@ -367,36 +398,27 @@ func TestFireJob_FailedExecution_NextRunAtStillAdvanced(t *testing.T) {
 	s := NewScheduler(store, executor, clock, cfg)
 	s.sleepFn = func(time.Duration) {}
 
-	schedule := "0 * * * *"
-	job := Job{
-		ID:         "fail-job",
-		Name:       "fail",
-		Schedule:   schedule,
-		ExecType:   ExecTypeShell,
-		ExecConfig: `{"command":"false"}`,
-		Status:     StatusActive,
-		NextRunAt:  fireTime, // stale — same as fire time
-	}
-	s.mu.Lock()
-	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = 0
-	s.mu.Unlock()
-
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()
-	got := jobUpdate
+	got := touched
+	calledOK := touchCalled
 	mu.Unlock()
+
+	if !calledOK {
+		t.Fatal("expected TouchJobRun to be called even after a failed execution")
+	}
 
 	want, err := NextRunTime(schedule, fireTime)
 	if err != nil {
 		t.Fatalf("NextRunTime: %v", err)
 	}
-	if got.NextRunAt.IsZero() {
-		t.Fatal("NextRunAt is zero after failed execution")
+	if got.nextRun.IsZero() {
+		t.Fatal("nextRun is zero after failed execution")
 	}
-	if !got.NextRunAt.Equal(want) {
-		t.Fatalf("NextRunAt = %v, want %v", got.NextRunAt, want)
+	if !got.nextRun.Equal(want) {
+		t.Fatalf("nextRun = %v, want %v", got.nextRun, want)
 	}
 }
 
@@ -406,22 +428,38 @@ type errTestFailure string
 func (e errTestFailure) Error() string { return string(e) }
 
 // TestFireJob_InvalidSchedule_NextRunAtLeftUnchanged verifies that when the
-// job's schedule cannot be parsed by NextRunTime, the UpdateJob call still
-// happens but NextRunAt is left at the original value (zero in this case).
+// job's schedule cannot be parsed by NextRunTime, TouchJobRun is still
+// called but nextRun is left at the job's current NextRunAt value (zero in
+// this case).
 func TestFireJob_InvalidSchedule_NextRunAtLeftUnchanged(t *testing.T) {
 	var mu sync.Mutex
-	var jobUpdate Job
-	updated := false
+	var touched touchCall
+	touchCalled := false
+
+	// We can't add an invalid schedule via AddJob (it would error), so we
+	// call fireJob directly with a job whose Schedule field is
+	// intentionally invalid.
+	job := Job{
+		ID:         "bad-sched-job",
+		Name:       "bad-schedule",
+		Schedule:   "INVALID_SCHED",
+		ExecType:   ExecTypeShell,
+		ExecConfig: `{"command":"echo ok"}`,
+		Status:     StatusActive,
+	}
 
 	store := &mockStore{
+		GetJobFunc: func(_ context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(_ context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
 		UpdateExecutionFunc: func(_ context.Context, exec Execution) error { return nil },
-		UpdateJobFunc: func(_ context.Context, job Job) error {
+		TouchJobRunFunc: func(_ context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			mu.Lock()
-			jobUpdate = job
-			updated = true
+			touched = touchCall{jobID, lastRun, nextRun, updatedAt}
+			touchCalled = true
 			mu.Unlock()
 			return nil
 		},
@@ -438,32 +476,18 @@ func TestFireJob_InvalidSchedule_NextRunAtLeftUnchanged(t *testing.T) {
 	s := NewScheduler(store, executor, clock, cfg)
 	s.sleepFn = func(time.Duration) {}
 
-	// We can't add an invalid schedule via AddJob (it would error), so we
-	// pre-populate the jitter cache directly and call fireJob with a job
-	// whose Schedule field is intentionally invalid.
-	job := Job{
-		ID:         "bad-sched-job",
-		Name:       "bad-schedule",
-		Schedule:   "INVALID_SCHED",
-		ExecType:   ExecTypeShell,
-		ExecConfig: `{"command":"echo ok"}`,
-		Status:     StatusActive,
-	}
-	s.mu.Lock()
-	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = 0
-	s.mu.Unlock()
-
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
 
-	if !updated {
-		t.Fatal("expected UpdateJob to be called even with an invalid schedule")
+	if !touchCalled {
+		t.Fatal("expected TouchJobRun to be called even with an invalid schedule")
 	}
-	// NextRunAt should remain zero because NextRunTime returned an error.
-	if !jobUpdate.NextRunAt.IsZero() {
-		t.Fatalf("expected NextRunAt to remain zero for invalid schedule, got %v", jobUpdate.NextRunAt)
+	// nextRun should remain zero because NextRunTime returned an error and
+	// job.NextRunAt (the fallback) was never set.
+	if !touched.nextRun.IsZero() {
+		t.Fatalf("expected nextRun to remain zero for invalid schedule, got %v", touched.nextRun)
 	}
 }

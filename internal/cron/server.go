@@ -236,7 +236,14 @@ func (s *Server) handleUpdateJob(w http.ResponseWriter, r *http.Request, id stri
 		}
 	}
 
-	if req.Schedule != nil && (req.Status == nil || *req.Status == StatusActive) {
+	// Gate on job.Status (the EFFECTIVE post-update status), not on
+	// req.Status (the raw request field). A schedule-only PATCH
+	// (req.Status == nil) must not re-arm a job whose stored status is
+	// paused: job.Status already reflects that live status in that case.
+	// For a resume+schedule PATCH, the status block above already set
+	// job.Status = StatusActive, so this still correctly re-arms
+	// genuinely-active jobs.
+	if req.Schedule != nil && job.Status == StatusActive {
 		if err := s.scheduler.UpdateJobSchedule(job); err != nil {
 			writeError(w, http.StatusInternalServerError, "scheduler_error", err.Error())
 			return

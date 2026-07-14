@@ -237,6 +237,33 @@ WHERE job_id = ?
 	return nil
 }
 
+// TouchJobRun updates only the run-tracking columns for a job
+// (last_run_at, next_run_at, updated_at), leaving schedule, execution
+// config, status, timeout, and tags untouched. This is used by the
+// scheduler after firing a job so a concurrent user edit (or pause) is
+// never silently reverted by a full-row overwrite.
+func (s *SQLiteStore) TouchJobRun(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
+	res, err := s.db.ExecContext(ctx, `
+UPDATE cron_jobs SET last_run_at = ?, next_run_at = ?, updated_at = ? WHERE job_id = ?
+`,
+		nullableTimeString(lastRun),
+		nowString(nextRun),
+		nowString(updatedAt),
+		jobID,
+	)
+	if err != nil {
+		return fmt.Errorf("touch job run: %w", err)
+	}
+	rows, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("touch job run rows affected: %w", err)
+	}
+	if rows == 0 {
+		return ErrJobNotFound
+	}
+	return nil
+}
+
 // DeleteJob performs a soft delete by setting status to deleted.
 // It also renames the job to free the unique name constraint,
 // allowing a new job with the same name to be created later.
