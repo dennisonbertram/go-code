@@ -189,6 +189,10 @@ func (e *Engine) Start(ctx context.Context, name string, args any) (*Run, error)
 // Only runs with status RunStatusFailed can be resumed. The run's error is
 // cleared and its status reset to RunStatusRunning before re-execution.
 func (e *Engine) Resume(ctx context.Context, runID string, args any) (*Run, error) {
+	// The status check and the transition to RunStatusRunning must be
+	// atomic under e.mu. Otherwise two concurrent Resume calls can both
+	// observe RunStatusFailed before either mutates the run, and both
+	// spawn `go e.execute` — running the script twice for one Resume.
 	e.mu.Lock()
 	run, ok := e.runs[runID]
 	if !ok {
@@ -200,23 +204,27 @@ func (e *Engine) Resume(ctx context.Context, runID string, args any) (*Run, erro
 		return nil, fmt.Errorf("workflow run %q has status %s, can only resume failed runs", runID, run.Status)
 	}
 	reg, ok := e.scripts[run.WorkflowName]
-	e.mu.Unlock()
 	if !ok {
+		e.mu.Unlock()
 		return nil, fmt.Errorf("workflow %q no longer registered", run.WorkflowName)
 	}
 
 	run.Status = RunStatusRunning
 	run.Error = ""
 	run.UpdatedAt = e.now().UTC()
-	_ = e.store.UpdateRun(ctx, run)
+	// Copy while still holding the lock so later readers of the shared
+	// *Run (e.g. GetRun, or another goroutine) never race with this
+	// mutation, and so the persisted/emitted view matches what we just
+	// committed.
+	cp := *run
+	e.mu.Unlock()
+
+	_ = e.store.UpdateRun(ctx, &cp)
 
 	e.emit(run.ID, EventWorkflowStarted, map[string]any{
 		"workflow": reg.Meta.Name,
 		"resumed":  true,
 	})
-
-	// Return a copy so callers don't race with the execution goroutine.
-	cp := *run
 
 	go e.execute(run.ID, reg, args)
 	return &cp, nil

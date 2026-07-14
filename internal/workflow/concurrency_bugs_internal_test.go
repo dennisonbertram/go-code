@@ -254,10 +254,22 @@ func TestConcurrentRegisterAndContextWorkflowNoRace(t *testing.T) {
 func TestConcurrentResumeExecutesScriptExactlyOnce(t *testing.T) {
 	e := NewEngine(EngineOptions{Subagents: noopSubagentManager{}})
 
+	// The first execution (triggered by Start) fails immediately, putting
+	// the run into RunStatusFailed. Any subsequent execution (triggered by
+	// a successful Resume) blocks on `release` until the test has
+	// collected results from ALL concurrent Resume attempts. This keeps
+	// the run's status at RunStatusRunning for the whole race window, so
+	// a genuine (fast) re-failure can never masquerade as a second
+	// legitimate Resume — isolating the TOCTOU bug specifically.
 	var executions atomic.Int64
+	release := make(chan struct{})
 	e.Register("flaky", func(*Context) (any, error) {
-		executions.Add(1)
-		return nil, fmt.Errorf("boom")
+		n := executions.Add(1)
+		if n == 1 {
+			return nil, fmt.Errorf("boom")
+		}
+		<-release
+		return nil, fmt.Errorf("boom again")
 	})
 
 	run, err := e.Start(context.Background(), "flaky", nil)
@@ -298,9 +310,14 @@ func TestConcurrentResumeExecutesScriptExactlyOnce(t *testing.T) {
 		}
 	}
 	if successCount != 1 {
+		close(release)
 		t.Fatalf("expected exactly 1 successful Resume, got %d (errs=%v)", successCount, errs)
 	}
 
+	// All 8 concurrent Resume calls have now returned. Only the winner's
+	// `go e.execute` is (or could be) in flight, blocked on `release`.
+	// Let it proceed and reach a terminal status.
+	close(release)
 	waitForTerminal(t, e, run.ID)
 
 	// executions started at 1 (the initial failed Start). Exactly one more
