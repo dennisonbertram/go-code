@@ -119,6 +119,34 @@ type ServerOptions struct {
 	// When nil, the endpoint returns 401 for all requests.
 	LinearAdapter *linearadapter.LinearAdapter
 
+	// WebhookTenantIDs maps a trigger/webhook source name ("github", "slack",
+	// "linear", or any source name accepted by POST /v1/external/trigger) to
+	// the tenant ID that owns that integration (S1/S2 hardening).
+	//
+	// POST /v1/external/trigger, POST /v1/webhooks/github, POST /v1/webhooks/slack,
+	// and POST /v1/webhooks/linear all authenticate via a single shared
+	// per-source HMAC secret rather than a per-caller API key, so — unlike
+	// every other endpoint in this package — there is no authenticated
+	// principal in the request context to derive a tenant from (these routes
+	// intentionally bypass authMiddleware; see buildMux). The caller-supplied
+	// tenant_id field on the trigger envelope's JSON body is therefore NOT a
+	// trustworthy source of tenancy: any holder of the shared secret could
+	// otherwise inject a run into an arbitrary tenant just by naming it.
+	//
+	// Resolution (see resolveWebhookTenantID in http_external_trigger.go):
+	//   - Source has a configured entry here: that tenant is authoritative.
+	//     A body-supplied tenant_id that does not match is rejected with 403
+	//     rather than silently ignored (cross-tenant injection attempt). A
+	//     matching or empty body tenant_id is accepted.
+	//   - Source has no configured entry (the zero-config default): the body
+	//     tenant_id is ignored outright and every run for that source is
+	//     scoped to the "default" tenant. This is the secure default — an
+	//     unconfigured deployment can never be tricked into cross-tenant
+	//     injection by a request body, at the cost of not supporting more
+	//     than one tenant's worth of webhook traffic per source until the
+	//     operator explicitly opts in by configuring this map.
+	WebhookTenantIDs map[string]string
+
 	// RelayWorkerStore is an optional persistence layer for Go Relay worker
 	// registration and heartbeats. When provided, the /v1/relay/workers endpoints
 	// are enabled.
@@ -186,6 +214,7 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		githubAdapter:     opts.GitHubAdapter,
 		slackAdapter:      opts.SlackAdapter,
 		linearAdapter:     opts.LinearAdapter,
+		webhookTenantIDs:  opts.WebhookTenantIDs,
 		relayWorkerStore:  opts.RelayWorkerStore,
 		relayControl:      opts.RelayControl,
 		toolCatalog:       opts.Tools,
@@ -402,6 +431,10 @@ type Server struct {
 	// linearAdapter converts Linear webhook requests into trigger envelopes (issue #413).
 	// When nil, POST /v1/webhooks/linear returns 401.
 	linearAdapter *linearadapter.LinearAdapter
+
+	// webhookTenantIDs is the per-source configured tenant for webhook/trigger
+	// endpoints (S1/S2 hardening). See ServerOptions.WebhookTenantIDs.
+	webhookTenantIDs map[string]string
 
 	// relayWorkerStore is an optional persistence layer for Go Relay worker
 	// registration and heartbeats.
