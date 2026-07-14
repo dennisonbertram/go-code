@@ -266,6 +266,70 @@ func TestUpdateJob(t *testing.T) {
 	}
 }
 
+// TestTouchJobRun_OnlyUpdatesRunTrackingColumns (BUG 2 fix) verifies that
+// TouchJobRun updates last_run_at, next_run_at, and updated_at, but leaves
+// every other column (schedule, status, tags, execution config, timeout)
+// exactly as it was — even when the in-memory Job struct passed elsewhere
+// disagrees. This is the core guarantee that lets the scheduler record a
+// fire without risking a silent revert of concurrent edits or resurrecting
+// a paused job.
+func TestTouchJobRun_OnlyUpdatesRunTrackingColumns(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+	job := testJob("touch-run-me")
+	job.Status = StatusPaused
+	job.Tags = "keep-me"
+	job.Schedule = "0 * * * *"
+
+	if _, err := store.CreateJob(ctx, job); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	lastRun := time.Date(2025, 3, 1, 10, 0, 0, 0, time.UTC)
+	nextRun := time.Date(2025, 3, 1, 11, 0, 0, 0, time.UTC)
+	updatedAt := time.Date(2025, 3, 1, 10, 0, 1, 0, time.UTC)
+
+	if err := store.TouchJobRun(ctx, job.ID, lastRun, nextRun, updatedAt); err != nil {
+		t.Fatalf("TouchJobRun: %v", err)
+	}
+
+	// GetJob excludes deleted jobs but not paused ones, so this should succeed.
+	got, err := store.GetJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+
+	if !got.LastRunAt.Equal(lastRun) {
+		t.Errorf("expected LastRunAt %v, got %v", lastRun, got.LastRunAt)
+	}
+	if !got.NextRunAt.Equal(nextRun) {
+		t.Errorf("expected NextRunAt %v, got %v", nextRun, got.NextRunAt)
+	}
+	if !got.UpdatedAt.Equal(updatedAt) {
+		t.Errorf("expected UpdatedAt %v, got %v", updatedAt, got.UpdatedAt)
+	}
+
+	// Everything else must be untouched — this is the whole point of the
+	// method existing instead of a full UpdateJob call.
+	if got.Status != StatusPaused {
+		t.Errorf("TouchJobRun must not change status; expected %q, got %q", StatusPaused, got.Status)
+	}
+	if got.Tags != "keep-me" {
+		t.Errorf("TouchJobRun must not change tags; expected %q, got %q", "keep-me", got.Tags)
+	}
+	if got.Schedule != "0 * * * *" {
+		t.Errorf("TouchJobRun must not change schedule; expected %q, got %q", "0 * * * *", got.Schedule)
+	}
+}
+
+func TestTouchJobRun_NotFound(t *testing.T) {
+	store := newTestStore(t)
+	err := store.TouchJobRun(context.Background(), "missing-job", time.Now(), time.Now(), time.Now())
+	if !IsJobNotFound(err) {
+		t.Fatalf("expected job not found, got %v", err)
+	}
+}
+
 func TestDeleteJob_SoftDelete(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()

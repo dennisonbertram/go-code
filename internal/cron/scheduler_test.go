@@ -104,10 +104,15 @@ func TestUpdateJobSchedule(t *testing.T) {
 func TestFireJob_CreatesExecution(t *testing.T) {
 	var createdExec Execution
 	var updatedExecs []Execution
-	var updatedJob Job
+	var touchedJobID string
 	var mu sync.Mutex
 
+	job := testJob("fire-test")
+
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			mu.Lock()
 			createdExec = exec
@@ -120,9 +125,9 @@ func TestFireJob_CreatesExecution(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			mu.Lock()
-			updatedJob = job
+			touchedJobID = jobID
 			mu.Unlock()
 			return nil
 		},
@@ -136,7 +141,6 @@ func TestFireJob_CreatesExecution(t *testing.T) {
 
 	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
-	job := testJob("fire-test")
 
 	s.fireJob(job, 0)
 	s.wg.Wait()
@@ -165,8 +169,8 @@ func TestFireJob_CreatesExecution(t *testing.T) {
 		t.Fatalf("expected output 'test output', got %q", updatedExecs[1].OutputSummary)
 	}
 
-	if updatedJob.ID != job.ID {
-		t.Fatalf("expected job update for %s, got %s", job.ID, updatedJob.ID)
+	if touchedJobID != job.ID {
+		t.Fatalf("expected TouchJobRun for %s, got %s", job.ID, touchedJobID)
 	}
 }
 
@@ -174,7 +178,12 @@ func TestFireJob_ExecutorError(t *testing.T) {
 	var updatedExecs []Execution
 	var mu sync.Mutex
 
+	job := testJob("error-test")
+
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
@@ -184,7 +193,7 @@ func TestFireJob_ExecutorError(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			return nil
 		},
 	}
@@ -197,7 +206,6 @@ func TestFireJob_ExecutorError(t *testing.T) {
 
 	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
-	job := testJob("error-test")
 
 	s.fireJob(job, 0)
 	s.wg.Wait()
@@ -221,7 +229,12 @@ func TestFireJob_TimeoutError(t *testing.T) {
 	var updatedExecs []Execution
 	var mu sync.Mutex
 
+	job := testJob("timeout-test")
+
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
@@ -231,7 +244,7 @@ func TestFireJob_TimeoutError(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			return nil
 		},
 	}
@@ -244,7 +257,6 @@ func TestFireJob_TimeoutError(t *testing.T) {
 
 	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
-	job := testJob("timeout-test")
 
 	s.fireJob(job, 0)
 	s.wg.Wait()
@@ -264,13 +276,16 @@ func TestConcurrencySemaphore(t *testing.T) {
 	var mu sync.Mutex
 
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{ID: id, Status: StatusActive, Schedule: "*/5 * * * *"}, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
 		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			return nil
 		},
 	}
@@ -355,13 +370,16 @@ func TestStop_WaitsForInFlight(t *testing.T) {
 	var completed int32
 
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{ID: id, Status: StatusActive, Schedule: "*/5 * * * *"}, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
 		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			return nil
 		},
 	}
@@ -426,6 +444,9 @@ func TestScheduler_StopWithInflightExecutions(t *testing.T) {
 	var storedExecs []Execution
 
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{ID: id, Status: StatusActive, Schedule: "*/5 * * * *"}, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
@@ -437,7 +458,7 @@ func TestScheduler_StopWithInflightExecutions(t *testing.T) {
 			}
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			return nil
 		},
 	}
@@ -474,7 +495,11 @@ func TestScheduler_StopWithInflightExecutions(t *testing.T) {
 }
 
 func TestFireJob_CreateExecutionError(t *testing.T) {
+	job := testJob("create-exec-error")
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return Execution{}, fmt.Errorf("db error")
 		},
@@ -482,7 +507,6 @@ func TestFireJob_CreateExecutionError(t *testing.T) {
 
 	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	s := NewScheduler(store, &mockExecutor{}, clock, SchedulerConfig{MaxConcurrent: 1})
-	job := testJob("create-exec-error")
 
 	// Should not panic; just logs the error.
 	s.fireJob(job, 0)
@@ -612,7 +636,12 @@ func TestFireJob_JitterAppliedToExecutionTiming(t *testing.T) {
 	var createdExec Execution
 	var sleptDuration time.Duration
 
+	job := testJob("jitter-fire")
+
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			createdExec = exec
 			return exec, nil
@@ -620,7 +649,7 @@ func TestFireJob_JitterAppliedToExecutionTiming(t *testing.T) {
 		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			return nil
 		},
 	}
@@ -643,7 +672,6 @@ func TestFireJob_JitterAppliedToExecutionTiming(t *testing.T) {
 
 	// The jitter offset is passed directly to fireJob, as AddJob would do
 	// (fireJob no longer reads s.jitterCache itself).
-	job := testJob("jitter-fire")
 	knownJitter := 1234 * time.Millisecond
 
 	// fireJob should call sleepFn with the jitter duration, then proceed.
@@ -675,19 +703,30 @@ func TestJitter_SameJobSameSchedule_SameJitter(t *testing.T) {
 // TestFireJobAdvancesNextRunAt (T1) — fireJob must recompute NextRunAt after execution.
 // Before P1, fireJob never sets NextRunAt, so the stored job keeps the stale original value.
 func TestFireJobAdvancesNextRunAt(t *testing.T) {
-	var updatedJob Job
+	var touchedLastRun, touchedNextRun time.Time
+	var touchCalled bool
 	var mu sync.Mutex
 
+	job := testJob("advance-next-run-at")
+	job.Schedule = "*/5 * * * *"
+	// Set an obviously stale NextRunAt so we can detect if it is unchanged.
+	job.NextRunAt = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
 		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			mu.Lock()
-			updatedJob = job
+			touchCalled = true
+			touchedLastRun = lastRun
+			touchedNextRun = nextRun
 			mu.Unlock()
 			return nil
 		},
@@ -711,17 +750,18 @@ func TestFireJobAdvancesNextRunAt(t *testing.T) {
 	s := NewScheduler(store, executor, clock, cfg)
 	s.sleepFn = func(d time.Duration) {} // no-op
 
-	job := testJob("advance-next-run-at")
-	job.Schedule = "*/5 * * * *"
-	// Set an obviously stale NextRunAt so we can detect if it is unchanged.
-	job.NextRunAt = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-
 	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()
-	got := updatedJob
-	mu.Unlock()
+	defer mu.Unlock()
+
+	if !touchCalled {
+		t.Fatal("expected TouchJobRun to be called")
+	}
+	if !touchedLastRun.Equal(fireTime) {
+		t.Fatalf("expected TouchJobRun lastRun %v, got %v", fireTime, touchedLastRun)
+	}
 
 	// Compute the expected NextRunAt: first occurrence of "*/5 * * * *" after fireTime.
 	want, err := NextRunTime(job.Schedule, fireTime)
@@ -729,12 +769,12 @@ func TestFireJobAdvancesNextRunAt(t *testing.T) {
 		t.Fatalf("NextRunTime: %v", err)
 	}
 
-	if got.NextRunAt.IsZero() {
-		t.Fatal("NextRunAt was not set on updated job")
+	if touchedNextRun.IsZero() {
+		t.Fatal("NextRunAt was not set via TouchJobRun")
 	}
-	if !got.NextRunAt.Equal(want) {
+	if !touchedNextRun.Equal(want) {
 		t.Fatalf("NextRunAt = %v, want %v (schedule %q, fire time %v)",
-			got.NextRunAt, want, job.Schedule, fireTime)
+			touchedNextRun, want, job.Schedule, fireTime)
 	}
 }
 

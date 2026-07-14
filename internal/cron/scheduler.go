@@ -159,6 +159,23 @@ func (s *Scheduler) fireJob(job Job, jitter time.Duration) {
 		s.sleepFn(jitterOffset)
 	}
 
+	// Re-read the job's current state from the store before firing. The
+	// job value captured in AddJob's closure can be arbitrarily stale by
+	// the time the timer/jitter wait elapses: the schedule, execution
+	// config, timeout, tags, or status may have changed (e.g. the job may
+	// have been paused or deleted). Firing based on the stale snapshot
+	// would ignore those edits and could resurrect a paused job.
+	current, err := s.store.GetJob(ctx, job.ID)
+	if err != nil {
+		log.Printf("cron: skipping fire for job %s: failed to reload current state: %v", job.ID, err)
+		return
+	}
+	if current.Status != StatusActive {
+		log.Printf("cron: skipping fire for job %s: no longer active (status=%s)", job.ID, current.Status)
+		return
+	}
+	job = current
+
 	exec := Execution{
 		ID:        uuid.New().String(),
 		JobID:     job.ID,
@@ -166,7 +183,7 @@ func (s *Scheduler) fireJob(job Job, jitter time.Duration) {
 		Status:    ExecStatusPending,
 	}
 
-	exec, err := s.store.CreateExecution(ctx, exec)
+	exec, err = s.store.CreateExecution(ctx, exec)
 	if err != nil {
 		log.Printf("cron: failed to create execution for job %s: %v", job.ID, err)
 		return
@@ -211,15 +228,19 @@ func (s *Scheduler) fireJob(job Job, jitter time.Duration) {
 			log.Printf("cron: failed to update execution %s: %v", exec.ID, updateErr)
 		}
 
-		// Update job's last_run_at and recompute NextRunAt.
-		job.LastRunAt = endTime
-		job.UpdatedAt = endTime
+		// Record last_run_at and recompute next_run_at using a targeted
+		// update that only touches run-tracking columns. This must NOT be
+		// a full-object UpdateJob write: job is still the state read at
+		// the top of fireJob, and by the time execution finishes it may
+		// again be stale relative to concurrent edits. TouchJobRun never
+		// clobbers schedule, execution config, status, timeout, or tags.
+		nextRun := job.NextRunAt
 		if next, parseErr := NextRunTime(job.Schedule, endTime); parseErr == nil {
-			job.NextRunAt = next
+			nextRun = next
 		}
 		// On schedule parse error, NextRunAt is left unchanged.
-		if updateErr := s.store.UpdateJob(ctx, job); updateErr != nil {
-			log.Printf("cron: failed to update job %s last_run_at: %v", job.ID, updateErr)
+		if touchErr := s.store.TouchJobRun(ctx, job.ID, endTime, nextRun, endTime); touchErr != nil {
+			log.Printf("cron: failed to touch job %s last_run_at: %v", job.ID, touchErr)
 		}
 	}()
 }
