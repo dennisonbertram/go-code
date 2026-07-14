@@ -126,6 +126,18 @@ func (s *Scheduler) AddJob(job Job) error {
 	return nil
 }
 
+// HasEntry reports whether jobID is currently registered with the live
+// cron dispatcher — i.e. it will fire on its schedule. A paused or
+// removed job is not registered. Exposed primarily so callers (including
+// tests outside this package) can observe live scheduler state without
+// reaching into unexported fields.
+func (s *Scheduler) HasEntry(jobID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.entries[jobID]
+	return ok
+}
+
 // RemoveJob removes a job from the cron scheduler.
 func (s *Scheduler) RemoveJob(jobID string) {
 	s.mu.Lock()
