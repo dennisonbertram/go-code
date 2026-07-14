@@ -91,6 +91,21 @@ func NewClient(cfg Config) (*Client, error) {
 	}, nil
 }
 
+// nonStreamingHeaderTimeout bounds Transport.ResponseHeaderTimeout. For a
+// non-streaming completion, the upstream typically withholds response
+// headers until the entire completion has been generated, so this is, in
+// practice, a cap on total generation time — not merely "time to first
+// byte". It must stay well above any plausible generation time (raised here
+// from an original 60s, which was tighter than the 90s whole-request
+// timeout BUG1 removed, and became actively dangerous once BUG2a raised
+// Anthropic max_tokens up to 4-8x via the model catalog). It is a
+// package-level var (not a const) so tests can shrink it. Genuine
+// mid-transfer stalls, once bytes start flowing, are now bounded
+// separately by the idle-read watchdog (idleStreamTimeout) applied to both
+// streaming and non-streaming body reads — this timeout only bounds "the
+// provider never responds at all".
+var nonStreamingHeaderTimeout = 10 * time.Minute
+
 // defaultHTTPClient builds the *http.Client used when Config.Client is not
 // supplied. It intentionally does NOT set http.Client.Timeout: that field
 // bounds the entire request/response exchange, including the time spent
@@ -99,20 +114,25 @@ func NewClient(cfg Config) (*Client, error) {
 // per-phase timeouts are set on the Transport (connection dial, TLS
 // handshake, waiting for response headers, and the 100-continue handshake).
 // Overall cancellation for a request is the caller's responsibility via the
-// context passed to http.NewRequestWithContext.
+// context passed to http.NewRequestWithContext, plus the idle-read watchdog
+// this package applies to response bodies (see idleStreamTimeout).
+//
+// The Transport is cloned from http.DefaultTransport rather than built from
+// zero values: a zero-value Transport with a custom DialContext silently
+// disables Go's automatic HTTP/2 negotiation (ForceAttemptHTTP2 defaults to
+// false) and loses connection-pooling defaults (MaxIdleConns,
+// IdleConnTimeout) that http.DefaultTransport sets. Only the four fields
+// this package actually needs to override are changed on the clone.
 func defaultHTTPClient() *http.Client {
-	return &http.Client{
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-			DialContext: (&net.Dialer{
-				Timeout:   30 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-			TLSHandshakeTimeout:   10 * time.Second,
-			ResponseHeaderTimeout: 60 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-		},
-	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	tr.TLSHandshakeTimeout = 10 * time.Second
+	tr.ResponseHeaderTimeout = nonStreamingHeaderTimeout
+	tr.ExpectContinueTimeout = 1 * time.Second
+	return &http.Client{Transport: tr}
 }
 
 // idleStreamTimeout bounds the gap between successive reads from a streaming
