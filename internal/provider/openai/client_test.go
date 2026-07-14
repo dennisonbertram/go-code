@@ -1959,6 +1959,88 @@ func TestResponsesAPIStreamingMissingCompleted(t *testing.T) {
 	}
 }
 
+// TestResponsesAPIStreamingResponseFailedReturnsTypedFailure is SHOULD-FIX2:
+// processResponsesSSEBlock had no case for "response.failed" (or
+// "response.incomplete" / "error"), so it fell through to the default
+// no-op case, the stream ended without response.completed, and the caller
+// got the generic untyped "responses stream ended before response.completed"
+// error — not fallback-eligible. This is BUG3 all over again on the
+// Responses path (o3/gpt-5 family models).
+func TestResponsesAPIStreamingResponseFailedReturnsTypedFailure(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`event: response.output_text.delta`,
+			`data: {"delta":"partial"}`,
+			``,
+			`event: response.failed`,
+			`data: {"response":{"status":"failed","error":{"message":"context length exceeded","code":"context_length_exceeded"}}}`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClient(t, testServer.URL)
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err == nil {
+		t.Fatal("expected error for response.failed event")
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if !strings.Contains(phe.Body, "context length exceeded") {
+		t.Fatalf("expected error body to mention the upstream error message, got %q", phe.Body)
+	}
+}
+
+// TestResponsesAPIStreamingErrorEventReturnsTypedFailure covers the
+// top-level "error" SSE event type (distinct from "response.failed").
+func TestResponsesAPIStreamingErrorEventReturnsTypedFailure(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`event: response.output_text.delta`,
+			`data: {"delta":"partial"}`,
+			``,
+			`event: error`,
+			`data: {"message":"rate limit exceeded","code":"429"}`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClient(t, testServer.URL)
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err == nil {
+		t.Fatal("expected error for error event")
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if phe.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected status 429 (parsed from the event's code field), got %d", phe.StatusCode)
+	}
+	if !strings.Contains(phe.Body, "rate limit exceeded") {
+		t.Fatalf("expected error body to mention the upstream error message, got %q", phe.Body)
+	}
+}
+
 // TestResponsesAPIUsageNormalization verifies that input_tokens maps to PromptTokens
 // and output_tokens maps to CompletionTokens.
 func TestResponsesAPIUsageNormalization(t *testing.T) {
