@@ -80,7 +80,14 @@ func BuildCatalog(opts BuildOptions) ([]Tool, error) {
 	if opts.EnableAgent && opts.AgentRunner != nil {
 		tools = append(tools, agentTool(opts.AgentRunner))
 		if opts.EnableWebOps && opts.WebFetcher != nil {
-			tools = append(tools, agenticFetchTool(opts.WebFetcher, opts.AgentRunner), webSearchTool(opts.WebFetcher), webFetchTool(opts.WebFetcher))
+			// GAP-2: web_fetch/web_search/agentic_fetch are all backed by
+			// WebFetcher, whose Fetch(url) argument is chosen by the LLM.
+			// Wrap with the same dial-time SSRF guard used by the
+			// fetch/download tools (ssrf_guard.go) rather than trusting
+			// whatever transport the supplied WebFetcher implementation uses
+			// internally. See web_fetcher_guard.go.
+			guardedFetcher := NewGuardedWebFetcher(opts.WebFetcher, opts.NetworkAllowlist)
+			tools = append(tools, agenticFetchTool(guardedFetcher, opts.AgentRunner), webSearchTool(guardedFetcher), webFetchTool(guardedFetcher))
 		}
 	}
 	if opts.EnableCron && opts.CronClient != nil {
