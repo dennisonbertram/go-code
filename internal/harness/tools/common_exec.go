@@ -9,7 +9,9 @@ import (
 	"time"
 )
 
-func runCommand(ctx context.Context, timeout time.Duration, command string, args ...string) (string, int, bool, error) {
+// runCommandOnce executes a single attempt.  exitCode == -1 signals the
+// process was killed (signal) rather than exiting normally.
+func runCommandOnce(ctx context.Context, timeout time.Duration, command string, args ...string) (string, int, bool, error) {
 	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -32,16 +34,49 @@ func runCommand(ctx context.Context, timeout time.Duration, command string, args
 	timedOut := errors.Is(ctxTimeout.Err(), context.DeadlineExceeded)
 
 	output := mergeCommandStreams(strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String()))
-	if err != nil && exitCode == -1 {
-		if timedOut {
-			// Process was killed by the function's own context timeout.
-			// The timeout is already communicated via the timedOut boolean,
-			// so return nil error here. Callers inspect timedOut to detect
-			// the timeout condition, matching the bash_manager.go pattern.
-			return output, exitCode, timedOut, nil
+	return output, exitCode, timedOut, err
+}
+
+func runCommand(ctx context.Context, timeout time.Duration, command string, args ...string) (string, int, bool, error) {
+	// When a subprocess is killed by an external OS signal (not our own
+	// timeout), it may be a transient condition such as CI OOM pressure.
+	// Retry up to 2 extra times with a brief backoff to deflake tests and
+	// production usage. Timeouts and normal exits are never retried.
+	const maxAttempts = 3
+
+	var lastOutput string
+	var lastExitCode int
+	var lastTimedOut bool
+	var lastErr error
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		output, exitCode, timedOut, err := runCommandOnce(ctx, timeout, command, args...)
+
+		if err != nil && exitCode == -1 {
+			if timedOut {
+				// Killed by our own context timeout. Preserve the existing
+				// contract: the timeout is communicated via the timedOut
+				// boolean, so callers see a nil error (matching bash_manager).
+				return output, exitCode, timedOut, nil
+			}
+
+			// External signal kill: retry if we have attempts remaining.
+			lastOutput, lastExitCode, lastTimedOut, lastErr = output, exitCode, timedOut, err
+			if attempt < maxAttempts-1 {
+				select {
+				case <-ctx.Done():
+					return output, exitCode, timedOut, fmt.Errorf("run command: %w", err)
+				case <-time.After(time.Duration(attempt+1) * 100 * time.Millisecond):
+				}
+				continue
+			}
+			return output, exitCode, timedOut, fmt.Errorf("run command: %w", err)
 		}
-		// Process was killed by an external signal (e.g. OOM killer).
-		return output, exitCode, timedOut, fmt.Errorf("run command: %w", err)
+
+		// Normal exit (including non-zero) or success: preserve the existing
+		// nil-error contract.
+		return output, exitCode, timedOut, nil
 	}
-	return output, exitCode, timedOut, nil
+
+	return lastOutput, lastExitCode, lastTimedOut, fmt.Errorf("run command: %w", lastErr)
 }
