@@ -1290,6 +1290,90 @@ func TestCompleteStreamingError(t *testing.T) {
 	}
 }
 
+// TestCompleteStreamingMidStreamErrorEventReturnsTypedFailure is
+// SHOULD-FIX3: unlike TestCompleteStreamingError above (a top-level HTTP
+// 429 status BEFORE any SSE body), this exercises an in-band `event: error`
+// SSE payload arriving mid-stream, after a 200 response has already started
+// and some content has already been delivered. processStreamEvent's "error"
+// case previously returned a plain fmt.Errorf — untyped, not
+// fallback-eligible. This is the same parity gap BUG3 fixed on the openai
+// side.
+func TestCompleteStreamingMidStreamErrorEventReturnsTypedFailure(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}`,
+			``,
+			`event: error`,
+			`data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`,
+			``,
+		}, "\n"))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err == nil {
+		t.Fatal("expected error for mid-stream error event")
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if phe.Provider != "anthropic" {
+		t.Fatalf("expected provider %q, got %q", "anthropic", phe.Provider)
+	}
+	if phe.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503 (overloaded_error), got %d", phe.StatusCode)
+	}
+	if !strings.Contains(phe.Body, "Overloaded") {
+		t.Fatalf("expected error body to mention the upstream error message, got %q", phe.Body)
+	}
+}
+
+// TestCompleteStreamingMidStreamRateLimitErrorMapsTo429 verifies the
+// error.type -> HTTP status mapping distinguishes rate_limit_error (429)
+// from overloaded_error (503), rather than collapsing every mid-stream
+// error onto the same status code.
+func TestCompleteStreamingMidStreamRateLimitErrorMapsTo429(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: error`,
+			`data: {"type":"error","error":{"type":"rate_limit_error","message":"rate limited mid-stream"}}`,
+			``,
+		}, "\n"))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if phe.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected status 429 (rate_limit_error), got %d", phe.StatusCode)
+	}
+}
+
 // --- TestCompleteMaxTokensInRequest ---
 
 func TestCompleteMaxTokensInRequest(t *testing.T) {
