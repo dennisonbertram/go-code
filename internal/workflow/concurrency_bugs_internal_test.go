@@ -190,3 +190,54 @@ func (m *countingRunningMgr) Get(_ context.Context, id string) (SubagentResult, 
 	m.getCalls.Add(1)
 	return SubagentResult{ID: id, Status: "running"}, nil
 }
+
+// ---------------------------------------------------------------------
+// BUG 3: unlocked map read races registration
+// ---------------------------------------------------------------------
+//
+// Context.Workflow reads c.engine.scripts[name] without holding
+// c.engine.mu, while Engine.Register writes that same map. Concurrent
+// unsynchronized map read/write is a FATAL Go runtime error (not a
+// recoverable panic) -- this test, run with -race, must not trigger it.
+func TestConcurrentRegisterAndContextWorkflowNoRace(t *testing.T) {
+	e := NewEngine(EngineOptions{Subagents: noopSubagentManager{}})
+	e.Register("base", func(*Context) (any, error) { return "ok", nil })
+
+	wfCtx := newContext(context.Background(), e, "run-workflow-race", nil, newBudget(0))
+
+	stop := make(chan struct{})
+	var registerWG sync.WaitGroup
+	registerWG.Add(1)
+	go func() {
+		defer registerWG.Done()
+		i := 0
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			name := fmt.Sprintf("dyn-%d", i)
+			e.Register(name, func(*Context) (any, error) { return nil, nil })
+			i++
+		}
+	}()
+
+	const iterations = 2000
+	for i := 0; i < iterations; i++ {
+		result, err := wfCtx.Workflow("base", nil)
+		if err != nil {
+			close(stop)
+			registerWG.Wait()
+			t.Fatalf("Workflow: %v", err)
+		}
+		if result != "ok" {
+			close(stop)
+			registerWG.Wait()
+			t.Fatalf("Workflow result = %v, want %q", result, "ok")
+		}
+	}
+
+	close(stop)
+	registerWG.Wait()
+}
