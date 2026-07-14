@@ -27,6 +27,62 @@ func (s *Server) registerScriptWorkflowRoutes(mux *http.ServeMux, auth func(http
 	mux.Handle("/v1/script-workflow-runs/", auth(http.HandlerFunc(s.handleScriptWorkflowRunByID)))
 }
 
+// recordScriptWorkflowTenant stamps runID with the tenant that started it
+// (S3). Safe to call with an empty tenant (no-auth mode) — harmless, since
+// scriptWorkflowTenantMismatch never gates when auth is disabled.
+func (s *Server) recordScriptWorkflowTenant(runID, tenantID string) {
+	s.scriptWorkflowMu.Lock()
+	defer s.scriptWorkflowMu.Unlock()
+	if s.scriptWorkflowTenants == nil {
+		s.scriptWorkflowTenants = make(map[string]string)
+	}
+	s.scriptWorkflowTenants[runID] = tenantID
+}
+
+// getScriptWorkflowTenant returns the tenant that started runID, if recorded.
+func (s *Server) getScriptWorkflowTenant(runID string) (string, bool) {
+	s.scriptWorkflowMu.Lock()
+	defer s.scriptWorkflowMu.Unlock()
+	t, ok := s.scriptWorkflowTenants[runID]
+	return t, ok
+}
+
+// scriptWorkflowTenantMismatch reports whether a script-workflow run request
+// must be blocked because the run belongs to a tenant other than the
+// caller's. Mirrors runTenantMismatch / conversationTenantMismatch
+// (http_runs.go):
+//
+//   - Auth disabled or no store configured → never gates (returns false),
+//     preserving unauthenticated / no-persistence behavior.
+//   - Ownership never recorded (unknown run ID, or a run started before this
+//     process tracked ownership) → returns false so the downstream call
+//     produces its own not-found response unchanged.
+//   - Ownership recorded and differs from the caller's (normalized) tenant →
+//     gate (returns true).
+func (s *Server) scriptWorkflowTenantMismatch(r *http.Request, runID string) bool {
+	if s.authDisabled || s.runStore == nil {
+		return false
+	}
+	caller := normalizeTenant(TenantIDFromContext(r.Context()))
+	owner, ok := s.getScriptWorkflowTenant(runID)
+	if !ok {
+		return false
+	}
+	return normalizeTenant(owner) != caller
+}
+
+// blockScriptWorkflowCrossTenant writes a 404 not_found response and returns
+// true when runID belongs to a tenant other than the caller's (S3). 404 (not
+// 403) so that another tenant's run ID is never distinguishable from an
+// unknown one — matching blockCrossTenant / blockConversationCrossTenant.
+func (s *Server) blockScriptWorkflowCrossTenant(w http.ResponseWriter, r *http.Request, runID string) bool {
+	if s.scriptWorkflowTenantMismatch(r, runID) {
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("script workflow run %q not found", runID))
+		return true
+	}
+	return false
+}
+
 func (s *Server) handleScriptWorkflows(w http.ResponseWriter, r *http.Request) {
 	if s.scriptWorkflows == nil {
 		writeError(w, http.StatusNotImplemented, "not_implemented", "script workflow service is not configured")
@@ -103,6 +159,9 @@ func (s *Server) handleScriptWorkflowByName(w http.ResponseWriter, r *http.Reque
 			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
 			return
 		}
+		// Stamp ownership with the caller's authenticated tenant (S3) so later
+		// reads/resumes/event-streams of this run can be tenant-gated.
+		s.recordScriptWorkflowTenant(run.ID, TenantIDFromContext(r.Context()))
 		writeJSON(w, http.StatusAccepted, map[string]any{
 			"run_id":        run.ID,
 			"status":        run.Status,
@@ -136,6 +195,9 @@ func (s *Server) handleScriptWorkflowRunByID(w http.ResponseWriter, r *http.Requ
 			writeMethodNotAllowed(w, http.MethodGet)
 			return
 		}
+		if s.blockScriptWorkflowCrossTenant(w, r, runID) {
+			return
+		}
 		run, err := s.scriptWorkflows.GetRun(runID)
 		if err != nil {
 			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("script workflow run %q not found", runID))
@@ -160,6 +222,9 @@ func (s *Server) handleScriptWorkflowRunByID(w http.ResponseWriter, r *http.Requ
 		}
 		if r.Method != http.MethodPost {
 			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		if s.blockScriptWorkflowCrossTenant(w, r, runID) {
 			return
 		}
 		var req struct {
@@ -190,6 +255,19 @@ func (s *Server) handleScriptWorkflowRunByID(w http.ResponseWriter, r *http.Requ
 		}
 		if r.Method != http.MethodGet {
 			writeMethodNotAllowed(w, http.MethodGet)
+			return
+		}
+		if s.blockScriptWorkflowCrossTenant(w, r, runID) {
+			return
+		}
+		// C2: verify the run actually exists before subscribing. Subscribe
+		// itself does not error for an unknown run ID (the underlying event
+		// store returns an empty-but-nil-error result for any unrecognized
+		// key), so without this check the handler would fall straight into
+		// the live-event wait loop below and block forever — a client hang
+		// and a leaked goroutine for every request to a bad or stale run ID.
+		if _, err := s.scriptWorkflows.GetRun(runID); err != nil {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("script workflow run %q not found", runID))
 			return
 		}
 		history, stream, cancel, err := s.scriptWorkflows.Subscribe(runID)

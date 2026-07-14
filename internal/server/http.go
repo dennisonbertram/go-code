@@ -342,6 +342,23 @@ type Server struct {
 	scriptWorkflows scriptWorkflowManager
 	networks        networkManager
 
+	// scriptWorkflowMu guards scriptWorkflowTenants.
+	scriptWorkflowMu sync.Mutex
+	// scriptWorkflowTenants maps a script-workflow run ID to the tenant that
+	// started it (S3 hardening — cross-tenant read/resume/stream isolation).
+	// Script-workflow runs (internal/workflow) have no persisted tenant column
+	// of their own, unlike harness runs (store.Run.TenantID) and conversations
+	// (harness.Conversation.TenantID), which the run/conversation tenant-gate
+	// helpers query directly (see runTenantMismatch, conversationTenantMismatch
+	// in http_runs.go). Ownership is therefore tracked here in-memory at the
+	// server layer, stamped at run-creation time the same way handlePostRun
+	// stamps a harness run's tenant. This is a best-effort, in-memory-only
+	// record: it does not survive a process restart and is never evicted for
+	// the lifetime of the process (bounded only by the number of distinct
+	// script-workflow runs ever started) — see the risk note in the commit
+	// that introduced this field for the tradeoffs.
+	scriptWorkflowTenants map[string]string
+
 	// Sourcegraph proxy (issue #150)
 	sourcegraph sourcegraphConfig
 	httpClient  *http.Client
