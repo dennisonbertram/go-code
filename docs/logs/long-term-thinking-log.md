@@ -1160,3 +1160,23 @@ Decision rule: when uncertain, default to `command intent` and `user intent` bel
 - Open questions:
   - None for T01 completion.
 - Next verification step: review the scoped diff and, if accepted, promote through the repo's normal verify-and-merge flow.
+
+## 2026-07-14 (Sandbox Default Flip + WebFetcher SSRF Guard + Operator Allowlist)
+
+- Command intent: Close three gaps left by the `fix/tool-sandbox-ssrf` branch on `fix/sandbox-defaults-webfetch`: (1) the workspace-confinement fix was inert because `DefaultPermissionConfig()` still defaulted to `SandboxScopeUnrestricted`; (2) the WebFetcher-backed tools (`web_fetch`, `web_search`, `agentic_fetch`) had no SSRF guard; (3) `tools_default.go` never threaded an operator `NetworkAllowlist` into `BuildOptions`.
+- User intent: Err on the side of safety — flip the sandbox default only after measuring blast radius, and give operators an explicit, auditable opt-out/opt-in rather than leaving either an inert protection or an unconditionally locked-down default.
+- Success definition:
+  - `DefaultPermissionConfig()` and the empty-Sandbox fallback in `normalizePermissionConfig` default to `SandboxScopeWorkspace`; a fresh acceptance test proves a default-configured run cannot read an absolute path outside the workspace (e.g. a stand-in for `~/.ssh/id_rsa`).
+  - Blast radius measured before deciding: full suite went from 2 failures (one stale assertion, one genuine macOS seatbelt symlink bug — `/var` vs `/private/var` — now fixed) to 0 after the flip; decision was to keep the flip per the task's own stated threshold.
+  - `GuardedWebFetcher` (new, `internal/harness/tools/web_fetcher_guard.go`) reuses `ssrf_guard.go`'s dial-time guard for `Fetch`, is wired at both `BuildCatalog` and `NewDefaultRegistryWithOptions`, and preserves a wrapped base implementation's actual `Fetch`/`Search` content (proven by the pre-existing mock-based `TestMCPDynamicAndAgentTools`, which stayed green through the change).
+  - `DefaultRegistryOptions` gained `NetworkAllowlist` and `WebFetcher` fields (neither existed before) so an operator can legitimately allow specific hosts; default stays empty/deny.
+  - Full suite (`go test ./...`), `go test ./internal/harness/... -race`, and `go vet ./internal/harness/...` all clean.
+- Non-goals:
+  - Building or wiring a real production `WebFetcher` implementation (none exists in this repo; the investigation found `web_fetch`/`web_search`/`agentic_fetch` were previously dead/unregistered tools in every production entry point).
+  - Wiring `NetworkAllowlist` through a CLI flag/env var in `cmd/harnessd/main.go` (out of scope; mirrors `SandboxScope`, which also has no CLI flag today).
+- Guardrails/constraints:
+  - Strict TDD: red-then-green per gap, plus a final cross-gap regression commit; never weaken an existing security assertion to make a test pass (the one pre-existing test edited, `TestPermissionConfigDefaults`, only updates the asserted default value).
+  - Measure the default-flip blast radius on the real suite before deciding to keep or revert it, per the task's explicit two-step directive.
+- Open questions:
+  - None outstanding for this branch; see the worker's final report for the full acceptance-question answer and file list.
+- Next verification step: review the diff against `fix/tool-sandbox-ssrf`, then promote through the repo's normal PR/CI/squash-merge flow.
