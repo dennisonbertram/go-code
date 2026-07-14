@@ -1508,7 +1508,7 @@ func (c *Client) decodeResponsesStreamingResponse(model string, body io.Reader, 
 			if currentEvent != "" && len(dataLines) > 0 {
 				done, err := processResponsesSSEBlock(currentEvent, strings.Join(dataLines, "\n"), state, streamFn)
 				if err != nil {
-					return harness.CompletionResult{}, err
+					return harness.CompletionResult{}, c.wrapStreamError(err)
 				}
 				if done {
 					receivedCompleted = true
@@ -1535,7 +1535,7 @@ func (c *Client) decodeResponsesStreamingResponse(model string, body io.Reader, 
 	if !receivedCompleted && currentEvent != "" && len(dataLines) > 0 {
 		done, err := processResponsesSSEBlock(currentEvent, strings.Join(dataLines, "\n"), state, streamFn)
 		if err != nil {
-			return harness.CompletionResult{}, err
+			return harness.CompletionResult{}, c.wrapStreamError(err)
 		}
 		receivedCompleted = done
 	}
@@ -1602,6 +1602,59 @@ type responsesCompletedEvent struct {
 		Output []responsesOutputItem `json:"output"`
 		Usage  *responsesUsage       `json:"usage,omitempty"`
 	} `json:"response"`
+}
+
+// responsesFailureEvent captures the loosely-typed error information OpenAI
+// attaches to "response.failed", "response.incomplete", and top-level
+// "error" SSE events on the Responses API. Field shapes are not perfectly
+// uniform across these three event types (a top-level "error" event has
+// message/code at the root; "response.failed" nests them under
+// response.error; "response.incomplete" nests a reason under
+// response.incomplete_details instead), so this permissively probes all of
+// them rather than assuming one exact schema. json.Unmarshal into this
+// struct never fails on missing fields, so callers can build a reasonable
+// message even if the shape doesn't match what's expected here.
+type responsesFailureEvent struct {
+	Message  string `json:"message,omitempty"`
+	Code     any    `json:"code,omitempty"`
+	Response struct {
+		Status string `json:"status,omitempty"`
+		Error  *struct {
+			Message string `json:"message,omitempty"`
+			Code    any    `json:"code,omitempty"`
+		} `json:"error,omitempty"`
+		IncompleteDetails *struct {
+			Reason string `json:"reason,omitempty"`
+		} `json:"incomplete_details,omitempty"`
+	} `json:"response,omitempty"`
+}
+
+// message extracts the best available human-readable message from whichever
+// of the permissively-probed fields is populated, falling back to the raw
+// event type name if none of them are.
+func (ev responsesFailureEvent) message(eventType string) string {
+	if ev.Response.Error != nil && ev.Response.Error.Message != "" {
+		return ev.Response.Error.Message
+	}
+	if ev.Message != "" {
+		return ev.Message
+	}
+	if ev.Response.IncompleteDetails != nil && ev.Response.IncompleteDetails.Reason != "" {
+		return fmt.Sprintf("response incomplete: %s", ev.Response.IncompleteDetails.Reason)
+	}
+	return eventType
+}
+
+// statusCode extracts a plausible HTTP status code from whichever of the
+// permissively-probed "code" fields is populated, using the same loose
+// parsing as parseStreamErrorStatusCode.
+func (ev responsesFailureEvent) statusCode() int {
+	if ev.Response.Error != nil {
+		if code := parseStreamErrorStatusCode(ev.Response.Error.Code); code != 0 {
+			return code
+		}
+	}
+	return parseStreamErrorStatusCode(ev.Code)
 }
 
 // processResponsesSSEBlock handles one typed SSE event from the Responses API stream.
@@ -1686,6 +1739,24 @@ func processResponsesSSEBlock(event, data string, state *responsesStreamState, s
 			state.usage = ev.Response.Usage
 		}
 		return true, nil
+
+	case "response.failed", "response.incomplete", "error":
+		// Best-effort parse: even if the payload doesn't match any of the
+		// probed fields, ev.message() falls back to the event type name and
+		// the raw data is preserved in the resulting *streamAPIError's Raw
+		// field, so this never silently swallows the failure the way the
+		// missing case previously did (SHOULD-FIX2 / "BUG3 on the Responses
+		// path"). decodeResponsesStreamingResponse routes the returned error
+		// through wrapStreamError, converting it into a
+		// *harness.ProviderHTTPError the same way BUG3's Chat Completions
+		// fix already does.
+		var ev responsesFailureEvent
+		_ = json.Unmarshal([]byte(data), &ev)
+		return false, &streamAPIError{
+			Message:    ev.message(event),
+			StatusCode: ev.statusCode(),
+			Raw:        data,
+		}
 
 	// Ignore events we don't need to handle.
 	default:
