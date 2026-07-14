@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -212,6 +213,66 @@ func (ir *idleTimeoutReader) stop() {
 	ir.timer.Stop()
 }
 
+// streamAPIError is an internal sentinel error carrying an in-band
+// `event: error` SSE payload (SHOULD-FIX3). Complete()'s wrapStreamError
+// recognizes it and wraps it into a *harness.ProviderHTTPError so it
+// composes with the existing fallback/retry logic the same way a
+// non-streaming HTTP error does — mirrors the openai package's identical
+// type (BUG3), independently declared here since neither package imports
+// the other's internals.
+type streamAPIError struct {
+	Message    string
+	StatusCode int
+	Raw        string
+}
+
+func (e *streamAPIError) Error() string {
+	return fmt.Sprintf("stream error: %s", e.Message)
+}
+
+// anthropicErrorTypeToStatusCode maps Anthropic's documented error.type
+// vocabulary onto HTTP status codes so a mid-stream error composes with the
+// same isFallbackEligible(429/500/502/503/504) logic a non-streaming HTTP
+// error already does. Unrecognized types conservatively map to 503
+// (Service Unavailable): a failure injected after a 200 response has
+// already started streaming is, in practice, almost always a transient
+// upstream failure worth trying a fallback provider for.
+func anthropicErrorTypeToStatusCode(errType string) int {
+	switch errType {
+	case "overloaded_error":
+		return http.StatusServiceUnavailable
+	case "rate_limit_error":
+		return http.StatusTooManyRequests
+	case "invalid_request_error":
+		return http.StatusBadRequest
+	case "authentication_error":
+		return http.StatusUnauthorized
+	case "permission_error":
+		return http.StatusForbidden
+	case "not_found_error":
+		return http.StatusNotFound
+	default:
+		return http.StatusServiceUnavailable
+	}
+}
+
+// wrapStreamError converts a *streamAPIError (a mid-stream `event: error`
+// SSE payload recognized by processStreamEvent) into a
+// *harness.ProviderHTTPError so it matches the type the non-streaming path
+// returns and provider fallback triggers the same way. Any other error is
+// passed through unchanged.
+func (c *Client) wrapStreamError(err error) error {
+	var streamErr *streamAPIError
+	if !errors.As(err, &streamErr) {
+		return err
+	}
+	return &harness.ProviderHTTPError{
+		Provider:   c.providerName,
+		StatusCode: streamErr.StatusCode,
+		Body:       strings.TrimSpace(streamErr.Raw),
+	}
+}
+
 func (c *Client) maxTokensForModel(modelID string) int {
 	if c.maxOutputTokens > 0 {
 		return c.maxOutputTokens
@@ -333,14 +394,17 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 		idleBody := newIdleTimeoutReader(httpRes.Body, cancelStream, &stalled)
 		defer idleBody.stop()
 		result, err := c.decodeStreamingResponse(model, idleBody, req.Stream)
-		if err != nil && stalled.Load() {
-			return harness.CompletionResult{}, &harness.ProviderHTTPError{
-				Provider:   c.providerName,
-				StatusCode: http.StatusServiceUnavailable,
-				Body:       fmt.Sprintf("stream stalled: no data received for %s", idleStreamTimeout),
+		if err != nil {
+			if stalled.Load() {
+				return harness.CompletionResult{}, &harness.ProviderHTTPError{
+					Provider:   c.providerName,
+					StatusCode: http.StatusServiceUnavailable,
+					Body:       fmt.Sprintf("stream stalled: no data received for %s", idleStreamTimeout),
+				}
 			}
+			return harness.CompletionResult{}, c.wrapStreamError(err)
 		}
-		return result, err
+		return result, nil
 	}
 
 	// MUST-FIX1: the non-streaming body read needs the same idle-stream
@@ -619,6 +683,18 @@ type streamEvent struct {
 
 	// message_delta
 	Usage *streamUsage `json:"usage,omitempty"`
+
+	// error
+	Error *streamErrorDetail `json:"error,omitempty"`
+}
+
+// streamErrorDetail is the body of an in-band `event: error` SSE payload.
+// Anthropic's documented error.type vocabulary includes overloaded_error,
+// rate_limit_error, api_error, invalid_request_error, authentication_error,
+// permission_error, and not_found_error.
+type streamErrorDetail struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
 }
 
 type streamDelta struct {
@@ -706,8 +782,21 @@ func processStreamEvent(data string, state *streamState, streamFn func(harness.C
 		return true, nil
 
 	case "error":
-		// The event itself is an error from Anthropic
-		return false, fmt.Errorf("anthropic stream error: %s", data)
+		// The event itself is an error from Anthropic, arriving mid-stream
+		// after a 200 response has already started (SHOULD-FIX3). Returned
+		// as a typed *streamAPIError so the caller (Complete()) can wrap it
+		// into a *harness.ProviderHTTPError the same way BUG3's Chat
+		// Completions fix already does for openai, instead of an untyped
+		// error that fallback logic can't recognize.
+		msg := data
+		statusCode := http.StatusServiceUnavailable
+		if ev.Error != nil {
+			if ev.Error.Message != "" {
+				msg = ev.Error.Message
+			}
+			statusCode = anthropicErrorTypeToStatusCode(ev.Error.Type)
+		}
+		return false, &streamAPIError{Message: msg, StatusCode: statusCode, Raw: data}
 	}
 
 	return false, nil
