@@ -744,3 +744,85 @@ func TestFireJobAdvancesNextRunAt(t *testing.T) {
 			got.NextRunAt, want, job.Schedule, fireTime)
 	}
 }
+
+// --- BUG 1: jitterCache concurrent access ---
+
+// TestScheduler_ConcurrentAddJobAndFireJob_NoDataRace (BT-001, P1) reproduces
+// the fatal, unrecoverable Go runtime error that crashes the daemon when
+// fireJob reads s.jitterCache without holding s.mu while AddJob concurrently
+// writes to the same map under s.mu.
+//
+// fireJob currently reads `s.jitterCache[jitterKey]` with no lock at all
+// (scheduler.go ~141-142), while AddJob writes that map under s.mu
+// (scheduler.go ~93). A concurrent unsynchronized map read + write is a
+// fatal Go runtime error ("concurrent map read and map write") that cannot
+// be recovered with panic/recover — it kills the whole process.
+//
+// This test must be run with `-race` to reliably surface the problem
+// (`go test ./internal/cron/... -race -run TestScheduler_ConcurrentAddJobAndFireJob_NoDataRace`).
+// Before the fix, this crashes the test binary with a fatal runtime error
+// (or is flagged by the race detector) because fireJob's map read at
+// scheduler.go:142 races with AddJob's map write at scheduler.go:93.
+// After the fix, fireJob never touches s.jitterCache (the jitter offset is
+// passed in directly by AddJob's closure), so there is nothing to race on.
+func TestScheduler_ConcurrentAddJobAndFireJob_NoDataRace(t *testing.T) {
+	store := &mockStore{
+		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
+			return exec, nil
+		},
+		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
+			return nil
+		},
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{}, ErrJobNotFound
+		},
+		UpdateJobFunc: func(ctx context.Context, job Job) error {
+			return nil
+		},
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {
+			return "ok", nil
+		},
+	}
+	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 10})
+	s.sleepFn = func(time.Duration) {} // no-op so fireJob returns quickly
+
+	// One job that's already registered, so fireJob has a real jitterCache
+	// entry to read while other goroutines mutate the map.
+	fireTarget := testJob("race-fire-target")
+	if err := s.AddJob(fireTarget); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	const iterations = 200
+
+	// Goroutines that repeatedly AddJob (writes s.jitterCache under s.mu).
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				job := testJob(fmt.Sprintf("race-writer-%d-%d", gid, i))
+				_ = s.AddJob(job)
+			}
+		}(g)
+	}
+
+	// Goroutines that repeatedly call fireJob for the pre-registered job,
+	// exercising the unsynchronized jitterCache read on the old code path.
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				s.fireJob(fireTarget)
+			}
+		}()
+	}
+
+	wg.Wait()
+	s.wg.Wait()
+}
