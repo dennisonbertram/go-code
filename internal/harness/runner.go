@@ -5021,7 +5021,22 @@ func startRecorderGoroutine(state *runState, rec *rollout.Recorder) {
 			for {
 				ev, ok := pending[nextSeq]
 				if !ok {
-					return
+					if len(pending) == 0 {
+						return
+					}
+					// We are holding a strictly-later event, so nextSeq can never
+					// arrive. The send must have been dropped; skip the gap to keep
+					// forward progress.
+					minSeq := nextSeq
+					first := true
+					for seq := range pending {
+						if first || seq < minSeq {
+							minSeq = seq
+							first = false
+						}
+					}
+					nextSeq = minSeq
+					continue
 				}
 				delete(pending, nextSeq)
 				record(ev)
