@@ -2,11 +2,11 @@
 │ Switch Model                                                                                                       │
 │                                                                                                                    │
 │   Anthropic                                                                                                    (3) │
-│   DeepSeek                                                                                                     (2) │
-│   Google                                                                                                       (2) │
+│   DeepSeek                                                                                                     (4) │
+│   Google                                                                                                       (3) │
 │   Groq                                                                                                         (2) │
 │   Kimi                                                                                                         (1) │
-│ > OpenAI  ← current                                                                                            (2) │
+│ > OpenAI  ← current                                                                                            (8) │
 │   Qwen                                                                                                         (2) │
 │   xAI                                                                                                          (2) │
 │                                                                                                                    │
