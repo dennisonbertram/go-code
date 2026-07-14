@@ -701,6 +701,88 @@ func withShrunkIdleStreamTimeout(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { idleStreamTimeout = original })
 }
 
+// --- idleTimeoutReader timer race (SHOULD-FIX1) ---
+//
+// See the identical tests and rationale in the openai package. Go's
+// time.Timer docs are explicit that Reset() cannot stop an
+// already-dispatched pending call to an AfterFunc callback, so Read() and
+// the timer's fire callback can race at the boundary. These are white-box
+// tests against idleTimeoutReader directly using a fake timerResetter for
+// deterministic assertions.
+
+// fakeResetter is a test double for the subset of *time.Timer's API
+// idleTimeoutReader depends on.
+type fakeResetter struct {
+	resetCalls atomic.Int64
+	stopCalls  atomic.Int64
+}
+
+func (f *fakeResetter) Reset(time.Duration) bool { f.resetCalls.Add(1); return true }
+func (f *fakeResetter) Stop() bool               { f.stopCalls.Add(1); return true }
+
+// TestIdleTimeoutReaderSkipsResetOnceStalled proves the fix for the race
+// PROVEN by adversarial review: a Read that returns fresh data after the
+// idle timer has already fired (stalled already latched true) must NOT
+// re-arm the timer.
+func TestIdleTimeoutReaderSkipsResetOnceStalled(t *testing.T) {
+	t.Parallel()
+
+	var stalled atomic.Bool
+	stalled.Store(true) // simulate: fire() already ran concurrently with this Read
+	fake := &fakeResetter{}
+	ir := &idleTimeoutReader{r: strings.NewReader("data"), stalled: &stalled, timer: fake, cancel: func() {}}
+
+	buf := make([]byte, 4)
+	n, err := ir.Read(buf)
+	if n == 0 || err != nil {
+		t.Fatalf("Read: n=%d err=%v", n, err)
+	}
+	if got := fake.resetCalls.Load(); got != 0 {
+		t.Fatalf("expected Read to skip Reset once already stalled, got %d Reset call(s)", got)
+	}
+}
+
+// TestIdleTimeoutReaderResetsWhileNotStalled is the regression guard: a
+// healthy (not-yet-stalled) Read that returns data must still reset the
+// timer exactly once.
+func TestIdleTimeoutReaderResetsWhileNotStalled(t *testing.T) {
+	t.Parallel()
+
+	var stalled atomic.Bool
+	fake := &fakeResetter{}
+	ir := &idleTimeoutReader{r: strings.NewReader("data"), stalled: &stalled, timer: fake, cancel: func() {}}
+
+	buf := make([]byte, 4)
+	if _, err := ir.Read(buf); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got := fake.resetCalls.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 Reset call for a healthy read, got %d", got)
+	}
+}
+
+// TestIdleTimeoutReaderFireIsOneShot proves the idle timer's fire callback
+// is idempotent: cancel must be invoked exactly once even if fire() is
+// somehow invoked more than once.
+func TestIdleTimeoutReaderFireIsOneShot(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	var stalled atomic.Bool
+	ir := &idleTimeoutReader{stalled: &stalled, cancel: func() { calls.Add(1) }}
+
+	ir.fire()
+	ir.fire()
+	ir.fire()
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected cancel exactly once across repeated fire() calls, got %d", got)
+	}
+	if !stalled.Load() {
+		t.Fatal("expected stalled=true after fire()")
+	}
+}
+
 // TestCompleteStreamStallTimesOutWithoutHanging is the BUG1 follow-up's
 // primary red/green test for anthropic: a server that sends headers and one
 // content delta, then goes completely silent (no more bytes, connection

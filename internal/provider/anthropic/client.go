@@ -145,6 +145,15 @@ func defaultHTTPClient() *http.Client {
 // var (not a const) so tests can shrink it and callers could override it.
 var idleStreamTimeout = 120 * time.Second
 
+// timerResetter is the subset of *time.Timer's API idleTimeoutReader
+// depends on. Extracted purely so tests can substitute a fake and assert on
+// Reset()/Stop() call counts deterministically, without depending on real
+// timer-firing races. *time.Timer satisfies this interface as-is.
+type timerResetter interface {
+	Reset(d time.Duration) bool
+	Stop() bool
+}
+
 // idleTimeoutReader wraps a streaming response body so that if no Read call
 // returns data for idleStreamTimeout, cancel is invoked (which aborts the
 // in-flight HTTP request/response via its context, unblocking any pending
@@ -155,16 +164,19 @@ type idleTimeoutReader struct {
 	r       io.Reader
 	cancel  context.CancelFunc
 	stalled *atomic.Bool
-	timer   *time.Timer
+	timer   timerResetter
 }
 
 func newIdleTimeoutReader(r io.Reader, cancel context.CancelFunc, stalled *atomic.Bool) *idleTimeoutReader {
 	ir := &idleTimeoutReader{r: r, cancel: cancel, stalled: stalled}
-	ir.timer = time.AfterFunc(idleStreamTimeout, func() {
-		stalled.Store(true)
-		cancel()
-	})
+	ir.timer = time.AfterFunc(idleStreamTimeout, ir.fire)
 	return ir
+}
+
+// fire is invoked when the idle timer elapses with no Read activity.
+func (ir *idleTimeoutReader) fire() {
+	ir.stalled.Store(true)
+	ir.cancel()
 }
 
 func (ir *idleTimeoutReader) Read(p []byte) (int, error) {

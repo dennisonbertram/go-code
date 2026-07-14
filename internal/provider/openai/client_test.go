@@ -227,6 +227,100 @@ func withShrunkIdleStreamTimeout(t *testing.T, d time.Duration) {
 	t.Cleanup(func() { idleStreamTimeout = original })
 }
 
+// --- idleTimeoutReader timer race (SHOULD-FIX1) ---
+//
+// Go's time.Timer docs are explicit that Reset() cannot stop an
+// already-dispatched pending call to an AfterFunc callback. That means
+// idleTimeoutReader.Read (which resets the timer on every successful read)
+// and the timer's fire callback (which declares the stream stalled) can
+// race at the boundary: a Read that returns fresh data at the same moment
+// the timer has already begun firing must not pretend the stall didn't
+// happen, and the fire callback itself must be safely idempotent if
+// invoked more than once. These are white-box tests against the
+// idleTimeoutReader type directly (same package) using a fake timerResetter
+// so the assertions are deterministic rather than depending on real timer
+// firing races.
+
+// fakeResetter is a test double for the subset of *time.Timer's API
+// idleTimeoutReader depends on, letting tests assert on Reset()/Stop() call
+// counts without depending on real timer scheduling.
+type fakeResetter struct {
+	resetCalls atomic.Int64
+	stopCalls  atomic.Int64
+}
+
+func (f *fakeResetter) Reset(time.Duration) bool { f.resetCalls.Add(1); return true }
+func (f *fakeResetter) Stop() bool               { f.stopCalls.Add(1); return true }
+
+// TestIdleTimeoutReaderSkipsResetOnceStalled proves the fix for the race
+// PROVEN by adversarial review: "Read -> n=1 err=<nil>; stalled=true
+// cancelled=true" — a Read that returns fresh data after the idle timer has
+// already fired (stalled already latched true) must NOT re-arm the timer.
+// Before the fix, Read() called Reset() unconditionally on n>0, which is
+// pointless at best once already stalled and, more importantly, signals
+// that Read() disagrees with the already-declared stall instead of
+// deferring to it.
+func TestIdleTimeoutReaderSkipsResetOnceStalled(t *testing.T) {
+	t.Parallel()
+
+	var stalled atomic.Bool
+	stalled.Store(true) // simulate: fire() already ran concurrently with this Read
+	fake := &fakeResetter{}
+	ir := &idleTimeoutReader{r: strings.NewReader("data"), stalled: &stalled, timer: fake, cancel: func() {}}
+
+	buf := make([]byte, 4)
+	n, err := ir.Read(buf)
+	if n == 0 || err != nil {
+		t.Fatalf("Read: n=%d err=%v", n, err)
+	}
+	if got := fake.resetCalls.Load(); got != 0 {
+		t.Fatalf("expected Read to skip Reset once already stalled, got %d Reset call(s)", got)
+	}
+}
+
+// TestIdleTimeoutReaderResetsWhileNotStalled is the regression guard for the
+// test above: a healthy (not-yet-stalled) Read that returns data must still
+// reset the timer exactly once, or the idle watchdog stops working at all.
+func TestIdleTimeoutReaderResetsWhileNotStalled(t *testing.T) {
+	t.Parallel()
+
+	var stalled atomic.Bool
+	fake := &fakeResetter{}
+	ir := &idleTimeoutReader{r: strings.NewReader("data"), stalled: &stalled, timer: fake, cancel: func() {}}
+
+	buf := make([]byte, 4)
+	if _, err := ir.Read(buf); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got := fake.resetCalls.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 Reset call for a healthy read, got %d", got)
+	}
+}
+
+// TestIdleTimeoutReaderFireIsOneShot proves the idle timer's fire callback
+// is idempotent: cancel must be invoked exactly once even if fire() is
+// somehow invoked more than once (e.g. a duplicate/lingering timer signal),
+// and stalled must end up true. Before the fix, the fire callback had no
+// guard at all — repeated firing would call cancel() repeatedly.
+func TestIdleTimeoutReaderFireIsOneShot(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	var stalled atomic.Bool
+	ir := &idleTimeoutReader{stalled: &stalled, cancel: func() { calls.Add(1) }}
+
+	ir.fire()
+	ir.fire()
+	ir.fire()
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected cancel exactly once across repeated fire() calls, got %d", got)
+	}
+	if !stalled.Load() {
+		t.Fatal("expected stalled=true after fire()")
+	}
+}
+
 // TestClientCompleteStreamStallTimesOutWithoutHanging is the BUG1
 // follow-up's primary red/green test: a server that sends headers and a
 // couple of chunks, then goes completely silent (no more bytes, connection
