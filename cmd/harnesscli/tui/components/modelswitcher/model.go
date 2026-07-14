@@ -20,11 +20,25 @@ type ModelEntry struct {
 	Available bool
 }
 
-// DefaultModels is the list of available models shown by New(), grouped by provider.
+// DefaultModels is the list of available models shown by New(), grouped by
+// provider. This is the offline/client-side fallback shown whenever the live
+// GET /v1/models fetch has not yet completed or has failed, so it must be
+// kept in sync with catalog/models.json for every "built-in" provider (see
+// bugB_catalog_sync_test.go, which fails on drift). Entries below mirror
+// catalog/models.json's display_name field exactly for these providers:
+// openai, anthropic, gemini, deepseek, xai, groq, qwen, kimi. OpenRouter and
+// Together models are always fetched live and are intentionally not
+// hardcoded here.
 var DefaultModels = []ModelEntry{
 	// OpenAI
 	{ID: "gpt-4.1", DisplayName: "GPT-4.1", Provider: "openai", ProviderLabel: "OpenAI"},
 	{ID: "gpt-4.1-mini", DisplayName: "GPT-4.1 Mini", Provider: "openai", ProviderLabel: "OpenAI"},
+	{ID: "gpt-5.1-codex", DisplayName: "GPT-5.1 Codex", Provider: "openai", ProviderLabel: "OpenAI"},
+	{ID: "gpt-5.1-codex-mini", DisplayName: "GPT-5.1 Codex Mini", Provider: "openai", ProviderLabel: "OpenAI"},
+	{ID: "gpt-5.1-codex-max", DisplayName: "GPT-5.1 Codex Max", Provider: "openai", ProviderLabel: "OpenAI"},
+	{ID: "gpt-5.2-codex", DisplayName: "GPT-5.2 Codex", Provider: "openai", ProviderLabel: "OpenAI"},
+	{ID: "gpt-5.3-codex", DisplayName: "GPT-5.3 Codex", Provider: "openai", ProviderLabel: "OpenAI"},
+	{ID: "computer-use-preview", DisplayName: "Computer Use Preview", Provider: "openai", ProviderLabel: "OpenAI"},
 	// Anthropic
 	{ID: "claude-sonnet-4-6", DisplayName: "Claude Sonnet 4.6", Provider: "anthropic", ProviderLabel: "Anthropic"},
 	{ID: "claude-opus-4-6", DisplayName: "Claude Opus 4.6", Provider: "anthropic", ProviderLabel: "Anthropic"},
@@ -32,15 +46,18 @@ var DefaultModels = []ModelEntry{
 	// Google
 	{ID: "gemini-2.5-flash", DisplayName: "Gemini 2.5 Flash", Provider: "gemini", ProviderLabel: "Google"},
 	{ID: "gemini-2.0-flash", DisplayName: "Gemini 2.0 Flash", Provider: "gemini", ProviderLabel: "Google"},
+	{ID: "gemini-2.5-flash-preview-04-17", DisplayName: "Gemini 2.5 Flash Preview", Provider: "gemini", ProviderLabel: "Google"},
 	// DeepSeek
-	{ID: "deepseek-chat", DisplayName: "DeepSeek Chat", Provider: "deepseek", ProviderLabel: "DeepSeek"},
-	{ID: "deepseek-reasoner", DisplayName: "DeepSeek Reasoner", Provider: "deepseek", ProviderLabel: "DeepSeek", ReasoningMode: true},
+	{ID: "deepseek-chat", DisplayName: "DeepSeek Chat (V3)", Provider: "deepseek", ProviderLabel: "DeepSeek"},
+	{ID: "deepseek-reasoner", DisplayName: "DeepSeek Reasoner (R1)", Provider: "deepseek", ProviderLabel: "DeepSeek", ReasoningMode: true},
+	{ID: "deepseek-v4-pro", DisplayName: "DeepSeek V4 Pro (direct)", Provider: "deepseek", ProviderLabel: "DeepSeek"},
+	{ID: "deepseek-v4-flash", DisplayName: "DeepSeek V4 Flash (direct)", Provider: "deepseek", ProviderLabel: "DeepSeek"},
 	// xAI
 	{ID: "grok-3-mini", DisplayName: "Grok 3 Mini", Provider: "xai", ProviderLabel: "xAI"},
-	{ID: "grok-4-1-fast-reasoning", DisplayName: "Grok 4.1 Fast", Provider: "xai", ProviderLabel: "xAI", ReasoningMode: true},
+	{ID: "grok-4-1-fast-reasoning", DisplayName: "Grok 4.1 Fast Reasoning", Provider: "xai", ProviderLabel: "xAI", ReasoningMode: true},
 	// Groq
-	{ID: "llama-3.3-70b-versatile", DisplayName: "Llama 3.3 70B", Provider: "groq", ProviderLabel: "Groq"},
-	{ID: "qwen-qwq-32b", DisplayName: "QwQ 32B", Provider: "groq", ProviderLabel: "Groq", ReasoningMode: true},
+	{ID: "llama-3.3-70b-versatile", DisplayName: "Llama 3.3 70B Versatile", Provider: "groq", ProviderLabel: "Groq"},
+	{ID: "qwen-qwq-32b", DisplayName: "Qwen QwQ 32B", Provider: "groq", ProviderLabel: "Groq", ReasoningMode: true},
 	// Qwen
 	{ID: "qwen-plus", DisplayName: "Qwen Plus", Provider: "qwen", ProviderLabel: "Qwen"},
 	{ID: "qwen-turbo", DisplayName: "Qwen Turbo", Provider: "qwen", ProviderLabel: "Qwen"},
@@ -49,24 +66,34 @@ var DefaultModels = []ModelEntry{
 }
 
 // modelDisplayNames maps model ID to human-readable display name.
-// Used to enrich server-fetched model entries.
+// Used to enrich server-fetched model entries. Kept in sync with
+// DefaultModels (see comment above).
 var modelDisplayNames = map[string]string{
-	"gpt-4.1":                   "GPT-4.1",
-	"gpt-4.1-mini":              "GPT-4.1 Mini",
-	"claude-sonnet-4-6":         "Claude Sonnet 4.6",
-	"claude-opus-4-6":           "Claude Opus 4.6",
-	"claude-haiku-4-5-20251001": "Claude Haiku 4.5",
-	"gemini-2.5-flash":          "Gemini 2.5 Flash",
-	"gemini-2.0-flash":          "Gemini 2.0 Flash",
-	"deepseek-chat":             "DeepSeek Chat",
-	"deepseek-reasoner":         "DeepSeek Reasoner",
-	"grok-3-mini":               "Grok 3 Mini",
-	"grok-4-1-fast-reasoning":   "Grok 4.1 Fast",
-	"llama-3.3-70b-versatile":   "Llama 3.3 70B",
-	"qwen-qwq-32b":              "QwQ 32B",
-	"qwen-plus":                 "Qwen Plus",
-	"qwen-turbo":                "Qwen Turbo",
-	"kimi-k2.5":                 "Kimi K2.5",
+	"gpt-4.1":                        "GPT-4.1",
+	"gpt-4.1-mini":                   "GPT-4.1 Mini",
+	"gpt-5.1-codex":                  "GPT-5.1 Codex",
+	"gpt-5.1-codex-mini":             "GPT-5.1 Codex Mini",
+	"gpt-5.1-codex-max":              "GPT-5.1 Codex Max",
+	"gpt-5.2-codex":                  "GPT-5.2 Codex",
+	"gpt-5.3-codex":                  "GPT-5.3 Codex",
+	"computer-use-preview":           "Computer Use Preview",
+	"claude-sonnet-4-6":              "Claude Sonnet 4.6",
+	"claude-opus-4-6":                "Claude Opus 4.6",
+	"claude-haiku-4-5-20251001":      "Claude Haiku 4.5",
+	"gemini-2.5-flash":               "Gemini 2.5 Flash",
+	"gemini-2.0-flash":               "Gemini 2.0 Flash",
+	"gemini-2.5-flash-preview-04-17": "Gemini 2.5 Flash Preview",
+	"deepseek-chat":                  "DeepSeek Chat (V3)",
+	"deepseek-reasoner":              "DeepSeek Reasoner (R1)",
+	"deepseek-v4-pro":                "DeepSeek V4 Pro (direct)",
+	"deepseek-v4-flash":              "DeepSeek V4 Flash (direct)",
+	"grok-3-mini":                    "Grok 3 Mini",
+	"grok-4-1-fast-reasoning":        "Grok 4.1 Fast Reasoning",
+	"llama-3.3-70b-versatile":        "Llama 3.3 70B Versatile",
+	"qwen-qwq-32b":                   "Qwen QwQ 32B",
+	"qwen-plus":                      "Qwen Plus",
+	"qwen-turbo":                     "Qwen Turbo",
+	"kimi-k2.5":                      "Kimi K2.5",
 }
 
 // reasoningModelIDs contains model IDs that support reasoning effort selection.

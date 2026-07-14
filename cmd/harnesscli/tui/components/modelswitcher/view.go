@@ -240,6 +240,16 @@ func (m Model) viewModelsForProvider(width int) string {
 	// Breadcrumb title: "< Back  [ProviderName]"
 	sb.WriteString(dimStyle.Render("< Back"))
 	sb.WriteString("  [" + m.activeProvider + "]")
+	// BUG B: a background models fetch may have failed after this list was
+	// already rendered (or the user drilled in after the failure). Unlike
+	// the level-0 and search views — which replace the whole screen with an
+	// error message, making the failure obvious — this level-1 list keeps
+	// browsing the fallback DefaultModels so the switcher stays usable.
+	// Mark it visibly as offline/stale so it is never mistaken for a fresh
+	// live fetch.
+	if m.loadError != "" {
+		sb.WriteString(dimStyle.Render("  (offline — showing built-in list)"))
+	}
 	sb.WriteByte('\n')
 	sb.WriteByte('\n')
 
