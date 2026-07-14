@@ -93,7 +93,7 @@ type runState struct {
 	// events after the forensic record is closed.
 	terminated bool
 	// compactMu serializes auto-compact and manual CompactRun calls.
-	compactMu sync.Mutex
+	compactMu sync.RWMutex
 	// resetIndex increments each time the agent calls reset_context.
 	// 0 means no reset has occurred yet for this run.
 	resetIndex int
@@ -2670,7 +2670,7 @@ func (r *Runner) drainSteering(runID string, messages *[]Message) {
 		case msg := <-state.steeringCh:
 			*messages = append(*messages, Message{Role: "user", Content: msg})
 			r.snapshotRecordMessage(runID, "user", msg)
-			r.setMessages(runID, *messages)
+			r.stepSetMessages(runID, *messages)
 			r.emit(runID, EventSteeringReceived, map[string]any{"message": msg})
 		default:
 			return
@@ -3645,6 +3645,23 @@ func (r *Runner) setMessages(runID string, messages []Message) {
 	r.storeAppendNewMessages(runID)
 }
 
+// stepSetMessages is the step-engine write path. It holds compactMu as a
+// READER so it is mutually exclusive with the exclusive compactMu.Lock held
+// by CompactRun/autoCompactMessages (which must be able to run without a
+// concurrent step write clobbering their result), while still allowing
+// multiple step writes to proceed when no compaction is running.
+func (r *Runner) stepSetMessages(runID string, messages []Message) {
+	r.mu.RLock()
+	state, ok := r.runs[runID]
+	r.mu.RUnlock()
+	if !ok {
+		return
+	}
+	state.compactMu.RLock()
+	defer state.compactMu.RUnlock()
+	r.setMessages(runID, messages)
+}
+
 // GetRunMessages returns a snapshot of the messages for the given run.
 // Returns nil when the run does not exist. The returned slice is a copy
 // so callers cannot mutate the stored state.
@@ -4103,9 +4120,9 @@ func (r *Runner) CompactRun(ctx context.Context, runID string, req CompactRunReq
 // under compactMu. execute() must call this at step boundaries so CompactRun
 // and other message replacement paths remain the single source of truth.
 func (r *Runner) messagesForStep(state *runState) []Message {
-	state.compactMu.Lock()
+	state.compactMu.RLock()
 	msgs := copyMessages(state.messages)
-	state.compactMu.Unlock()
+	state.compactMu.RUnlock()
 	return msgs
 }
 

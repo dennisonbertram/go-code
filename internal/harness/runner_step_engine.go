@@ -204,7 +204,7 @@ func (se *stepEngine) run() {
 			}
 			if pressureMsg != "" {
 				messages = append(messages, Message{Role: "user", Content: pressureMsg, IsMeta: true})
-				r.setMessages(runID, messages)
+				r.stepSetMessages(runID, messages)
 				r.emit(runID, EventStepBudgetPressure, map[string]any{
 					"step":            step,
 					"steps_remaining": stepsRemaining,
@@ -315,7 +315,7 @@ func (se *stepEngine) run() {
 						}
 					}
 					messages = compactedMsgs
-					r.setMessages(runID, messages)
+					r.stepSetMessages(runID, messages)
 					turnMessages = turnMessages[:0]
 					if r.config.WorkingMemoryStore != nil {
 						snippet, err := r.config.WorkingMemoryStore.Snippet(context.Background(), r.scopeKey(runID))
@@ -650,7 +650,7 @@ func (se *stepEngine) run() {
 							Content: "Your previous response was empty — no text and no tool calls. Please use the available tools to make progress on the task. What do you need to do next?",
 						},
 					)
-					r.setMessages(runID, messages)
+					r.stepSetMessages(runID, messages)
 					r.emit(runID, EventRunStepCompleted, map[string]any{
 						"step":        step,
 						"tool_calls":  0,
@@ -681,7 +681,7 @@ func (se *stepEngine) run() {
 					Reasoning: capturedReasoning,
 				})
 			}
-			r.setMessages(runID, messages)
+			r.stepSetMessages(runID, messages)
 			if result.Content != "" {
 				r.snapshotRecordMessage(runID, "assistant", result.Content)
 				r.emit(runID, EventAssistantMessage, map[string]any{"content": result.Content})
@@ -705,7 +705,7 @@ func (se *stepEngine) run() {
 			ToolCalls: append([]ToolCall(nil), result.ToolCalls...),
 			Reasoning: capturedReasoning,
 		})
-		r.setMessages(runID, messages)
+		r.stepSetMessages(runID, messages)
 		r.snapshotRecordMessage(runID, "assistant", result.Content)
 
 		if r.config.TraceToolDecisions && len(result.ToolCalls) > 0 {
@@ -821,7 +821,7 @@ func (se *stepEngine) run() {
 					ToolCallID: call.ID,
 					Content:    toolOutput,
 				})
-				r.setMessages(runID, messages)
+				r.stepSetMessages(runID, messages)
 				continue
 			}
 
@@ -849,7 +849,7 @@ func (se *stepEngine) run() {
 					ToolCallID: call.ID,
 					Content:    denialOutput,
 				})
-				r.setMessages(runID, messages)
+				r.stepSetMessages(runID, messages)
 				continue
 			}
 
@@ -876,7 +876,7 @@ func (se *stepEngine) run() {
 					ToolCallID: call.ID,
 					Content:    deniedOutput,
 				})
-				r.setMessages(runID, messages)
+				r.stepSetMessages(runID, messages)
 				continue
 			}
 
@@ -935,7 +935,7 @@ func (se *stepEngine) run() {
 							ToolCallID: call.ID,
 							Content:    deniedOutput,
 						})
-						r.setMessages(runID, messages)
+						r.stepSetMessages(runID, messages)
 						continue
 					}
 					r.setStatus(runID, RunStatusRunning, "", "")
@@ -962,7 +962,7 @@ func (se *stepEngine) run() {
 							ToolCallID: call.ID,
 							Content:    deniedOutput,
 						})
-						r.setMessages(runID, messages)
+						r.stepSetMessages(runID, messages)
 						continue
 					}
 					r.emit(runID, EventToolApprovalGranted, map[string]any{
@@ -989,7 +989,7 @@ func (se *stepEngine) run() {
 					ToolCallID: call.ID,
 					Content:    deniedOutput,
 				})
-				r.setMessages(runID, messages)
+				r.stepSetMessages(runID, messages)
 				continue
 			}
 
@@ -1023,7 +1023,7 @@ func (se *stepEngine) run() {
 					replaced = append(replaced, messageMapToMessage(m))
 				}
 				messages = replaced
-				r.setMessages(runID, messages)
+				r.stepSetMessages(runID, messages)
 				compactPayload := map[string]any{
 					"message_count": len(replaced),
 					"duration_ms":   time.Since(compactStart).Milliseconds(),
@@ -1243,7 +1243,7 @@ func (se *stepEngine) run() {
 						{Role: "user", Content: openingContent},
 					}
 					messages = resetMessages
-					r.setMessages(runID, messages)
+					r.stepSetMessages(runID, messages)
 					break
 				}
 			}
@@ -1283,7 +1283,7 @@ func (se *stepEngine) run() {
 				})
 			}
 
-			r.setMessages(runID, messages)
+			r.stepSetMessages(runID, messages)
 
 			for _, metaMsg := range metaMessages {
 				r.emit(runID, EventMetaMessageInjected, map[string]any{
