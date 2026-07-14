@@ -327,6 +327,120 @@ func TestConcurrentResumeExecutesScriptExactlyOnce(t *testing.T) {
 	}
 }
 
+// TestConcurrentResumeCriticalSectionIsAtomic hardens BUG 4's coverage.
+// Follow-up review found TestConcurrentResumeExecutesScriptExactlyOnce
+// above passes even against the TOCTOU-buggy Resume when run WITHOUT
+// -race: the buggy window is a few instructions wide, and 8 goroutines
+// mostly serialize on e.mu anyway, so successCount==1 by luck, not by
+// proof. It only goes red under -race, and even then via "race detected
+// during execution of test", not via its own assertions -- so a
+// regression that reintroduces the TOCTOU without a literal data race
+// (e.g. an atomic-typed Status field checked-then-unlocked-then-set)
+// would ship silently.
+//
+// This test uses resumePreTransitionHook (a test-only seam, nil/no-op in
+// production) to deterministically pause the WINNING Resume call
+// mid-critical-section -- after it has passed the status check but
+// before it transitions the run -- and asserts that NONE of several
+// concurrently-racing Resume calls can complete while it's paused there.
+// That is only true if the check-and-transition genuinely holds e.mu for
+// its entire span; it does not depend on -race, timing luck, or how many
+// goroutines happen to serialize on the mutex by chance.
+func TestConcurrentResumeCriticalSectionIsAtomic(t *testing.T) {
+	e := NewEngine(EngineOptions{Subagents: noopSubagentManager{}})
+
+	var executions atomic.Int64
+	release := make(chan struct{})
+	e.Register("flaky-det", func(*Context) (any, error) {
+		n := executions.Add(1)
+		if n == 1 {
+			return nil, fmt.Errorf("boom")
+		}
+		<-release
+		return "resumed-ok", nil
+	})
+
+	run, err := e.Start(context.Background(), "flaky-det", nil)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	waitForStatus(t, e, run.ID, RunStatusFailed)
+
+	hookEntered := make(chan struct{})
+	hookRelease := make(chan struct{})
+	var hookCalls atomic.Int64
+	var hookEnteredOnce sync.Once
+	resumePreTransitionHook = func() {
+		// sync.Once here guards ONLY against a spurious double-close
+		// panic if this hook is somehow entered concurrently by more
+		// than one goroutine (which is exactly what happens against a
+		// non-atomic/buggy Resume) -- it does not affect the load-bearing
+		// assertions below (hookCalls, finishedCount, successCount),
+		// which still observe and report every entry.
+		hookCalls.Add(1)
+		hookEnteredOnce.Do(func() { close(hookEntered) })
+		<-hookRelease
+	}
+	t.Cleanup(func() { resumePreTransitionHook = nil })
+
+	const concurrentResumes = 8
+	var wg sync.WaitGroup
+	errs := make([]error, concurrentResumes)
+	var finishedCount atomic.Int64
+	begin := make(chan struct{})
+	for i := 0; i < concurrentResumes; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			<-begin
+			_, resumeErr := e.Resume(context.Background(), run.ID, nil)
+			finishedCount.Add(1)
+			errs[idx] = resumeErr
+		}(i)
+	}
+	close(begin)
+
+	select {
+	case <-hookEntered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no Resume call reached resumePreTransitionHook within 2s")
+	}
+
+	// While the winner is paused inside the hook (holding e.mu, if the
+	// critical section is genuinely atomic), give the other goroutines
+	// ample time to attempt Resume. None of them can have finished yet --
+	// they're all blocked trying to acquire e.mu, which the winner still
+	// holds.
+	time.Sleep(150 * time.Millisecond)
+	if got := finishedCount.Load(); got != 0 {
+		t.Fatalf("expected 0 Resume calls to finish while the winner is paused mid-critical-section, got %d -- check-and-transition is not atomic", got)
+	}
+
+	close(hookRelease)
+	wg.Wait()
+
+	if got := hookCalls.Load(); got != 1 {
+		t.Fatalf("expected resumePreTransitionHook to fire exactly once, got %d", got)
+	}
+
+	successCount := 0
+	for _, resumeErr := range errs {
+		if resumeErr == nil {
+			successCount++
+		}
+	}
+	if successCount != 1 {
+		close(release)
+		t.Fatalf("expected exactly 1 successful Resume, got %d (errs=%v)", successCount, errs)
+	}
+
+	close(release)
+	waitForTerminal(t, e, run.ID)
+	if got := executions.Load(); got != 2 {
+		t.Fatalf("total script executions = %d, want 2 (1 initial + 1 resume)", got)
+	}
+}
+
 // ---------------------------------------------------------------------
 // BUG 5: Subscribe history/live gap loses terminal events
 // ---------------------------------------------------------------------
