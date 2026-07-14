@@ -2,7 +2,11 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,6 +70,106 @@ func TestBuildCatalogBootstrapFallsBackToWorkspaceCatalog(t *testing.T) {
 	}
 	if got := bootstrap.lookupModelAPI("openrouter", "openai/gpt-4.1-mini"); got != "responses" {
 		t.Fatalf("lookupModelAPI: got %q", got)
+	}
+}
+
+// TestBuildCatalogBootstrapAnthropicFactoryUsesCatalogMaxTokens is a BUG2(a)
+// regression guard: the anthropic client the registry's ClientFactory builds
+// must be constructed with the loaded model catalog wired in, so that
+// maxTokensForModel resolves the real per-model max_output_tokens (e.g.
+// 16384) instead of silently falling back to the package's defaultMaxTokens
+// (4096). Without the catalog wired in, a response that legitimately needed
+// more than 4096 output tokens gets truncated by the outgoing request itself.
+func TestBuildCatalogBootstrapAnthropicFactoryUsesCatalogMaxTokens(t *testing.T) {
+	t.Parallel()
+
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_1",
+			"type": "message",
+			"role": "assistant",
+			"content": [{"type": "text", "text": "ok"}],
+			"stop_reason": "end_turn",
+			"usage": {"input_tokens": 5, "output_tokens": 2}
+		}`))
+	}))
+	defer srv.Close()
+
+	workspace := t.TempDir()
+	if err := os.MkdirAll(workspace+"/catalog", 0o755); err != nil {
+		t.Fatalf("mkdir catalog: %v", err)
+	}
+	catalogJSON := fmt.Sprintf(`{
+  "catalog_version": "1.0.0",
+  "providers": {
+    "anthropic": {
+      "display_name": "Anthropic",
+      "base_url": %q,
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "models": {
+        "claude-sonnet-4-6": {
+          "display_name": "Claude Sonnet 4.6",
+          "context_window": 200000,
+          "max_output_tokens": 16384,
+          "modalities": ["text"],
+          "tool_calling": true,
+          "streaming": true
+        }
+      }
+    }
+  }
+}`, srv.URL)
+	if err := os.WriteFile(workspace+"/catalog/models.json", []byte(catalogJSON), 0o644); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+
+	bootstrap, err := buildCatalogBootstrap(catalogBootstrapOptions{
+		workspace: workspace,
+		getenv: func(key string) string {
+			if key == "ANTHROPIC_API_KEY" {
+				return "test-anthropic-key"
+			}
+			return ""
+		},
+		newProvider: func(openai.Config) (harness.Provider, error) {
+			return &noopProvider{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildCatalogBootstrap: %v", err)
+	}
+	if bootstrap.providerRegistry == nil {
+		t.Fatal("expected provider registry")
+	}
+
+	rawClient, err := bootstrap.providerRegistry.GetClient("anthropic")
+	if err != nil {
+		t.Fatalf("GetClient(anthropic): %v", err)
+	}
+	provider, ok := rawClient.(harness.Provider)
+	if !ok {
+		t.Fatalf("anthropic client does not implement harness.Provider: %T", rawClient)
+	}
+
+	_, err = provider.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "claude-sonnet-4-6",
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	var req struct {
+		MaxTokens int `json:"max_tokens"`
+	}
+	if err := json.Unmarshal(capturedBody, &req); err != nil {
+		t.Fatalf("unmarshal captured request body: %v", err)
+	}
+	if req.MaxTokens != 16384 {
+		t.Fatalf("expected max_tokens=16384 (from catalog), got %d — anthropic.Config.Catalog is not wired into the registry's ClientFactory", req.MaxTokens)
 	}
 }
 
