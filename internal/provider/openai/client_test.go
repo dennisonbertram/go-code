@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -279,6 +280,56 @@ func TestClientCompleteStreamsAssistantAndToolCallDeltas(t *testing.T) {
 	}
 	if !slices.Equal(toolArgParts, []string{`{"path":"`, `demo.txt"}`}) {
 		t.Fatalf("unexpected tool argument deltas: %+v", toolArgParts)
+	}
+}
+
+// TestClientCompleteStreamMidStreamErrorReturnsTypedFailure is a BUG3 test:
+// a mid-stream `{"error": {...}}` SSE payload was not recognized by the
+// chunk decoder (completionChunk has no error field), so it was silently
+// skipped — the stream then hit [DONE]-less EOF or ended cleanly and the
+// caller received an EMPTY but SUCCESSFUL result instead of a failure. The
+// fix must surface it as a typed *harness.ProviderHTTPError so provider
+// fallback still triggers, matching the non-streaming error path.
+func TestClientCompleteStreamMidStreamErrorReturnsTypedFailure(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"Hel"}}]}`,
+			``,
+			`data: {"choices":[{"delta":{"content":"lo"}}]}`,
+			``,
+			`data: {"error":{"message":"rate limit","type":"rate_limit_error","code":"429"}}`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var deltas []harness.CompletionDelta
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream: func(delta harness.CompletionDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected a non-nil error for a mid-stream error payload, got empty-success result: %+v", result)
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if phe.Provider != "openai" {
+		t.Fatalf("expected provider %q, got %q", "openai", phe.Provider)
+	}
+	if !strings.Contains(phe.Body, "rate limit") {
+		t.Fatalf("expected error body to mention the upstream error message, got %q", phe.Body)
 	}
 }
 
