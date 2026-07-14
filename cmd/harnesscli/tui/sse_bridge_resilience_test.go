@@ -398,3 +398,194 @@ func TestBridgeBug3_BurstDoesNotDropRealEventsUnderBackpressure(t *testing.T) {
 		t.Errorf("bridge reported %d 'dropped messages / stream corrupt' warning(s) under a burst; real events must never be dropped in the first place", corruptionWarnings)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Regression tests — each of these would fail if the corresponding fix above
+// were reverted or subtly broken, even though they exercise a different edge
+// than the primary behavioral test for that bug.
+// ---------------------------------------------------------------------------
+
+// TestRegression_SSEBridgeSurvives1MBEvent pins the scanner buffer at the
+// documented real-world upper bound: internal/harness/tools/bash_manager.go's
+// defaultMaxStreamLineBytes caps a single tool.output.delta line at 1MB. If
+// the scanner buffer ever regresses back toward bufio.Scanner's 64KB default
+// (or anything below 1MB), this line alone would kill the stream exactly as
+// BUG 1 originally described.
+func TestRegression_SSEBridgeSurvives1MBEvent(t *testing.T) {
+	bigContent := strings.Repeat("B", 1024*1024)
+	bigContentJSON, err := json.Marshal(bigContent)
+	if err != nil {
+		t.Fatalf("marshal content: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, "id: run-1mb:0\nevent: message\ndata: {\"type\":\"tool.output.delta\",\"payload\":{\"call_id\":\"call-1mb\",\"content\":%s}}\n\n", bigContentJSON)
+		fmt.Fprintf(w, "id: run-1mb:1\nevent: message\ndata: {\"type\":\"run.completed\",\"payload\":{}}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	msgs, stop := tui.StartSSEBridge(ctx, srv.URL)
+	defer stop()
+
+	var gotLen int
+	var gotDone bool
+	for msg := range msgs {
+		switch m := msg.(type) {
+		case tui.SSEEventMsg:
+			if m.EventType == "tool.output.delta" {
+				var p struct {
+					Content string `json:"content"`
+				}
+				if json.Unmarshal(m.Raw, &p) == nil {
+					gotLen += len(p.Content)
+				}
+			}
+		case tui.SSEDoneMsg:
+			if m.EventType == "run.completed" {
+				gotDone = true
+			}
+		}
+	}
+	if gotLen != len(bigContent) {
+		t.Errorf("expected the full 1MB event content to survive, got %d bytes, want %d", gotLen, len(bigContent))
+	}
+	if !gotDone {
+		t.Error("expected run.completed to still arrive after a 1MB event")
+	}
+}
+
+// TestRegression_SSEBridgeReconnectGivesUpGracefullyAfterBoundedAttempts
+// pins the bound + single-message-on-abandonment contract: if a server
+// connection can never succeed (every attempt closes immediately), the
+// client must stop after exactly maxSSEReconnectAttempts retries, mark the
+// run inactive, and surface exactly one "could not be re-established"
+// message — not the repeated "stream error" storm the user originally
+// reported, and not an infinite reconnect loop.
+func TestRegression_SSEBridgeReconnectGivesUpGracefullyAfterBoundedAttempts(t *testing.T) {
+	var mu sync.Mutex
+	connCount := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		connCount++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		// Close immediately without ever delivering an event or a terminal
+		// signal — every connection attempt (initial + every reconnect)
+		// fails the same way, forcing the retry budget to be exhausted.
+	}))
+	defer srv.Close()
+
+	cfg := tui.DefaultTUIConfig()
+	cfg.BaseURL = srv.URL
+	m := tui.New(cfg)
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model := m2.(tui.Model)
+
+	model2, cmd := model.Update(tui.RunStartedMsg{RunID: "run-give-up"})
+	model = model2.(tui.Model)
+
+	final := driveModel(t, model, cmd, 20*time.Second, func(m tui.Model, msg tea.Msg) bool {
+		return !m.RunActive()
+	})
+
+	if final.RunActive() {
+		t.Fatal("expected the run to eventually be marked inactive once reconnect attempts are exhausted")
+	}
+
+	view := final.View()
+	abandonCount := strings.Count(view, "could not be re-established")
+	if abandonCount != 1 {
+		t.Errorf("expected exactly one 'could not be re-established' message in the viewport, got %d — repeated messages would reproduce the original 'too many dropped messages' storm", abandonCount)
+	}
+
+	mu.Lock()
+	gotConns := connCount
+	mu.Unlock()
+	const wantConns = 1 + 5 // initial attempt + maxSSEReconnectAttempts
+	if gotConns != wantConns {
+		t.Errorf("expected exactly %d total connection attempts (1 initial + bounded reconnects), got %d — reconnects must be bounded, not infinite", wantConns, gotConns)
+	}
+}
+
+// TestRegression_SSEBridgeCoalescesPerCallIDWithoutCrossContamination
+// interleaves two distinct call_ids on every other event, forcing the
+// coalescer in bridge.go to flush and switch accumulators on almost every
+// message. This would fail if the merge logic ever concatenated content
+// across call_ids or dropped the pending accumulator's content when
+// switching, corrupting one or both call_ids' output.
+func TestRegression_SSEBridgeCoalescesPerCallIDWithoutCrossContamination(t *testing.T) {
+	const n = 200
+	const callA, callB = "call-a", "call-b"
+
+	var expectedA, expectedB strings.Builder
+	var events []burstEvent
+	for i := 0; i < n; i++ {
+		chunkA := fmt.Sprintf("A%03d", i)
+		chunkAJSON, _ := json.Marshal(chunkA)
+		expectedA.WriteString(chunkA)
+		events = append(events, burstEvent{
+			eventType: "tool.output.delta",
+			payload:   fmt.Sprintf(`{"call_id":%q,"content":%s}`, callA, chunkAJSON),
+		})
+
+		chunkB := fmt.Sprintf("B%03d", i)
+		chunkBJSON, _ := json.Marshal(chunkB)
+		expectedB.WriteString(chunkB)
+		events = append(events, burstEvent{
+			eventType: "tool.output.delta",
+			payload:   fmt.Sprintf(`{"call_id":%q,"content":%s}`, callB, chunkBJSON),
+		})
+	}
+	events = append(events, burstEvent{eventType: "run.completed", payload: "{}"})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		writeBurstEvents(w, events)
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	msgs, stop := tui.StartSSEBridge(ctx, srv.URL)
+	defer stop()
+
+	var gotA, gotB strings.Builder
+	for msg := range msgs {
+		evt, ok := msg.(tui.SSEEventMsg)
+		if !ok || evt.EventType != "tool.output.delta" {
+			continue
+		}
+		var p struct {
+			CallID  string `json:"call_id"`
+			Content string `json:"content"`
+		}
+		if json.Unmarshal(evt.Raw, &p) != nil {
+			continue
+		}
+		switch p.CallID {
+		case callA:
+			gotA.WriteString(p.Content)
+		case callB:
+			gotB.WriteString(p.Content)
+		}
+	}
+
+	if gotA.String() != expectedA.String() {
+		t.Errorf("call_id %q content corrupted by coalescing: got %d bytes, want %d bytes", callA, gotA.Len(), expectedA.Len())
+	}
+	if gotB.String() != expectedB.String() {
+		t.Errorf("call_id %q content corrupted by coalescing: got %d bytes, want %d bytes", callB, gotB.Len(), expectedB.Len())
+	}
+}
