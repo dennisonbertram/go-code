@@ -422,6 +422,7 @@ func (c *Client) decodeStreamingResponse(model string, body io.Reader, streamFn 
 				Content:   state.content.String(),
 				ToolCalls: state.toolCalls(),
 			},
+			FinishReason: state.finishReason,
 		}},
 		Usage: state.usage,
 	}
@@ -437,6 +438,28 @@ func (c *Client) decodeStreamingResponse(model string, body io.Reader, streamFn 
 	return result, nil
 }
 
+// normalizeOpenAIFinishReason maps OpenAI's finish_reason vocabulary onto
+// the shared harness.FinishReason vocabulary (see BUG2b follow-up). An empty
+// input passes through as empty so "the provider didn't report a finish
+// reason" stays distinguishable from "the provider reported an unrecognized
+// value" (harness.FinishReasonOther).
+func normalizeOpenAIFinishReason(raw string) harness.FinishReason {
+	switch raw {
+	case "":
+		return ""
+	case "stop":
+		return harness.FinishReasonStop
+	case "length":
+		return harness.FinishReasonLength
+	case "tool_calls", "function_call":
+		return harness.FinishReasonToolCalls
+	case "content_filter":
+		return harness.FinishReasonContentFilter
+	default:
+		return harness.FinishReasonOther
+	}
+}
+
 func (c *Client) resultFromCompletionResponse(model string, response completionResponse) (harness.CompletionResult, error) {
 	if len(response.Choices) == 0 {
 		return harness.CompletionResult{}, fmt.Errorf("openai response had no choices")
@@ -444,7 +467,8 @@ func (c *Client) resultFromCompletionResponse(model string, response completionR
 
 	choice := response.Choices[0]
 	result := harness.CompletionResult{
-		Content: strings.TrimSpace(choice.Message.Content),
+		Content:      strings.TrimSpace(choice.Message.Content),
+		FinishReason: normalizeOpenAIFinishReason(choice.FinishReason),
 	}
 	usage, usageStatus := normalizeUsage(response.Usage)
 	result.Usage = &usage
@@ -572,7 +596,8 @@ type streamChunkError struct {
 }
 
 type choice struct {
-	Message chatCompletionMessage `json:"message"`
+	Message      chatCompletionMessage `json:"message"`
+	FinishReason string                `json:"finish_reason,omitempty"`
 }
 
 type chunkChoice struct {
@@ -610,10 +635,11 @@ type chatToolCallDeltaField struct {
 }
 
 type streamedCompletionState struct {
-	content   strings.Builder
-	reasoning strings.Builder
-	usage     *usage
-	toolCall  []*streamedToolCall
+	content      strings.Builder
+	reasoning    strings.Builder
+	usage        *usage
+	toolCall     []*streamedToolCall
+	finishReason string
 }
 
 type streamedToolCall struct {
@@ -700,6 +726,9 @@ func processStreamBlock(raw string, state *streamedCompletionState, streamFn fun
 		state.usage = chunk.Usage
 	}
 	for _, choice := range chunk.Choices {
+		if choice.FinishReason != nil && *choice.FinishReason != "" {
+			state.finishReason = *choice.FinishReason
+		}
 		if choice.Delta.Content != "" {
 			state.content.WriteString(choice.Delta.Content)
 			if streamFn != nil {

@@ -363,8 +363,35 @@ func (c *Client) decodeStreamingResponse(model string, body io.Reader, streamFn 
 	return c.resultFromResponse(model, response)
 }
 
+// normalizeAnthropicFinishReason maps Anthropic's stop_reason vocabulary
+// onto the shared harness.FinishReason vocabulary (see BUG2b follow-up),
+// deliberately mapping "max_tokens" onto the SAME value OpenAI's "length"
+// maps to (harness.FinishReasonLength) so callers get one normalized
+// vocabulary instead of two provider-specific ones. An empty input passes
+// through as empty so "the provider didn't report a stop reason" stays
+// distinguishable from "the provider reported an unrecognized value"
+// (harness.FinishReasonOther).
+func normalizeAnthropicFinishReason(raw string) harness.FinishReason {
+	switch raw {
+	case "":
+		return ""
+	case "end_turn", "stop_sequence":
+		return harness.FinishReasonStop
+	case "max_tokens":
+		return harness.FinishReasonLength
+	case "tool_use":
+		return harness.FinishReasonToolCalls
+	case "refusal":
+		return harness.FinishReasonContentFilter
+	default:
+		return harness.FinishReasonOther
+	}
+}
+
 func (c *Client) resultFromResponse(model string, response messageResponse) (harness.CompletionResult, error) {
-	result := harness.CompletionResult{}
+	result := harness.CompletionResult{
+		FinishReason: normalizeAnthropicFinishReason(response.StopReason),
+	}
 
 	// Extract text content and tool_use blocks.
 	var textParts []string
