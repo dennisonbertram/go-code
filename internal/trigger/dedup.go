@@ -1,6 +1,9 @@
 package trigger
 
 import (
+	"fmt"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -13,10 +16,6 @@ import (
 // Entries are keyed by "source:deliveryID" so dedup is scoped per source.
 // Safe for concurrent use.
 //
-// STUB: CheckAndRecord currently always allows the request through. This is
-// intentional scaffolding so the test suite in dedup_test.go compiles and
-// fails on real assertions (a meaningful red) rather than a compile error.
-// The real bounded/TTL logic is implemented in the paired fix commit.
 type DeliveryDedupCache struct {
 	mu      sync.Mutex
 	ttl     time.Duration
@@ -48,5 +47,58 @@ func NewDeliveryDedupCache(ttl time.Duration, maxSize int) *DeliveryDedupCache {
 // returns nil. An empty deliveryID is always allowed through — there is
 // nothing to dedup on when the source did not supply one.
 func (c *DeliveryDedupCache) CheckAndRecord(source, deliveryID string) error {
+	if deliveryID == "" {
+		return nil
+	}
+	key := strings.ToLower(strings.TrimSpace(source)) + ":" + deliveryID
+
+	now := time.Now
+	if c.nowFunc != nil {
+		now = c.nowFunc
+	}
+	nowT := now()
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	c.evictExpiredLocked(nowT)
+
+	if seenAt, ok := c.seen[key]; ok && nowT.Sub(seenAt) < c.ttl {
+		return fmt.Errorf("duplicate delivery for source %q: id %q was already processed", source, deliveryID)
+	}
+
+	c.seen[key] = nowT
+	c.evictOverflowLocked()
 	return nil
+}
+
+// evictExpiredLocked removes entries whose TTL has elapsed. Callers must
+// hold c.mu.
+func (c *DeliveryDedupCache) evictExpiredLocked(now time.Time) {
+	for k, t := range c.seen {
+		if now.Sub(t) >= c.ttl {
+			delete(c.seen, k)
+		}
+	}
+}
+
+// evictOverflowLocked removes the oldest entries until the cache is back
+// under maxSize. Callers must hold c.mu.
+func (c *DeliveryDedupCache) evictOverflowLocked() {
+	if len(c.seen) <= c.maxSize {
+		return
+	}
+	type kv struct {
+		key string
+		t   time.Time
+	}
+	entries := make([]kv, 0, len(c.seen))
+	for k, t := range c.seen {
+		entries = append(entries, kv{k, t})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].t.Before(entries[j].t) })
+	overflow := len(c.seen) - c.maxSize
+	for i := 0; i < overflow; i++ {
+		delete(c.seen, entries[i].key)
+	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"go-agent-harness/internal/harness"
 	"go-agent-harness/internal/store"
@@ -101,6 +102,17 @@ func (s *Server) handleExternalTrigger(w http.ResponseWriter, r *http.Request) {
 // store, and routes to StartRun, SteerRun, or ContinueRun based on the action
 // and current run state.
 func (s *Server) dispatchTriggerEnvelope(w http.ResponseWriter, r *http.Request, env *trigger.ExternalTriggerEnvelope) {
+	// SECURITY (S5): reject replayed deliveries. HMAC signature validation
+	// alone does not stop a captured, validly-signed payload from being
+	// replayed indefinitely to re-trigger runs — dedup on the provider's
+	// delivery ID (env.SourceID, e.g. GitHub's X-GitHub-Delivery) closes that
+	// gap. A source that supplies no delivery ID (env.SourceID == "") is
+	// never deduped — there is nothing to key on.
+	if err := s.triggerDedupCache().CheckAndRecord(env.Source, env.SourceID); err != nil {
+		writeError(w, http.StatusConflict, "duplicate_delivery", err.Error())
+		return
+	}
+
 	// Derive the deterministic thread ID.
 	threadID := trigger.DeriveExternalThreadID(env.Source, env.RepoOwner, env.RepoName, env.ThreadID)
 
@@ -252,4 +264,25 @@ func (s *Server) resolveWebhookTenantID(source, bodyTenantID string) (string, er
 		return configured, nil
 	}
 	return "", fmt.Errorf("tenant_id %q does not match the configured tenant for source %q", bodyTenantID, source)
+}
+
+// triggerDedupTTL and triggerDedupMaxSize bound the S5 replay-dedup cache.
+// 10 minutes comfortably covers typical webhook redelivery windows (e.g.
+// GitHub retries for up to a few minutes) while ensuring a replay attempt is
+// eventually forgotten rather than blocked forever. 10000 entries bounds
+// memory use regardless of traffic volume (see DeliveryDedupCache).
+const (
+	triggerDedupTTL     = 10 * time.Minute
+	triggerDedupMaxSize = 10000
+)
+
+// triggerDedupCache lazily constructs the server's shared S5 replay-dedup
+// cache. Lazy + sync.Once so every Server construction path (New,
+// NewWithCron, NewWithSkills, NewWithOptions) gets one without each needing
+// to be updated individually.
+func (s *Server) triggerDedupCache() *trigger.DeliveryDedupCache {
+	s.triggerDedupOnce.Do(func() {
+		s.triggerDedup = trigger.NewDeliveryDedupCache(triggerDedupTTL, triggerDedupMaxSize)
+	})
+	return s.triggerDedup
 }

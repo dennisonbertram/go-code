@@ -436,6 +436,12 @@ type Server struct {
 	// endpoints (S1/S2 hardening). See ServerOptions.WebhookTenantIDs.
 	webhookTenantIDs map[string]string
 
+	// triggerDedup is the shared replay-dedup cache for webhook/trigger
+	// deliveries (S5 hardening). Lazily constructed via triggerDedupOnce so
+	// every Server construction path gets one without each needing updating.
+	triggerDedupOnce sync.Once
+	triggerDedup     *trigger.DeliveryDedupCache
+
 	// relayWorkerStore is an optional persistence layer for Go Relay worker
 	// registration and heartbeats.
 	relayWorkerStore relay.WorkerStore
