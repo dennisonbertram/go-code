@@ -847,22 +847,26 @@ func mapMessages(messages []harness.Message) ([]message, error) {
 
 	var pending []pendingMsg
 
-	flush := func() []message {
+	flush := func() ([]message, error) {
 		out := make([]message, 0, len(pending))
 		for _, p := range pending {
 			var contentJSON json.RawMessage
+			var err error
 			if len(p.blocks) == 1 && p.blocks[0].Type == "text" {
 				// Simple text — can use a plain string for efficiency
-				contentJSON, _ = json.Marshal(p.blocks[0].Text)
+				contentJSON, err = json.Marshal(p.blocks[0].Text)
 			} else {
-				contentJSON, _ = json.Marshal(p.blocks)
+				contentJSON, err = json.Marshal(p.blocks)
+			}
+			if err != nil {
+				return nil, fmt.Errorf("marshal anthropic message content: %w", err)
 			}
 			out = append(out, message{
 				Role:    p.role,
 				Content: contentJSON,
 			})
 		}
-		return out
+		return out, nil
 	}
 
 	addBlock := func(role string, block contentBlock) {
@@ -922,7 +926,7 @@ func mapMessages(messages []harness.Message) ([]message, error) {
 		}
 	}
 
-	return flush(), nil
+	return flush()
 }
 
 func mapTools(definitions []harness.ToolDefinition) []toolDef {
