@@ -379,6 +379,32 @@ func TestRegistry_ReplaceByTagWaitsForInFlightExecution(t *testing.T) {
 	}
 }
 
+// TestRegistry_RegisterMCPTools_IsMutating verifies that every tool registered
+// via RegisterMCPTools is treated as mutating by default. External MCP servers
+// cannot prove a tool is read-only, so under ApprovalPolicyDestructive they
+// must require approval.
+func TestRegistry_RegisterMCPTools_IsMutating(t *testing.T) {
+	r := NewRegistry()
+	caller := &mockMCPReg{}
+
+	toolDefs := []htools.MCPToolDefinition{
+		{Name: "safe_read", Description: "Read-only-ish tool", Parameters: map[string]any{}},
+	}
+
+	registered, err := r.RegisterMCPTools("safe_server", toolDefs, caller)
+	if err != nil {
+		t.Fatalf("RegisterMCPTools failed: %v", err)
+	}
+	if len(registered) != 1 {
+		t.Fatalf("expected 1 registered tool, got %d", len(registered))
+	}
+
+	toolName := registered[0]
+	if !r.IsMutating(toolName) {
+		t.Fatalf("expected MCP tool %q to be mutating", toolName)
+	}
+}
+
 // TestRegistry_RegisterMCPTools_Concurrency verifies RegisterMCPTools is safe under concurrent access.
 func TestRegistry_RegisterMCPTools_Concurrency(t *testing.T) {
 	r := NewRegistry()
