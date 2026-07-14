@@ -4104,7 +4104,7 @@ func (r *Runner) messagesForStep(state *runState) []Message {
 // It tries hybrid (or configured) mode first and falls back to strip on error.
 // The per-request Summarizer role model override stored in runState is honoured
 // so that a per-request RoleModels.Summarizer is not silently ignored.
-func (r *Runner) autoCompactMessages(runID string, messages []Message) ([]Message, error) {
+func (r *Runner) autoCompactMessages(ctx context.Context, runID string, messages []Message) ([]Message, error) {
 	r.mu.RLock()
 	state, ok := r.runs[runID]
 	r.mu.RUnlock()
@@ -4128,10 +4128,10 @@ func (r *Runner) autoCompactMessages(runID string, messages []Message) ([]Messag
 	// override is empty, preserving existing behaviour.
 	summarizer := r.newMessageSummarizerWithModel(state.resolvedRoleModels.Summarizer)
 
-	compacted, err := compactMessagesHTTP(context.Background(), snap, mode, keepLast, summarizer)
+	compacted, err := compactMessagesHTTP(ctx, snap, mode, keepLast, summarizer)
 	if err != nil && mode != "strip" {
 		// Fallback to strip mode if hybrid/summarize fails.
-		compacted, err = compactMessagesHTTP(context.Background(), snap, "strip", keepLast, nil)
+		compacted, err = compactMessagesHTTP(ctx, snap, "strip", keepLast, nil)
 	}
 	if err != nil {
 		return nil, err
