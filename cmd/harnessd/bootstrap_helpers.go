@@ -128,6 +128,10 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 					BaseURL:         baseURL,
 					ProviderName:    providerName,
 					PricingResolver: bootstrap.pricingResolver,
+					// Catalog lets maxTokensForModel resolve each model's real
+					// max_output_tokens (e.g. 16384) instead of silently
+					// falling back to the package's 4096-token default.
+					Catalog: bootstrap.modelCatalog,
 				})
 			}
 			// Look up provider quirks from the static catalog so that features

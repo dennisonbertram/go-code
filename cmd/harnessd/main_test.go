@@ -2467,6 +2467,114 @@ func TestEmbeddedCronAdapterUpdateJob(t *testing.T) {
 	}
 }
 
+// TestEmbeddedCronAdapterUpdateJob_PausedJobScheduleOnlyPatch_NotReArmed
+// (BUG 4, BT-006, P2) reproduces the parallel copy of the BUG-4 re-arm
+// condition in embeddedCronAdapter.UpdateJob (main.go ~1735):
+// `req.Schedule != nil && (req.Status == nil || *req.Status == cron.StatusActive)`.
+// A schedule-only update (req.Status == nil) on an already-paused job must
+// not re-add it to the live scheduler.
+//
+// This fails before the fix (scheduler.HasEntry reports true after a
+// schedule-only update on a paused job) and passes after (gating on the
+// job's effective post-update status).
+func TestEmbeddedCronAdapterUpdateJob_PausedJobScheduleOnlyPatch_NotReArmed(t *testing.T) {
+	t.Parallel()
+
+	store := newTestCronStore(t)
+	clock := testClock{t: time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC)}
+	scheduler := cron.NewScheduler(store, &cron.ShellExecutor{}, clock, cron.SchedulerConfig{MaxConcurrent: 1})
+	if err := scheduler.Start(context.Background()); err != nil {
+		t.Fatalf("start scheduler: %v", err)
+	}
+	defer scheduler.Stop()
+
+	adapter := &embeddedCronAdapter{store: store, scheduler: scheduler, clock: clock}
+
+	created, err := adapter.CreateJob(context.Background(), htools.CronCreateJobRequest{
+		Name: "pause-then-schedule-only", Schedule: "*/5 * * * *", ExecType: "shell",
+	})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	// Pause it first — this removes it from the live scheduler.
+	paused := "paused"
+	if _, err := adapter.UpdateJob(context.Background(), created.ID, htools.CronUpdateJobRequest{
+		Status: &paused,
+	}); err != nil {
+		t.Fatalf("UpdateJob pause: %v", err)
+	}
+	if scheduler.HasEntry(created.ID) {
+		t.Fatalf("expected job to be removed from the live scheduler after pausing")
+	}
+
+	// PATCH only the schedule — no Status field.
+	newSched := "0 * * * *"
+	updated, err := adapter.UpdateJob(context.Background(), created.ID, htools.CronUpdateJobRequest{
+		Schedule: &newSched,
+	})
+	if err != nil {
+		t.Fatalf("UpdateJob schedule-only: %v", err)
+	}
+	if updated.Status != "paused" {
+		t.Fatalf("expected status to remain paused, got %q", updated.Status)
+	}
+	if scheduler.HasEntry(created.ID) {
+		t.Fatal("expected a schedule-only update on a paused job to NOT re-arm it in the live scheduler")
+	}
+}
+
+// TestEmbeddedCronAdapterUpdateJob_ResumeAndScheduleReArms (regression for
+// BUG 4) is the positive counterpart of the test above: an update that
+// resumes AND reschedules a paused job in the same call must still re-arm
+// it. This guards against overcorrecting the fix into never re-arming.
+func TestEmbeddedCronAdapterUpdateJob_ResumeAndScheduleReArms(t *testing.T) {
+	t.Parallel()
+
+	store := newTestCronStore(t)
+	clock := testClock{t: time.Date(2026, 3, 8, 12, 0, 0, 0, time.UTC)}
+	scheduler := cron.NewScheduler(store, &cron.ShellExecutor{}, clock, cron.SchedulerConfig{MaxConcurrent: 1})
+	if err := scheduler.Start(context.Background()); err != nil {
+		t.Fatalf("start scheduler: %v", err)
+	}
+	defer scheduler.Stop()
+
+	adapter := &embeddedCronAdapter{store: store, scheduler: scheduler, clock: clock}
+
+	created, err := adapter.CreateJob(context.Background(), htools.CronCreateJobRequest{
+		Name: "resume-and-schedule", Schedule: "*/5 * * * *", ExecType: "shell",
+	})
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	paused := "paused"
+	if _, err := adapter.UpdateJob(context.Background(), created.ID, htools.CronUpdateJobRequest{
+		Status: &paused,
+	}); err != nil {
+		t.Fatalf("UpdateJob pause: %v", err)
+	}
+	if scheduler.HasEntry(created.ID) {
+		t.Fatalf("expected job to be removed from the live scheduler after pausing")
+	}
+
+	active := "active"
+	newSched := "0 * * * *"
+	updated, err := adapter.UpdateJob(context.Background(), created.ID, htools.CronUpdateJobRequest{
+		Status:   &active,
+		Schedule: &newSched,
+	})
+	if err != nil {
+		t.Fatalf("UpdateJob resume+schedule: %v", err)
+	}
+	if updated.Status != "active" {
+		t.Fatalf("expected status active, got %q", updated.Status)
+	}
+	if !scheduler.HasEntry(created.ID) {
+		t.Fatal("expected a resume+schedule update to re-arm the job in the live scheduler")
+	}
+}
+
 func TestEmbeddedCronAdapterDeleteJob(t *testing.T) {
 	t.Parallel()
 

@@ -10,7 +10,7 @@ import (
 	"go-agent-harness/internal/harness/tools/descriptions"
 )
 
-func editTool(workspaceRoot string) Tool {
+func editTool(workspaceRoot string, sandboxScope SandboxScope) Tool {
 	def := Definition{
 		Name:         "edit",
 		Description:  descriptions.Load("edit"),
@@ -34,7 +34,7 @@ func editTool(workspaceRoot string) Tool {
 		},
 	}
 
-	handler := func(_ context.Context, raw json.RawMessage) (string, error) {
+	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
 		args := struct {
 			Path            string `json:"path"`
 			FilePath        string `json:"file_path"`
@@ -58,7 +58,7 @@ func editTool(workspaceRoot string) Tool {
 			return "", fmt.Errorf("old_text is required")
 		}
 
-		absPath, err := ResolveWorkspacePath(workspaceRoot, args.Path)
+		absPath, err := ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, sandboxScope)
 		if err != nil {
 			return "", err
 		}

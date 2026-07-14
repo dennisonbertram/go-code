@@ -5,6 +5,7 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -90,10 +91,14 @@ type askUserState struct {
 
 // fetchAskUserPendingCmd fetches the pending AskUserQuestion for the given runID
 // via GET /v1/runs/{id}/input and returns an AskUserPendingMsg or askUserFetchErrorMsg.
-func fetchAskUserPendingCmd(baseURL, runID string) tea.Cmd {
+func fetchAskUserPendingCmd(baseURL, runID, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		fetchURL := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/input"
-		resp, err := httpClientWithTimeout.Get(fetchURL)
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, fetchURL, nil, apiKey)
+		if err != nil {
+			return askUserFetchErrorMsg{err: fmt.Sprintf("fetch pending input: %s", err.Error())}
+		}
+		resp, err := httpClientWithTimeout.Do(req)
 		if err != nil {
 			return askUserFetchErrorMsg{err: fmt.Sprintf("fetch pending input: %s", err.Error())}
 		}
@@ -123,12 +128,17 @@ func fetchAskUserPendingCmd(baseURL, runID string) tea.Cmd {
 
 // submitAskUserAnswerCmd sends POST /v1/runs/{id}/input with the given answers.
 // On success it returns AskUserSubmittedMsg; on failure it returns AskUserSubmitErrorMsg.
-func submitAskUserAnswerCmd(baseURL, runID string, answers map[string]string) tea.Cmd {
+func submitAskUserAnswerCmd(baseURL, runID string, answers map[string]string, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		postURL := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/input"
 		payload := map[string]interface{}{"answers": answers}
 		body, _ := json.Marshal(payload)
-		resp, err := httpClientWithTimeout.Post(postURL, "application/json", bytes.NewReader(body))
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, postURL, bytes.NewReader(body), apiKey)
+		if err != nil {
+			return AskUserSubmitErrorMsg{Err: fmt.Sprintf("submit answer: %s", err.Error())}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := httpClientWithTimeout.Do(req)
 		if err != nil {
 			return AskUserSubmitErrorMsg{Err: fmt.Sprintf("submit answer: %s", err.Error())}
 		}
@@ -189,7 +199,7 @@ func (m Model) handleAskUserKey(msg tea.KeyMsg) (askUserState, tea.Cmd) {
 		}
 		// Dismiss overlay immediately.
 		runID := st.runID
-		return askUserState{}, submitAskUserAnswerCmd(m.config.BaseURL, runID, answers)
+		return askUserState{}, submitAskUserAnswerCmd(m.config.BaseURL, runID, answers, m.config.APIKey)
 	case tea.KeyEsc:
 		// Dismiss without answering — the server will timeout eventually.
 		return askUserState{}, nil

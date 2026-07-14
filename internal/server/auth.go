@@ -57,10 +57,16 @@ func apiKeyPrefix(key string) string {
 
 // authMiddleware enforces Bearer token authentication for all requests.
 //
-// Token extraction order:
-//  1. Authorization: Bearer <token> header
-//  2. ?token= query parameter (fallback for SSE EventSource connections that
-//     cannot set custom headers in all browsers)
+// Token extraction: Authorization: Bearer <token> header ONLY.
+//
+// A ?token= query-parameter fallback previously existed for SSE EventSource
+// clients that cannot set custom headers in all browsers. It was removed
+// (security hardening) because secrets in query strings leak into access
+// logs, intermediate proxies, and browser history. No consumer in this
+// repository requires it: the first-party CLI (cmd/harnesscli/tui/api.go)
+// already authenticates via the Authorization header, and this codebase has
+// no browser-based EventSource client that would need a header-free
+// fallback (verified: no EventSource usage exists in this repo).
 //
 // Auth can be disabled at startup via:
 //   - ServerOptions.AuthDisabled = true
@@ -176,19 +182,22 @@ func writeScopeError(w http.ResponseWriter, required string) {
 	})
 }
 
-// extractToken pulls the Bearer token from the Authorization header or the
-// ?token= query parameter.
+// extractToken pulls the Bearer token from the Authorization header.
+//
+// A ?token= query-parameter fallback was intentionally removed: secrets in
+// URLs leak into access logs, proxy logs, and browser history. See the
+// authMiddleware doc comment for the rationale and what was verified before
+// removing it.
 func extractToken(r *http.Request) string {
-	// Authorization: Bearer <token>
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		parts := strings.SplitN(auth, " ", 2)
-		if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
-			return strings.TrimSpace(parts[1])
-		}
+	auth := r.Header.Get("Authorization")
+	if auth == "" {
 		return ""
 	}
-	// Fallback for SSE EventSource.
-	return r.URL.Query().Get("token")
+	parts := strings.SplitN(auth, " ", 2)
+	if len(parts) == 2 && strings.EqualFold(parts[0], "bearer") {
+		return strings.TrimSpace(parts[1])
+	}
+	return ""
 }
 
 // effectiveTenantID resolves the tenant ID that should be used for a request.

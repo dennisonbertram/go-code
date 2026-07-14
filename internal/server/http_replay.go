@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"go-agent-harness/internal/forensics/replay"
 	"go-agent-harness/internal/forensics/rollout"
 	"go-agent-harness/internal/harness"
@@ -676,16 +678,54 @@ func (s *Server) handleReplayFork(w http.ResponseWriter, r *http.Request, req re
 		return
 	}
 
-	// Extract a prompt from the last user message for StartRun.
-	prompt := extractLastUserPrompt(forkResult.Messages)
+	// Extract a prompt from the last user message for StartRun, and split off
+	// everything BEFORE it as prior history that must also reach the new run.
+	prompt, seedMessages := splitForkPrompt(forkResult.Messages)
 
-	// Populate TenantID and InitiatorAPIKeyPrefix from auth context so that
-	// forked runs are always created under the authenticated tenant.
-	run, err := s.runner.StartRun(harness.RunRequest{
+	tenantID := TenantIDFromContext(r.Context())
+	runReq := harness.RunRequest{
 		Prompt:                prompt,
-		TenantID:              TenantIDFromContext(r.Context()),
+		TenantID:              tenantID,
 		InitiatorAPIKeyPrefix: APIKeyPrefixFromContext(r.Context()),
-	})
+	}
+
+	// Thread the reconstructed history into the new run. The runner has no
+	// RunRequest field for pre-seeding message history directly; the existing
+	// mechanism for a run to pick up prior turns is ConversationID +
+	// Runner.loadConversationHistory, which reads from the configured
+	// ConversationStore (see runner.go:loadConversationHistory / the
+	// ContinueRun code path that relies on the same lookup). So when there is
+	// history to restore, persist it into a fresh conversation and point the
+	// new run at it — mirroring how a real continuation's history reaches the
+	// runner, rather than inventing a new pre-seeding mechanism.
+	if len(seedMessages) > 0 {
+		convStore := s.runner.GetConversationStore()
+		if convStore == nil {
+			// Fail loudly rather than silently starting the run without the
+			// history it was asked to restore (the bug this fix addresses).
+			writeError(w, http.StatusNotImplemented, "not_implemented",
+				"conversation history persistence is not configured; cannot fork with reconstructed history")
+			return
+		}
+		forkedConvID := "fork_" + uuid.NewString()
+		if err := convStore.SaveConversation(r.Context(), forkedConvID, seedMessages); err != nil {
+			writeError(w, http.StatusInternalServerError, "replay_error",
+				fmt.Sprintf("failed to persist forked conversation history: %s", err.Error()))
+			return
+		}
+		// Stamp the new conversation's tenant BEFORE StartRun so the runner's
+		// ownership check (checkConversationOwnership, which treats an
+		// empty/unset stored tenant as "default") does not reject a
+		// non-default-tenant caller forking their own history.
+		if err := convStore.UpdateConversationMeta(r.Context(), forkedConvID, "", tenantID); err != nil {
+			writeError(w, http.StatusInternalServerError, "replay_error",
+				fmt.Sprintf("failed to stamp forked conversation tenant: %s", err.Error()))
+			return
+		}
+		runReq.ConversationID = forkedConvID
+	}
+
+	run, err := s.runner.StartRun(runReq)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "replay_error",
 			fmt.Sprintf("failed to start forked run: %s", err.Error()))
@@ -736,4 +776,22 @@ func extractLastUserPrompt(msgs []harness.Message) string {
 		}
 	}
 	return "forked run"
+}
+
+// splitForkPrompt extracts the prompt for a forked run (the content of the
+// LAST user-role message — same selection as extractLastUserPrompt) and
+// separates out everything BEFORE that message as prior conversation history
+// that must also be threaded into the new run (see handleReplayFork; this is
+// the fix for the bug where that history was silently dropped).
+//
+// If no user message is found, the prompt falls back to the same placeholder
+// extractLastUserPrompt uses ("forked run"), and every reconstructed message
+// is treated as prior history (there is no user turn to split on).
+func splitForkPrompt(msgs []harness.Message) (prompt string, seedMessages []harness.Message) {
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "user" {
+			return msgs[i].Content, append([]harness.Message(nil), msgs[:i]...)
+		}
+	}
+	return extractLastUserPrompt(msgs), append([]harness.Message(nil), msgs...)
 }

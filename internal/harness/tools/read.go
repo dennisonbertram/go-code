@@ -11,7 +11,7 @@ import (
 	"go-agent-harness/internal/harness/tools/descriptions"
 )
 
-func readTool(workspaceRoot string) Tool {
+func readTool(workspaceRoot string, sandboxScope SandboxScope) Tool {
 	def := Definition{
 		Name:         "read",
 		Description:  descriptions.Load("read"),
@@ -32,7 +32,7 @@ func readTool(workspaceRoot string) Tool {
 		},
 	}
 
-	handler := func(_ context.Context, raw json.RawMessage) (string, error) {
+	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
 		args := struct {
 			Path      string `json:"path"`
 			FilePath  string `json:"file_path"`
@@ -63,7 +63,7 @@ func readTool(workspaceRoot string) Tool {
 			args.Limit = 0
 		}
 
-		absPath, err := ResolveWorkspacePath(workspaceRoot, args.Path)
+		absPath, err := ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, sandboxScope)
 		if err != nil {
 			return "", err
 		}

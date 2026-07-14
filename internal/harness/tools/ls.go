@@ -15,7 +15,7 @@ import (
 	"go-agent-harness/internal/harness/tools/descriptions"
 )
 
-func lsTool(workspaceRoot string) Tool {
+func lsTool(workspaceRoot string, sandboxScope SandboxScope) Tool {
 	def := Definition{
 		Name:         "ls",
 		Description:  descriptions.Load("ls"),
@@ -34,7 +34,7 @@ func lsTool(workspaceRoot string) Tool {
 		},
 	}
 
-	handler := func(_ context.Context, raw json.RawMessage) (string, error) {
+	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
 		args := struct {
 			Path          string `json:"path"`
 			Recursive     bool   `json:"recursive"`
@@ -57,7 +57,7 @@ func lsTool(workspaceRoot string) Tool {
 			args.Depth = 0
 		}
 
-		absPath, err := ResolveWorkspacePath(workspaceRoot, args.Path)
+		absPath, err := ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, sandboxScope)
 		if err != nil {
 			return "", err
 		}

@@ -4,28 +4,56 @@ import (
 	"encoding/json"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"go-agent-harness/cmd/harnesscli/tui/components/modelswitcher"
 )
 
 // ─── SSE Stream Messages ────────────────────────────────────────────────────
 
 // SSEEventMsg carries a decoded harness event from the SSE stream.
+// ID is the SSE "id:" field for this event, in harness's per-run
+// "runID:seq" format (see harness.ParseEventID). It is empty if the server
+// did not send an id: line. The TUI model tracks the most recent non-empty
+// ID so that if the stream connection drops, a reconnect can resume exactly
+// where it left off via the Last-Event-ID request header (see
+// internal/server/http_runs.go).
 type SSEEventMsg struct {
 	EventType string
 	Raw       json.RawMessage
+	ID        string
 }
 
 // SSEErrorMsg signals a stream read/parse error.
 type SSEErrorMsg struct{ Err error }
 
-// SSEDoneMsg signals the stream ended (run.completed or run.failed).
+// SSEDoneMsg signals the stream ended. EventType is "run.completed" or
+// "run.failed" for a genuine terminal event delivered by the harness itself.
+// Any other value (including the empty string, or the sentinel
+// "bridge.closed" emitted when the underlying channel closes without ever
+// delivering a message) means the connection was lost or closed without the
+// run actually finishing — the TUI model treats that case as recoverable and
+// attempts a bounded, backed-off reconnect (see SSEReconnectedMsg) rather
+// than ending the run.
 type SSEDoneMsg struct {
 	EventType string
 	Error     string // non-empty on run.failed
 }
 
-// SSEDropMsg signals a message was dropped due to channel backpressure.
+// SSEDropMsg signals a message was dropped due to channel backpressure. The
+// bridge now delivers real events with blocking sends specifically so this
+// should not happen in normal operation; it remains as a diagnostic hook.
 type SSEDropMsg struct{}
+
+// SSEReconnectedMsg carries a freshly established SSE bridge channel and its
+// cancel func after an automatic reconnect attempt (see reconnectSSECmd)
+// following an unexpected stream disconnection. The model only adopts the
+// new channel if the run is still active; otherwise it cancels the new
+// connection immediately.
+type SSEReconnectedMsg struct {
+	Ch     <-chan tea.Msg
+	Cancel func()
+}
 
 // ─── Assistant Messages ──────────────────────────────────────────────────────
 
