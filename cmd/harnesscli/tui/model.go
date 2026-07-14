@@ -1451,12 +1451,14 @@ func executeModelCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 
 	var cmds []tea.Cmd
 	if m.selectedGateway == "openrouter" {
+		// External API — sends the OpenRouter provider key, never the
+		// harnessd key (see fetchOpenRouterModelsCmd's doc comment).
 		orKey := m.pendingAPIKeys["openrouter"]
 		cmds = append(cmds, fetchOpenRouterModelsCmd(orKey))
 	} else {
-		cmds = append(cmds, fetchModelsCmd(m.config.BaseURL))
+		cmds = append(cmds, fetchModelsCmd(m.config.BaseURL, m.config.APIKey))
 	}
-	cmds = append(cmds, fetchProvidersCmd(m.config.BaseURL))
+	cmds = append(cmds, fetchProvidersCmd(m.config.BaseURL, m.config.APIKey))
 	return cmds, false
 }
 
@@ -1466,13 +1468,13 @@ func executeKeysCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.apiKeyCursor = 0
 	m.apiKeyInput = ""
 	m.apiKeyInputMode = false
-	return []tea.Cmd{fetchProvidersCmd(m.config.BaseURL)}, false
+	return []tea.Cmd{fetchProvidersCmd(m.config.BaseURL, m.config.APIKey)}, false
 }
 
 func executeSubagentsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	return []tea.Cmd{
 		m.setStatusMsg("Loading subagents..."),
-		loadSubagentsCmd(m.config.BaseURL),
+		loadSubagentsCmd(m.config.BaseURL, m.config.APIKey),
 	}, false
 }
 
@@ -1481,7 +1483,7 @@ func executeProfilesCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.activeOverlay = "profiles"
 	return []tea.Cmd{
 		m.setStatusMsg("Loading profiles..."),
-		loadProfilesCmd(m.config.BaseURL),
+		loadProfilesCmd(m.config.BaseURL, m.config.APIKey),
 	}, false
 }
 
@@ -1542,7 +1544,7 @@ func executeAttachCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 func executeRunsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	return []tea.Cmd{
 		m.setStatusMsg("Loading runs..."),
-		fetchRunsCmd(m.config.BaseURL),
+		fetchRunsCmd(m.config.BaseURL, m.config.APIKey),
 	}, false
 }
 
@@ -1558,7 +1560,7 @@ func executeCancelCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	}
 	return []tea.Cmd{
 		m.setStatusMsg("Cancelling " + runID + "..."),
-		cancelRunCmd(m.config.BaseURL, runID),
+		cancelRunCmd(m.config.BaseURL, runID, m.config.APIKey),
 	}, false
 }
 
@@ -1569,7 +1571,7 @@ func executeReplayCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	target := cmd.Args[0]
 	return []tea.Cmd{
 		m.setStatusMsg("Replaying " + target + "..."),
-		replayRunCmd(m.config.BaseURL, target),
+		replayRunCmd(m.config.BaseURL, target, m.config.APIKey),
 	}, false
 }
 
@@ -1595,7 +1597,7 @@ func executeResumeCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	m.appendMessageBubble(messagebubble.RoleUser, prompt)
 	return []tea.Cmd{
 		m.setStatusMsg("Continuing " + runID + "..."),
-		continueRunCmd(m.config.BaseURL, runID, expandedPrompt),
+		continueRunCmd(m.config.BaseURL, runID, expandedPrompt, m.config.APIKey),
 	}, false
 }
 
@@ -1688,8 +1690,8 @@ func (m Model) viewSearchOverlay() string {
 // Init implements tea.Model.
 func (m Model) Init() tea.Cmd {
 	var cmds []tea.Cmd
-	for provider, apiKey := range m.pendingAPIKeys {
-		cmds = append(cmds, setProviderKeyCmd(m.config.BaseURL, provider, apiKey))
+	for provider, providerKey := range m.pendingAPIKeys {
+		cmds = append(cmds, setProviderKeyCmd(m.config.BaseURL, provider, providerKey, m.config.APIKey))
 	}
 	// Schedule a status message when plugin warnings were collected at startup.
 	if len(m.pluginWarnings) > 0 {
@@ -1746,7 +1748,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// exists (first init runs exactly once, since m.ready is now true),
 			// so the rendered history cannot be wiped by this viewport creation.
 			if m.config.ResumeConversationID != "" {
-				cmds = append(cmds, fetchConversationMessagesCmd(m.config.BaseURL, m.conversationID))
+				cmds = append(cmds, fetchConversationMessagesCmd(m.config.BaseURL, m.conversationID, m.config.APIKey))
 			}
 		}
 		// Preserve current history across window resizes: on subsequent resizes
@@ -1798,7 +1800,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// cancel the run both server-side and locally.
 				m.interruptBanner = m.interruptBanner.Hide()
 				if m.RunID != "" {
-					cmds = append(cmds, cancelRunCmd(m.config.BaseURL, m.RunID))
+					cmds = append(cmds, cancelRunCmd(m.config.BaseURL, m.RunID, m.config.APIKey))
 				}
 				if m.cancelRun != nil {
 					m.cancelRun()
@@ -2011,7 +2013,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					apiKey := m.apiKeyInput
 					m.apiKeyInputMode = false
 					m.apiKeyInput = ""
-					cmds = append(cmds, setProviderKeyCmd(m.config.BaseURL, provider, apiKey))
+					cmds = append(cmds, setProviderKeyCmd(m.config.BaseURL, provider, apiKey, m.config.APIKey))
 				} else if !m.apiKeyInputMode && len(m.apiKeyProviders) > 0 {
 					m.apiKeyInputMode = true
 				}
@@ -2039,7 +2041,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 							key := m.modelConfigKeyInput
 							m.modelConfigKeyInputMode = false
 							m.modelConfigKeyInput = ""
-							cmds = append(cmds, setProviderKeyCmd(m.config.BaseURL, provider, key))
+							cmds = append(cmds, setProviderKeyCmd(m.config.BaseURL, provider, key, m.config.APIKey))
 						}
 						return m, tea.Batch(cmds...)
 					}
@@ -2586,7 +2588,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendMessageBubble(messagebubble.RoleUser, msg.Value)
 		// Fire off the run against the harness API with the expanded prompt.
 		effModel, effProvider := m.effectiveModelAndProvider()
-		cmds = append(cmds, startRunCmd(m.config.BaseURL, expandedValue, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, m.config.Workspace))
+		cmds = append(cmds, startRunCmd(m.config.BaseURL, expandedValue, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, m.config.Workspace, m.config.APIKey))
 
 	case AssistantDeltaMsg:
 		m.lastAssistantText += msg.Delta
@@ -2901,7 +2903,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if err := json.Unmarshal(msg.Raw, &p); err == nil && p.RunID != "" {
 				m.askUser = askUserState{active: true, runID: p.RunID, callID: p.CallID}
-				cmds = append(cmds, fetchAskUserPendingCmd(m.config.BaseURL, p.RunID))
+				cmds = append(cmds, fetchAskUserPendingCmd(m.config.BaseURL, p.RunID, m.config.APIKey))
 			}
 		case "run.resumed":
 			// Dismiss the ask-user overlay when the run resumes.
@@ -3140,7 +3142,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		hcfg.APIKeys[msg.Provider] = msg.Key
 		_ = harnessconfig.Save(hcfg)
 		// Refresh provider list.
-		cmds = append(cmds, fetchProvidersCmd(m.config.BaseURL))
+		cmds = append(cmds, fetchProvidersCmd(m.config.BaseURL, m.config.APIKey))
 		cmds = append(cmds, m.setStatusMsg("Key saved for "+msg.Provider))
 
 	case statusTickMsg:
