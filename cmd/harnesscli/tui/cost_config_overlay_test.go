@@ -71,6 +71,43 @@ func TestCost_EscapeClosesOverlay(t *testing.T) {
 	}
 }
 
+// TestCost_OverlayRefreshesModelOnSwitchWhileOpen verifies that the /cost
+// overlay reflects a newly selected model immediately, even if no
+// usage.delta event arrives after the switch. Regression coverage: the /cost
+// overlay's snapshot was previously refreshed only on open or on
+// usage.delta, so switching models while the overlay was already open left
+// it showing the stale model name.
+func TestCost_OverlayRefreshesModelOnSwitchWhileOpen(t *testing.T) {
+	cfg := tui.DefaultTUIConfig()
+	cfg.Model = "gpt-4.1-mini"
+	m := tui.New(cfg)
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+	m = m2.(tui.Model)
+
+	m = sendSlashCommand(m, "/cost")
+	if !m.OverlayActive() || m.ActiveOverlay() != "cost" {
+		t.Fatal("precondition: cost overlay must be open")
+	}
+
+	// Precondition: overlay shows the initial model.
+	if !strings.Contains(m.View(), "gpt-4.1-mini") {
+		t.Fatalf("precondition: cost overlay should show initial model gpt-4.1-mini; got:\n%s", m.View())
+	}
+
+	// Switch model while the cost overlay remains open, with no intervening
+	// usage.delta event.
+	m3, _ := m.Update(tui.ModelSelectedMsg{ModelID: "claude-3-7-sonnet-20250219", Provider: "anthropic"})
+	m = m3.(tui.Model)
+
+	v := m.View()
+	if strings.Contains(v, "gpt-4.1-mini") {
+		t.Errorf("cost overlay must not still show the old model gpt-4.1-mini after switch; got:\n%s", v)
+	}
+	if !strings.Contains(v, "claude-3-7-sonnet-20250219") {
+		t.Errorf("cost overlay must show the newly selected model claude-3-7-sonnet-20250219 after switch; got:\n%s", v)
+	}
+}
+
 // TestConfig_SlashCommandActivatesOverlay verifies that /config opens the
 // config overlay and that View() lists the current session's config values.
 func TestConfig_SlashCommandActivatesOverlay(t *testing.T) {
