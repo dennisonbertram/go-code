@@ -40,6 +40,9 @@ package tui
 // serves authenticated user/run data, so none are exempted.
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -247,5 +250,94 @@ func TestOpenRouterCallDoesNotReceiveHarnessKey(t *testing.T) {
 	}
 	if gotAuth == "Bearer "+harnessKey {
 		t.Fatal("the harnessd API key leaked to the external OpenRouter request")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Regression: statically prevents a future endpoint from bypassing
+// newHarnessRequest, which is the actual mechanism ("route every harnessd
+// call through ONE helper... that is what stops the next endpoint from
+// being added without auth") this task was asked to establish. A
+// table-driven header test only catches a gap once someone writes a test
+// case for it; this test catches the gap the moment a raw http.Get/
+// http.Post/http.NewRequest call is added anywhere in these files, with no
+// new test case required.
+// ---------------------------------------------------------------------------
+
+// rawHTTPCallAllowlist lists the functions permitted to build an HTTP
+// request without going through newHarnessRequest, and why:
+//   - newHarnessRequest itself is the one place http.NewRequestWithContext
+//     is allowed to appear directly.
+//   - fetchOpenRouterModelsFromURL targets the external openrouter.ai API,
+//     not harnessd, and must keep using its own provider-key header logic.
+var rawHTTPCallAllowlist = map[string]bool{
+	"newHarnessRequest":            true,
+	"fetchOpenRouterModelsFromURL": true,
+}
+
+// rawHTTPCallNames are the net/http package-level functions that build (and
+// in the Get/Post/Head/PostForm cases, also send) a request without going
+// through a caller-supplied *http.Request — exactly what newHarnessRequest
+// exists to replace so an Authorization header can be attached.
+var rawHTTPCallNames = map[string]bool{
+	"Get":        true,
+	"Head":       true,
+	"Post":       true,
+	"PostForm":   true,
+	"NewRequest": true, // NewRequestWithContext is fine; bare NewRequest has no ctx and, more importantly, callers historically forgot to attach auth to it too.
+}
+
+// TestRegression_AllHarnessdRequestsRouteThroughNewHarnessRequest statically
+// scans api.go, askuser.go, and approval.go for any function OTHER than the
+// allowlisted ones that calls a raw net/http request-building function. It
+// would fail immediately if a future PR added a new harnessd endpoint using
+// http.Get/http.Post/http.NewRequest directly instead of newHarnessRequest —
+// exactly the class of gap that caused this task (a dozen unauthenticated
+// calls that accumulated because nothing enforced the pattern).
+func TestRegression_AllHarnessdRequestsRouteThroughNewHarnessRequest(t *testing.T) {
+	files := []string{"api.go", "askuser.go", "approval.go"}
+
+	for _, file := range files {
+		file := file
+		t.Run(file, func(t *testing.T) {
+			fset := token.NewFileSet()
+			astFile, err := parser.ParseFile(fset, file, nil, 0)
+			if err != nil {
+				t.Fatalf("parse %s: %v", file, err)
+			}
+
+			for _, decl := range astFile.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				if rawHTTPCallAllowlist[fn.Name.Name] {
+					continue
+				}
+
+				ast.Inspect(fn.Body, func(n ast.Node) bool {
+					call, ok := n.(*ast.CallExpr)
+					if !ok {
+						return true
+					}
+					sel, ok := call.Fun.(*ast.SelectorExpr)
+					if !ok {
+						return true
+					}
+					pkgIdent, ok := sel.X.(*ast.Ident)
+					if !ok || pkgIdent.Name != "http" {
+						return true
+					}
+					if rawHTTPCallNames[sel.Sel.Name] {
+						pos := fset.Position(call.Pos())
+						t.Errorf(
+							"%s:%d: func %s calls http.%s directly instead of routing through newHarnessRequest — this bypasses harnessd authentication entirely",
+							file, pos.Line, fn.Name.Name, sel.Sel.Name,
+						)
+					}
+					return true
+				})
+			}
+		})
 	}
 }
