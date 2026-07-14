@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -123,4 +124,22 @@ func isEACCES(err error) bool {
 		}
 	}
 	return false
+}
+
+// TODO(BUG-1 red phase): stub only — does not yet confine anything.
+// EffectiveSandboxScope will resolve the per-call sandbox scope override.
+func EffectiveSandboxScope(ctx context.Context, defaultScope SandboxScope) SandboxScope {
+	return defaultScope
+}
+
+// TODO(BUG-1 red phase): stub only — passes every path through unchanged,
+// which is exactly today's vulnerable behavior. The real implementation
+// canonicalizes absPath (symlink-resolved) and verifies containment.
+func ConfineWorkspacePath(scope SandboxScope, workspaceRoot string, extraAllowedRoots []string, absPath string) (string, error) {
+	return absPath, nil
+}
+
+// TODO(BUG-1 red phase): stub only — delegates to the unconfined resolver.
+func ResolveWorkspacePathConfined(ctx context.Context, workspaceRoot, relativePath string, defaultScope SandboxScope) (string, error) {
+	return ResolveWorkspacePath(workspaceRoot, relativePath)
 }
