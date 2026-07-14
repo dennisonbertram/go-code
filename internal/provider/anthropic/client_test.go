@@ -1497,6 +1497,31 @@ func TestMapMessagesAssistantWithToolCall(t *testing.T) {
 	}
 }
 
+func TestMapMessagesPropagatesMarshalError(t *testing.T) {
+	t.Parallel()
+
+	msgs := []harness.Message{
+		{
+			Role: "assistant",
+			ToolCalls: []harness.ToolCall{
+				{ID: "bad", Name: "mytool", Arguments: "{not valid json}"},
+			},
+		},
+	}
+
+	out, err := mapMessages(msgs)
+	if err == nil {
+		content := "nil"
+		if len(out) > 0 {
+			content = string(out[0].Content)
+		}
+		t.Fatalf("expected marshal error for invalid tool-use input, got nil error with content=%q", content)
+	}
+	if !strings.Contains(err.Error(), "marshal") {
+		t.Fatalf("expected error to mention marshal, got: %v", err)
+	}
+}
+
 // --- Retry ---
 
 func testRetryConfig() *provider.RetryConfig {
