@@ -15,7 +15,8 @@ import (
 )
 
 // FetchTool returns a deferred tool for fetching URL content with bounded timeout and size.
-func FetchTool(client *http.Client) tools.Tool {
+func FetchTool(client *http.Client, networkAllowlist []string) tools.Tool {
+	client = tools.NewGuardedHTTPClient(client, networkAllowlist)
 	def := tools.Definition{
 		Name:         "fetch",
 		Description:  descriptions.Load("fetch"),

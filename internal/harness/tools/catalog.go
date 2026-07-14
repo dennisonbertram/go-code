@@ -45,8 +45,8 @@ func BuildCatalog(opts BuildOptions) ([]Tool, error) {
 		applyPatchTool(opts.WorkspaceRoot, opts.SandboxScope),
 		gitStatusTool(opts.WorkspaceRoot),
 		gitDiffTool(opts.WorkspaceRoot, opts.SandboxScope),
-		fetchTool(opts.HTTPClient),
-		downloadTool(opts.WorkspaceRoot, opts.HTTPClient, opts.SandboxScope),
+		fetchTool(opts.HTTPClient, opts.NetworkAllowlist),
+		downloadTool(opts.WorkspaceRoot, opts.HTTPClient, opts.SandboxScope, opts.NetworkAllowlist),
 		contextStatusTool(),
 		compactHistoryTool(opts.MessageSummarizer),
 	}

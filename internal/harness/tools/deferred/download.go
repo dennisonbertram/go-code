@@ -42,6 +42,7 @@ func DownloadTool(opts tools.BuildOptions) tools.Tool {
 	if client == nil {
 		client = http.DefaultClient
 	}
+	client = tools.NewGuardedHTTPClient(client, opts.NetworkAllowlist)
 	workspaceRoot := opts.WorkspaceRoot
 
 	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
