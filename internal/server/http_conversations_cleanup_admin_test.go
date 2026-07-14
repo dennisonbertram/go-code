@@ -31,6 +31,7 @@ func TestCleanupEndpoint_RequiresAdminScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateAPIKey(runs:write): %v", err)
 	}
+	writeKey = minCostRehash(t, writeToken, writeKey)
 	if err := ms.CreateAPIKey(context.Background(), writeKey); err != nil {
 		t.Fatalf("CreateAPIKey(runs:write): %v", err)
 	}
@@ -38,6 +39,7 @@ func TestCleanupEndpoint_RequiresAdminScope(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GenerateAPIKey(admin): %v", err)
 	}
+	adminKey = minCostRehash(t, adminToken, adminKey)
 	if err := ms.CreateAPIKey(context.Background(), adminKey); err != nil {
 		t.Fatalf("CreateAPIKey(admin): %v", err)
 	}

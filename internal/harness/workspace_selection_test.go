@@ -345,6 +345,7 @@ func TestRunRequest_WorkspaceType_ValidTypes(t *testing.T) {
 			},
 		},
 	)
+	t.Cleanup(func() { _ = runner.Shutdown(context.Background()) })
 
 	for _, wsType := range validTypes {
 		wsType := wsType
@@ -995,6 +996,16 @@ func TestWorktreeContainment_ToolCwdIsWorktree(t *testing.T) {
 			wsPath, _ = ev.Payload["workspace_path"].(string)
 			gotProvisioned = true
 		case EventToolCallCompleted:
+			// If the tool errored, surface the real error instead of running
+			// filesystem assertions that will fail with a misleading "no such file".
+			// The underlying intermittent tool error is a separate unresolved issue.
+			if errStr, ok := ev.Payload["error"].(string); ok && errStr != "" {
+				output, _ := ev.Payload["output"].(string)
+				if output != "" {
+					t.Fatalf("bash tool errored: %s; output: %s", errStr, output)
+				}
+				t.Fatalf("bash tool errored: %s", errStr)
+			}
 			// Run filesystem assertions while the worktree still exists.
 			if !gotToolDone {
 				gotToolDone = true
