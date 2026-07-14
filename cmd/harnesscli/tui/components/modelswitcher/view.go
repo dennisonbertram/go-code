@@ -135,22 +135,12 @@ func (m Model) viewProviderList(width int) string {
 			textWidth = 8
 		}
 
-		// Compute scroll window for providers (Issue #572).
+		// Compute scroll window for providers (Issue #572). scrollWindow()
+		// shares the same row budget as adjustProviderScroll() (BUG A —
+		// cursor freezes mid-scroll) so the rendered window can never fall
+		// out of sync with where adjustScroll() thinks the cursor is.
 		maxVisible := m.maxVisibleContentRows()
-		windowStart := m.providerScrollOffset
-		windowEnd := windowStart + maxVisible
-		if windowEnd > len(provs) {
-			windowEnd = len(provs)
-		}
-		// Reserve room for scroll indicators when items are hidden.
-		showAbove := windowStart > 0
-		showBelow := windowEnd < len(provs)
-		if showAbove && windowEnd > windowStart {
-			windowEnd--
-		}
-		if showBelow && windowEnd > windowStart {
-			windowEnd--
-		}
+		windowStart, windowEnd, showAbove, showBelow := scrollWindow(m.providerScrollOffset, len(provs), maxVisible)
 
 		if showAbove {
 			sb.WriteString(scrollIndicatorStyle.Render("... " + itoa(windowStart) + " more above"))
@@ -258,22 +248,12 @@ func (m Model) viewModelsForProvider(width int) string {
 		sb.WriteString(dimStyle.Render("No models available"))
 		sb.WriteByte('\n')
 	} else {
-		// Compute scroll window for models (Issue #572).
+		// Compute scroll window for models (Issue #572). scrollWindow()
+		// shares the same row budget as adjustModelScroll() (BUG A — cursor
+		// freezes mid-scroll) so the rendered window can never fall out of
+		// sync with where adjustScroll() thinks the cursor is.
 		maxVisible := m.maxVisibleContentRows()
-		windowStart := m.scrollOffset
-		windowEnd := windowStart + maxVisible
-		if windowEnd > len(visible) {
-			windowEnd = len(visible)
-		}
-		// Reserve room for scroll indicators when items are hidden.
-		showAbove := windowStart > 0
-		showBelow := windowEnd < len(visible)
-		if showAbove && windowEnd > windowStart {
-			windowEnd--
-		}
-		if showBelow && windowEnd > windowStart {
-			windowEnd--
-		}
+		windowStart, windowEnd, showAbove, showBelow := scrollWindow(m.scrollOffset, len(visible), maxVisible)
 
 		if showAbove {
 			sb.WriteString(scrollIndicatorStyle.Render("... " + itoa(windowStart) + " more above"))
@@ -420,21 +400,12 @@ func (m Model) viewFlatModelList(width int) string {
 		sb.WriteByte('\n')
 	} else {
 		// Compute scroll window for search results (Issue #572).
+		// scrollWindow() shares the same row budget as adjustModelScroll()
+		// (BUG A — cursor freezes mid-scroll) so the rendered window can
+		// never fall out of sync with where adjustScroll() thinks the
+		// cursor is.
 		maxVisible := m.maxVisibleContentRows()
-		windowStart := m.scrollOffset
-		windowEnd := windowStart + maxVisible
-		if windowEnd > len(visible) {
-			windowEnd = len(visible)
-		}
-		// Reserve room for scroll indicators when items are hidden.
-		showAbove := windowStart > 0
-		showBelow := windowEnd < len(visible)
-		if showAbove && windowEnd > windowStart {
-			windowEnd--
-		}
-		if showBelow && windowEnd > windowStart {
-			windowEnd--
-		}
+		windowStart, windowEnd, showAbove, showBelow := scrollWindow(m.scrollOffset, len(visible), maxVisible)
 
 		if showAbove {
 			sb.WriteString(scrollIndicatorStyle.Render("... " + itoa(windowStart) + " more above"))

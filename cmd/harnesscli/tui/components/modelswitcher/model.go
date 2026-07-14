@@ -287,22 +287,75 @@ func (m Model) adjustProviderScroll(total int) Model {
 	return m
 }
 
+// effectiveContentRows returns the number of item rows that can actually be
+// rendered within maxVisible once room for the "... N more above/below"
+// scroll indicator lines is set aside. This is the single source of truth
+// for the render-window budget: adjustScroll() (below) and every render loop
+// in view.go call scrollWindow(), which is built on this same function, so
+// the budget used to decide *when* to scroll and the budget used to decide
+// *what* to render can never drift apart again.
+//
+// Bug history: view.go used to shrink its own rendered window independently
+// (by up to two rows) whenever the "above"/"below" indicators were shown,
+// but adjustScroll() never learned about that shrinkage. Once both
+// indicators were showing at once, the selected row could fall permanently
+// outside the window actually rendered, freezing the visible cursor while
+// the "... N more below" counter kept changing on every keypress.
+//
+// The reservation here is deterministic — it depends only on whether the
+// list overflows the window at all (total > maxVisible), never on the
+// current scroll offset — so it cannot oscillate as the user scrolls. When
+// the list fits without scrolling, no rows are reserved (no indicators are
+// ever shown). When it doesn't fit, two rows are always reserved, even at
+// the very top or bottom of the list where only one indicator actually
+// renders; that trades a little density at the extremes for a budget that
+// can never point the render window past where the cursor is.
+func effectiveContentRows(total, maxVisible int) int {
+	if total <= maxVisible {
+		return maxVisible
+	}
+	reserved := maxVisible - 2
+	if reserved < 1 {
+		reserved = 1
+	}
+	return reserved
+}
+
+// scrollWindow computes the render window for a scrollable list: the
+// half-open [start, end) slice of the underlying list to render, and
+// whether the "more above" / "more below" indicators should be shown. Every
+// render loop in view.go calls this instead of independently shrinking its
+// own window, so the rendered window always agrees with the budget
+// adjustScroll() used to position scrollOffset.
+func scrollWindow(offset, total, maxVisible int) (start, end int, showAbove, showBelow bool) {
+	content := effectiveContentRows(total, maxVisible)
+	start = offset
+	end = start + content
+	if end > total {
+		end = total
+	}
+	showAbove = start > 0
+	showBelow = end < total
+	return start, end, showAbove, showBelow
+}
+
 // adjustScroll ensures the selected index is visible within the scroll window.
 // Follows the pattern from profilepicker/model.go.
 func adjustScroll(offset, selected, total, maxVisible int) int {
-	if total <= maxVisible {
+	content := effectiveContentRows(total, maxVisible)
+	if total <= content {
 		return 0
 	}
 	// Scroll down if selected moved below visible window.
-	if selected >= offset+maxVisible {
-		offset = selected - maxVisible + 1
+	if selected >= offset+content {
+		offset = selected - content + 1
 	}
 	// Scroll up if selected moved above visible window.
 	if selected < offset {
 		offset = selected
 	}
 	// Clamp offset to valid range.
-	maxOffset := total - maxVisible
+	maxOffset := total - content
 	if offset > maxOffset {
 		offset = maxOffset
 	}
