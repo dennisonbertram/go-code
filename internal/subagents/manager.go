@@ -287,13 +287,13 @@ func (m *manager) Create(ctx context.Context, req Request) (Subagent, error) {
 		}
 		return Subagent{}, err
 	}
+
+	m.mu.Lock()
 	managed.RunID = run.ID
 	managed.Status = run.Status
 	managed.Output = run.Output
 	managed.Error = run.Error
 	managed.UpdatedAt = time.Now().UTC()
-
-	m.mu.Lock()
 	m.subagents[id] = managed
 	// Snapshot the Subagent value while holding the lock and before the monitor
 	// goroutine starts. This prevents a data race between Create returning the
@@ -348,7 +348,10 @@ func (m *manager) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	m.refresh(managed)
-	if managed.Status == harness.RunStatusQueued || managed.Status == harness.RunStatusRunning || managed.Status == harness.RunStatusWaitingForUser {
+	m.mu.RLock()
+	status := managed.Status
+	m.mu.RUnlock()
+	if status == harness.RunStatusQueued || status == harness.RunStatusRunning || status == harness.RunStatusWaitingForUser {
 		return ErrActive
 	}
 	if err := m.cleanupWorkspace(ctx, managed); err != nil {
@@ -367,8 +370,12 @@ func (m *manager) Cancel(ctx context.Context, id string) error {
 	}
 
 	m.refresh(managed)
-	if !isSubagentTerminalStatus(managed.Status) {
-		if err := managed.runner.CancelRun(managed.RunID); err != nil {
+	m.mu.RLock()
+	status := managed.Status
+	runID := managed.RunID
+	m.mu.RUnlock()
+	if !isSubagentTerminalStatus(status) {
+		if err := managed.runner.CancelRun(runID); err != nil {
 			return err
 		}
 	}
