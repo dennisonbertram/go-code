@@ -28,6 +28,16 @@ type TUIConfig struct {
 	// uses a time-based seed for whimsical variety in real use; tests set a fixed
 	// non-zero seed so rendered snapshots are deterministic.
 	SpinnerSeed int64
+	// APIKey authenticates requests to the harnessd server
+	// ("Authorization: Bearer <APIKey>"), including the SSE event stream
+	// (see bridge.go's SSEBridgeOptions). Empty means unauthenticated,
+	// preserving today's default local behavior. The TUI package does not
+	// read this from disk itself — it is sourced from ~/.harness/config.json
+	// (written by "harnesscli auth login") and threaded in by
+	// cmd/harnesscli/main.go's newTUIConfig, reusing the same
+	// cmd/harnesscli/auth.go:loadConfig() the rest of the CLI already uses
+	// for this exact purpose.
+	APIKey string
 }
 
 // DefaultTUIConfig returns a TUIConfig with sensible defaults.

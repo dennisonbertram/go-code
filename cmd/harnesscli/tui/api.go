@@ -16,6 +16,33 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/modelswitcher"
 )
 
+// newHarnessRequest builds an HTTP request targeting the harnessd server and,
+// if apiKey is non-empty, attaches it as "Authorization: Bearer <apiKey>".
+// EVERY request that targets harnessd (TUIConfig.BaseURL) MUST be built
+// through this helper (or StartSSEBridgeWithOptions's SSEBridgeOptions.APIKey
+// for the SSE stream) — that is what prevents a future endpoint from being
+// added without authentication. Do NOT use this for requests to external
+// services (e.g. fetchOpenRouterModelsFromURL's call to openrouter.ai),
+// which must keep sending their own provider-specific credentials, never the
+// harnessd key — conflating the two would leak the harnessd key to a third
+// party.
+//
+// ctx is typically context.Background(): none of the tea.Cmd closures in
+// this file currently carry a request-scoped context (that would require
+// threading context.Context through every model.go call site, which is a
+// separate, more invasive change) — see the package-level note in
+// api_auth_test.go for the full audit of what is and isn't context-aware.
+func newHarnessRequest(ctx context.Context, method, url string, body io.Reader, apiKey string) (*http.Request, error) {
+	req, err := http.NewRequestWithContext(ctx, method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
+	return req, nil
+}
+
 type runCreateRequest struct {
 	Prompt          string `json:"prompt"`
 	ConversationID  string `json:"conversation_id,omitempty"`
@@ -84,7 +111,7 @@ type RemoteSubagent struct {
 // profile is the name of the capability profile to use (may be empty); it is
 // sent as the "profile" field so the server applies the profile's tool
 // restrictions and isolation.
-func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile, workspace string) tea.Cmd {
+func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile, workspace, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		body, _ := json.Marshal(runCreateRequest{
 			Prompt:          prompt,
@@ -97,7 +124,12 @@ func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffo
 			AllowFallback:   true,
 		})
 		url := strings.TrimRight(baseURL, "/") + "/v1/runs"
-		resp, err := http.Post(url, "application/json", bytes.NewReader(body))
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, url, bytes.NewReader(body), apiKey)
+		if err != nil {
+			return RunFailedMsg{Error: "start run: build request: " + err.Error()}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return RunFailedMsg{Error: err.Error()}
 		}
@@ -113,9 +145,9 @@ func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffo
 	}
 }
 
-func fetchRunsCmd(baseURL string) tea.Cmd {
+func fetchRunsCmd(baseURL, apiKey string) tea.Cmd {
 	return func() tea.Msg {
-		req, err := http.NewRequest(http.MethodGet, strings.TrimRight(baseURL, "/")+"/v1/runs", nil)
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, strings.TrimRight(baseURL, "/")+"/v1/runs", nil, apiKey)
 		if err != nil {
 			return RunsFetchedMsg{Err: "build request: " + err.Error()}
 		}
@@ -141,10 +173,10 @@ func fetchRunsCmd(baseURL string) tea.Cmd {
 	}
 }
 
-func cancelRunCmd(baseURL, runID string) tea.Cmd {
+func cancelRunCmd(baseURL, runID, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		endpoint := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/cancel"
-		req, err := http.NewRequest(http.MethodPost, endpoint, nil)
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, endpoint, nil, apiKey)
 		if err != nil {
 			return RunControlResultMsg{Kind: "cancel", RunID: runID, Err: "build request: " + err.Error()}
 		}
@@ -164,7 +196,7 @@ func cancelRunCmd(baseURL, runID string) tea.Cmd {
 	}
 }
 
-func replayRunCmd(baseURL, target string) tea.Cmd {
+func replayRunCmd(baseURL, target, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		body, err := json.Marshal(map[string]any{
 			"rollout_path": target,
@@ -174,7 +206,7 @@ func replayRunCmd(baseURL, target string) tea.Cmd {
 			return RunControlResultMsg{Kind: "replay", RunID: target, Err: "encode request: " + err.Error()}
 		}
 		endpoint := strings.TrimRight(baseURL, "/") + "/v1/runs/replay"
-		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body), apiKey)
 		if err != nil {
 			return RunControlResultMsg{Kind: "replay", RunID: target, Err: "build request: " + err.Error()}
 		}
@@ -200,14 +232,14 @@ func replayRunCmd(baseURL, target string) tea.Cmd {
 	}
 }
 
-func continueRunCmd(baseURL, runID, prompt string) tea.Cmd {
+func continueRunCmd(baseURL, runID, prompt, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		body, err := json.Marshal(map[string]string{"prompt": prompt})
 		if err != nil {
 			return RunFailedMsg{RunID: runID, Error: "continue: encode request: " + err.Error()}
 		}
 		endpoint := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/continue"
-		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body), apiKey)
 		if err != nil {
 			return RunFailedMsg{RunID: runID, Error: "continue: build request: " + err.Error()}
 		}
@@ -242,10 +274,14 @@ type modelsResponse struct {
 
 // fetchModelsCmd fetches the model list from the server's /v1/models endpoint.
 // On success it emits ModelsFetchedMsg; on failure it emits ModelsFetchErrorMsg.
-func fetchModelsCmd(baseURL string) tea.Cmd {
+func fetchModelsCmd(baseURL, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		url := strings.TrimRight(baseURL, "/") + "/v1/models"
-		resp, err := http.Get(url) //nolint:noctx
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, url, nil, apiKey)
+		if err != nil {
+			return ModelsFetchErrorMsg{Err: err.Error()}
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return ModelsFetchErrorMsg{Err: err.Error()}
 		}
@@ -265,6 +301,13 @@ func fetchModelsCmd(baseURL string) tea.Cmd {
 // This is called when the user has OpenRouter selected as their gateway.
 // Requires no authentication — the OpenRouter /models endpoint is public.
 // If apiKey is non-empty, the Authorization header is included for higher rate limits.
+//
+// IMPORTANT: apiKey here is the OpenRouter PROVIDER key (from
+// m.pendingAPIKeys["openrouter"]), never the harnessd auth key
+// (TUIConfig.APIKey). This call targets the external openrouter.ai API, not
+// harnessd — do NOT route it through newHarnessRequest or pass
+// TUIConfig.APIKey to it; that would leak the harnessd credential to a third
+// party.
 func fetchOpenRouterModelsCmd(apiKey string) tea.Cmd {
 	return fetchOpenRouterModelsFromURL("https://openrouter.ai/api/v1/models", apiKey)
 }
@@ -326,10 +369,14 @@ func fetchOpenRouterModelsFromURL(url, apiKey string) tea.Cmd {
 	}
 }
 
-func loadSubagentsCmd(baseURL string) tea.Cmd {
+func loadSubagentsCmd(baseURL, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		url := strings.TrimRight(baseURL, "/") + "/v1/subagents"
-		resp, err := http.Get(url) //nolint:noctx
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, url, nil, apiKey)
+		if err != nil {
+			return SubagentsLoadFailedMsg{Err: err.Error()}
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return SubagentsLoadFailedMsg{Err: err.Error()}
 		}
@@ -358,10 +405,14 @@ type providersResponse struct {
 
 // fetchProvidersCmd fetches the list of providers from the server's /v1/providers endpoint.
 // On success it emits ProvidersLoadedMsg; on failure it returns an empty list.
-func fetchProvidersCmd(baseURL string) tea.Cmd {
+func fetchProvidersCmd(baseURL, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		url := strings.TrimRight(baseURL, "/") + "/v1/providers"
-		resp, err := http.Get(url) //nolint:noctx
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, url, nil, apiKey)
+		if err != nil {
+			return ProvidersLoadedMsg{}
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return ProvidersLoadedMsg{}
 		}
@@ -387,11 +438,17 @@ func fetchProvidersCmd(baseURL string) tea.Cmd {
 
 // setProviderKeyCmd sends a provider API key to the server via PUT /v1/providers/{provider}/key.
 // On success (204) it emits APIKeySetMsg; on failure it returns a status message.
-func setProviderKeyCmd(baseURL, provider, apiKey string) tea.Cmd {
+//
+// providerKey is the key being configured for provider (e.g. an OpenAI or
+// Anthropic key) — it goes in the request BODY. harnessAPIKey is the
+// harnessd auth key (TUIConfig.APIKey) — it goes in the Authorization
+// header via newHarnessRequest. These are two distinct credentials; do not
+// conflate them.
+func setProviderKeyCmd(baseURL, provider, providerKey, harnessAPIKey string) tea.Cmd {
 	return func() tea.Msg {
 		url := strings.TrimRight(baseURL, "/") + "/v1/providers/" + provider + "/key"
-		body, _ := json.Marshal(map[string]string{"key": apiKey})
-		req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(body))
+		body, _ := json.Marshal(map[string]string{"key": providerKey})
+		req, err := newHarnessRequest(context.Background(), http.MethodPut, url, bytes.NewReader(body), harnessAPIKey)
 		if err != nil {
 			return ProvidersLoadedMsg{}
 		}
@@ -402,7 +459,7 @@ func setProviderKeyCmd(baseURL, provider, apiKey string) tea.Cmd {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
-			return APIKeySetMsg{Provider: provider, Key: apiKey}
+			return APIKeySetMsg{Provider: provider, Key: providerKey}
 		}
 		return ProvidersLoadedMsg{}
 	}
@@ -422,10 +479,14 @@ type profilesListResponse struct {
 
 // loadProfilesCmd fetches profile list from GET /v1/profiles.
 // On success it emits ProfilesLoadedMsg; on failure it emits ProfilesLoadedMsg with Err set.
-func loadProfilesCmd(baseURL string) tea.Cmd {
+func loadProfilesCmd(baseURL, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		url := strings.TrimRight(baseURL, "/") + "/v1/profiles"
-		resp, err := http.Get(url) //nolint:noctx
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, url, nil, apiKey)
+		if err != nil {
+			return ProfilesLoadedMsg{Err: err}
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return ProfilesLoadedMsg{Err: err}
 		}
@@ -523,10 +584,14 @@ func flattenJSON(obj map[string]any, indent string) []string {
 // GET /v1/conversations/{id}/runs.  On success it emits a SessionRunsFetchedMsg;
 // on failure (including 501 Not Implemented) it emits a zero SessionRunsFetchedMsg
 // so callers can handle the empty case gracefully.
-func fetchSessionRunsCmd(baseURL, conversationID string) tea.Cmd {
+func fetchSessionRunsCmd(baseURL, conversationID, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		url := strings.TrimRight(baseURL, "/") + "/v1/conversations/" + conversationID + "/runs"
-		resp, err := http.Get(url) //nolint:noctx
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, url, nil, apiKey)
+		if err != nil {
+			return SessionRunsFetchedMsg{}
+		}
+		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			return SessionRunsFetchedMsg{}
 		}
@@ -554,10 +619,10 @@ func fetchSessionRunsCmd(baseURL, conversationID string) tea.Cmd {
 // fetchConversationMessagesCmd fetches the message history for a resumed
 // conversation from GET /v1/conversations/{id}/messages. On success it emits
 // ConversationHistoryMsg; on failure it emits ConversationHistoryErrorMsg.
-func fetchConversationMessagesCmd(baseURL, conversationID string) tea.Cmd {
+func fetchConversationMessagesCmd(baseURL, conversationID, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		endpoint := strings.TrimRight(baseURL, "/") + "/v1/conversations/" + url.PathEscape(conversationID) + "/messages"
-		req, err := http.NewRequest(http.MethodGet, endpoint, nil)
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, endpoint, nil, apiKey)
 		if err != nil {
 			return ConversationHistoryErrorMsg{ConversationID: conversationID, Err: err.Error()}
 		}
@@ -595,9 +660,60 @@ func sseEventsURL(baseURL, runID string) string {
 	return strings.TrimRight(baseURL, "/") + "/v1/runs/" + runID + "/events"
 }
 
-// startSSEForRun starts the SSE bridge for the given run and returns the channel
-// and cancel func.
-func startSSEForRun(baseURL, runID string) (<-chan tea.Msg, func()) {
+// startSSEForRun starts the SSE bridge for the given run and returns the
+// channel and cancel func. apiKey, if non-empty, is sent as
+// "Authorization: Bearer <apiKey>" (see SSEBridgeOptions) — the same
+// harnessd auth key sourced from ~/.harness/config.json via
+// cmd/harnesscli/auth.go's newAuthedRequest pattern and threaded into
+// TUIConfig.APIKey by cmd/harnesscli/main.go's newTUIConfig.
+func startSSEForRun(baseURL, runID, apiKey string) (<-chan tea.Msg, func()) {
 	url := sseEventsURL(baseURL, runID)
-	return StartSSEBridge(context.Background(), url)
+	return StartSSEBridgeWithOptions(context.Background(), url, SSEBridgeOptions{APIKey: apiKey})
+}
+
+// startSSEForRunFrom starts the SSE bridge for the given run, resuming from
+// lastEventID via the Last-Event-ID header and authenticating with apiKey
+// (see SSEBridgeOptions). Used to reconnect after the stream drops mid-run
+// without losing or duplicating events, and without dropping authentication
+// on the resumed connection.
+func startSSEForRunFrom(baseURL, runID, lastEventID, apiKey string) (<-chan tea.Msg, func()) {
+	url := sseEventsURL(baseURL, runID)
+	return StartSSEBridgeWithOptions(context.Background(), url, SSEBridgeOptions{LastEventID: lastEventID, APIKey: apiKey})
+}
+
+// maxSSEReconnectAttempts bounds how many times the TUI will automatically
+// reconnect a dropped SSE stream for a single run before giving up and
+// surfacing a clear "connection lost" message to the user.
+const maxSSEReconnectAttempts = 5
+
+// sseReconnectBackoff returns the delay before reconnect attempt N
+// (1-indexed), growing exponentially from a short base and capped so the
+// TUI recovers quickly from a transient drop instead of leaving the user
+// staring at a dead stream for long.
+func sseReconnectBackoff(attempt int) time.Duration {
+	const base = 200 * time.Millisecond
+	const capDelay = 3 * time.Second
+	d := base
+	for i := 1; i < attempt; i++ {
+		d *= 2
+		if d >= capDelay {
+			return capDelay
+		}
+	}
+	return d
+}
+
+// reconnectSSECmd schedules a bounded, backed-off SSE reconnect attempt for
+// the given run that resumes exactly where the previous connection left off
+// via lastEventID and re-authenticates with apiKey (see startSSEForRunFrom
+// and internal/server/http_runs.go's Last-Event-ID handling). It always
+// yields SSEReconnectedMsg so Update() can decide whether the reconnect is
+// still wanted — the run may have been cancelled or completed while the
+// backoff was pending.
+func reconnectSSECmd(baseURL, runID, lastEventID, apiKey string, attempt int) tea.Cmd {
+	delay := sseReconnectBackoff(attempt)
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		ch, cancel := startSSEForRunFrom(baseURL, runID, lastEventID, apiKey)
+		return SSEReconnectedMsg{Ch: ch, Cancel: cancel}
+	})
 }
