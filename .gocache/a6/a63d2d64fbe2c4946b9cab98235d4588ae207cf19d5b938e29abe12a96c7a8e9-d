@@ -1,0 +1,12 @@
+./coordinator.go
+./manager.go
+./observer.go
+./openai_model.go
+./prompt_templates.go
+./reflector.go
+./store.go
+./store_postgres.go
+./store_sqlite.go
+./structured_reflection.go
+./token_estimator.go
+./types.go

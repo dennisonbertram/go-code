@@ -1,0 +1,8 @@
+./hook.go
+./interpolate.go
+./loader.go
+./preprocess.go
+./registry.go
+./resolver.go
+./trigger.go
+./types.go

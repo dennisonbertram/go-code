@@ -21,6 +21,38 @@ import (
 	"go-agent-harness/internal/systemprompt"
 )
 
+// messageMapToMessage converts a generic message map (as produced by
+// transcriptMsgsToMaps and consumed by the message replacer) into a harness
+// Message. It is the decode side of the compact_history map encoding.
+func messageMapToMessage(m map[string]any) Message {
+	msg := Message{}
+	if v, ok := m["role"].(string); ok {
+		msg.Role = v
+	}
+	if v, ok := m["content"].(string); ok {
+		msg.Content = v
+	}
+	if v, ok := m["name"].(string); ok {
+		msg.Name = v
+		if v == "compact_summary" {
+			msg.IsCompactSummary = true
+		}
+	}
+	if v, ok := m["tool_call_id"].(string); ok {
+		msg.ToolCallID = v
+	}
+	if tcs, ok := m["tool_calls"].([]map[string]any); ok {
+		msg.ToolCalls = make([]ToolCall, 0, len(tcs))
+		for _, tc := range tcs {
+			id, _ := tc["id"].(string)
+			name, _ := tc["name"].(string)
+			args, _ := tc["arguments"].(string)
+			msg.ToolCalls = append(msg.ToolCalls, ToolCall{ID: id, Name: name, Arguments: args})
+		}
+	}
+	return msg
+}
+
 type stepEngine struct {
 	runner                  *Runner
 	ctx                     context.Context
@@ -988,23 +1020,7 @@ func (se *stepEngine) run() {
 				compactStart := time.Now()
 				replaced := make([]Message, 0, len(replacedMaps))
 				for _, m := range replacedMaps {
-					msg := Message{}
-					if v, ok := m["role"].(string); ok {
-						msg.Role = v
-					}
-					if v, ok := m["content"].(string); ok {
-						msg.Content = v
-					}
-					if v, ok := m["name"].(string); ok {
-						msg.Name = v
-						if v == "compact_summary" {
-							msg.IsCompactSummary = true
-						}
-					}
-					if v, ok := m["tool_call_id"].(string); ok {
-						msg.ToolCallID = v
-					}
-					replaced = append(replaced, msg)
+					replaced = append(replaced, messageMapToMessage(m))
 				}
 				messages = replaced
 				r.setMessages(runID, messages)

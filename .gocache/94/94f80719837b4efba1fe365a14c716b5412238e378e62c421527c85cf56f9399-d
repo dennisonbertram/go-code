@@ -1,0 +1,12 @@
+./bootstrap.go
+./container.go
+./doc.go
+./hetzner.go
+./local.go
+./pool.go
+./pool_workspace.go
+./provider.go
+./registry.go
+./vm.go
+./workspace.go
+./worktree.go

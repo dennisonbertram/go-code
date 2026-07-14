@@ -1,0 +1,5 @@
+./detect.go
+./exec.go
+./flyio.go
+./platform.go
+./railway.go
