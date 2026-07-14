@@ -2579,7 +2579,16 @@ func (r *Runner) filteredToolsForRun(runID string) []ToolDefinition {
 		allowed[name] = true
 	}
 	for name := range AlwaysAvailableTools {
-		allowed[name] = true
+		// When a run explicitly restricts its tools via allowed_tools, only
+		// AskUserQuestion is truly unconditional infrastructure. find_tool and
+		// skill must NOT be silently force-granted: find_tool can surface
+		// deferred tools and skill can activate a skill constraint whose own
+		// allowlist replaces this base filter — both would let a restricted run
+		// reach tools outside its allowed_tools boundary (issue #527). They are
+		// available only when the caller lists them explicitly.
+		if name == "AskUserQuestion" || allowed[name] {
+			allowed[name] = true
+		}
 	}
 	filtered := make([]ToolDefinition, 0, len(allowed))
 	for _, def := range defs {

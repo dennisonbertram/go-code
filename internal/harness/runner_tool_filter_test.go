@@ -901,3 +901,73 @@ type funcProvider struct {
 func (p *funcProvider) Complete(ctx context.Context, req CompletionRequest) (CompletionResult, error) {
 	return p.fn(ctx, req)
 }
+
+// TestFindToolSkill_NotForceGrantedInRestrictedRun is the regression test for
+// the issue #527 security fix: when a run explicitly sets allowed_tools,
+// find_tool and skill must NOT be silently force-granted (they can reach tools
+// outside the allowlist — skill by activating a broader skill constraint), while
+// AskUserQuestion (pure infrastructure) stays available. When the caller lists
+// find_tool explicitly, it is available.
+func TestFindToolSkill_NotForceGrantedInRestrictedRun(t *testing.T) {
+	t.Parallel()
+
+	registry := NewRegistry()
+	reg := func(name string) {
+		_ = registry.Register(ToolDefinition{
+			Name: name, Description: name,
+			Parameters: map[string]any{"type": "object"},
+		}, func(_ context.Context, _ json.RawMessage) (string, error) { return `{}`, nil })
+	}
+	// Register the always-available infra tools plus a normal restricted tool.
+	for _, n := range []string{"AskUserQuestion", "find_tool", "skill", "read_thing", "bash"} {
+		reg(n)
+	}
+
+	provider := &stubProvider{turns: []CompletionResult{{Content: "done"}}}
+	runner := NewRunner(provider, registry, RunnerConfig{DefaultModel: "gpt-4.1-mini", MaxSteps: 1})
+
+	// Restricted run: allowed_tools = [read_thing] only.
+	run, err := runner.StartRun(RunRequest{Prompt: "x", AllowedTools: []string{"read_thing"}})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	if _, err := collectRunEvents(t, runner, run.ID); err != nil {
+		t.Fatalf("collect events: %v", err)
+	}
+
+	names := make(map[string]bool)
+	for _, d := range runner.filteredToolsForRun(run.ID) {
+		names[d.Name] = true
+	}
+	if !names["read_thing"] {
+		t.Error("expected the explicitly-allowed tool read_thing to be available")
+	}
+	if !names["AskUserQuestion"] {
+		t.Error("expected AskUserQuestion to remain available (unconditional infrastructure)")
+	}
+	if names["find_tool"] {
+		t.Error("SECURITY: find_tool must NOT be force-granted to a run that restricted allowed_tools (issue #527)")
+	}
+	if names["skill"] {
+		t.Error("SECURITY: skill must NOT be force-granted to a run that restricted allowed_tools (issue #527)")
+	}
+	if names["bash"] {
+		t.Error("bash was not in allowed_tools and must be filtered out")
+	}
+
+	// When find_tool is explicitly allowed, it is available.
+	run2, err := runner.StartRun(RunRequest{Prompt: "y", AllowedTools: []string{"read_thing", "find_tool"}})
+	if err != nil {
+		t.Fatalf("start run2: %v", err)
+	}
+	if _, err := collectRunEvents(t, runner, run2.ID); err != nil {
+		t.Fatalf("collect events2: %v", err)
+	}
+	names2 := make(map[string]bool)
+	for _, d := range runner.filteredToolsForRun(run2.ID) {
+		names2[d.Name] = true
+	}
+	if !names2["find_tool"] {
+		t.Error("find_tool should be available when explicitly listed in allowed_tools")
+	}
+}
