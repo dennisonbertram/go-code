@@ -276,6 +276,15 @@ func (e *Engine) Subscribe(runID string) ([]Event, <-chan Event, func(), error) 
 // means unlimited tokens. The budget can be further constrained by
 // RunRequest-level configuration (handled by the API layer before calling Start).
 func (e *Engine) execute(runID string, reg registeredScript, args any) {
+	// Defense in depth: this runs on a bare `go e.execute(...)` goroutine
+	// with no caller to recover a panic. executeScript already recovers
+	// panics from the script body itself, but this guards against any
+	// panic elsewhere in the execution/emit path (e.g. a future bug in
+	// emit) so it can never take down the whole process.
+	defer func() {
+		_ = recover()
+	}()
+
 	budget := newBudget(e.defaultBudget)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -358,15 +367,31 @@ func (e *Engine) executeScriptAsync(runID string, reg registeredScript, ctx *Con
 // Events are sequenced per run. Subscribers that are too slow (channel full)
 // have the event dropped rather than blocking the emitter. This prevents a
 // slow subscriber from stalling workflow execution.
+//
+// The sequence bump, the store append, and the subscriber fan-out all
+// happen while holding e.mu. This is required for correctness, not just
+// convenience:
+//   - Subscribe's cancel() also closes the channel under e.mu. Holding the
+//     lock across the send loop here makes "send" and "close" mutually
+//     exclusive, so emit can never send on a channel that cancel is in the
+//     process of (or has already) closed.
+//   - Subscribe itself reads history (via the store) and registers its
+//     channel under e.mu (see Subscribe below). Holding the lock across
+//     AppendEvent + fan-out here makes "append+deliver" atomic against
+//     "read-history+register", so an event can never land in the gap
+//     between a subscriber's history snapshot and its channel
+//     registration.
+//
+// The default in-memory Store has no I/O and never calls back into the
+// Engine, so holding e.mu across AppendEvent is bounded and safe. Sends to
+// subscriber channels remain non-blocking (select/default), so the
+// critical section stays bounded even if a store implementation is slower.
 func (e *Engine) emit(runID string, eventType EventType, payload map[string]any) {
 	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	e.eventSeqs[runID]++
 	seq := e.eventSeqs[runID]
-	liveSubs := make([]chan Event, 0, len(e.subs[runID]))
-	for ch := range e.subs[runID] {
-		liveSubs = append(liveSubs, ch)
-	}
-	e.mu.Unlock()
 
 	event := Event{
 		Seq:       seq,
@@ -378,7 +403,7 @@ func (e *Engine) emit(runID string, eventType EventType, payload map[string]any)
 
 	_ = e.store.AppendEvent(context.Background(), &event)
 
-	for _, ch := range liveSubs {
+	for ch := range e.subs[runID] {
 		select {
 		case ch <- event:
 		default:
