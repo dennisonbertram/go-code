@@ -12,7 +12,7 @@ import (
 	"go-agent-harness/internal/harness/tools/descriptions"
 )
 
-func lspDiagnosticsTool(workspaceRoot string) Tool {
+func lspDiagnosticsTool(workspaceRoot string, sandboxScope SandboxScope) Tool {
 	def := Definition{
 		Name:         "lsp_diagnostics",
 		Description:  descriptions.Load("lsp_diagnostics"),
@@ -40,7 +40,7 @@ func lspDiagnosticsTool(workspaceRoot string) Tool {
 		}
 		target := "./..."
 		if strings.TrimSpace(args.FilePath) != "" {
-			absPath, err := ResolveWorkspacePath(workspaceRoot, args.FilePath)
+			absPath, err := ResolveWorkspacePathConfined(ctx, workspaceRoot, args.FilePath, sandboxScope)
 			if err != nil {
 				return "", err
 			}
@@ -55,7 +55,7 @@ func lspDiagnosticsTool(workspaceRoot string) Tool {
 	return Tool{Definition: def, Handler: handler}
 }
 
-func lspReferencesTool(workspaceRoot string) Tool {
+func lspReferencesTool(workspaceRoot string, sandboxScope SandboxScope) Tool {
 	def := Definition{
 		Name:         "lsp_references",
 		Description:  descriptions.Load("lsp_references"),
@@ -89,7 +89,7 @@ func lspReferencesTool(workspaceRoot string) Tool {
 			return "", fmt.Errorf("resolve workspace root: %w", err)
 		}
 		if strings.TrimSpace(args.Path) != "" {
-			resolved, err := ResolveWorkspacePath(workspaceRoot, args.Path)
+			resolved, err := ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, sandboxScope)
 			if err != nil {
 				return "", err
 			}

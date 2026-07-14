@@ -32,21 +32,21 @@ func BuildCatalog(opts BuildOptions) ([]Tool, error) {
 
 	tools := []Tool{
 		askUserQuestionTool(opts.AskUserBroker, opts.AskUserTimeout),
-		observationalMemoryTool(opts.WorkspaceRoot, opts.MemoryManager, opts.AgentRunner),
-		readTool(opts.WorkspaceRoot),
-		writeTool(opts.WorkspaceRoot),
-		editTool(opts.WorkspaceRoot),
+		observationalMemoryTool(opts.WorkspaceRoot, opts.MemoryManager, opts.AgentRunner, opts.SandboxScope),
+		readTool(opts.WorkspaceRoot, opts.SandboxScope),
+		writeTool(opts.WorkspaceRoot, opts.SandboxScope),
+		editTool(opts.WorkspaceRoot, opts.SandboxScope),
 		bashTool(jobManager),
 		jobOutputTool(jobManager),
 		jobKillTool(jobManager),
-		lsTool(opts.WorkspaceRoot),
-		globTool(opts.WorkspaceRoot),
-		grepTool(opts.WorkspaceRoot),
-		applyPatchTool(opts.WorkspaceRoot),
+		lsTool(opts.WorkspaceRoot, opts.SandboxScope),
+		globTool(opts.WorkspaceRoot, opts.SandboxScope),
+		grepTool(opts.WorkspaceRoot, opts.SandboxScope),
+		applyPatchTool(opts.WorkspaceRoot, opts.SandboxScope),
 		gitStatusTool(opts.WorkspaceRoot),
-		gitDiffTool(opts.WorkspaceRoot),
+		gitDiffTool(opts.WorkspaceRoot, opts.SandboxScope),
 		fetchTool(opts.HTTPClient),
-		downloadTool(opts.WorkspaceRoot, opts.HTTPClient),
+		downloadTool(opts.WorkspaceRoot, opts.HTTPClient, opts.SandboxScope),
 		contextStatusTool(),
 		compactHistoryTool(opts.MessageSummarizer),
 	}
@@ -55,7 +55,7 @@ func BuildCatalog(opts BuildOptions) ([]Tool, error) {
 		tools = append(tools, todosTool(todos))
 	}
 	if opts.EnableLSP {
-		tools = append(tools, lspDiagnosticsTool(opts.WorkspaceRoot), lspReferencesTool(opts.WorkspaceRoot), lspRestartTool(opts.WorkspaceRoot))
+		tools = append(tools, lspDiagnosticsTool(opts.WorkspaceRoot, opts.SandboxScope), lspReferencesTool(opts.WorkspaceRoot, opts.SandboxScope), lspRestartTool(opts.WorkspaceRoot))
 	}
 	if opts.Sourcegraph.Endpoint != "" {
 		tools = append(tools, sourcegraphTool(opts.HTTPClient, opts.Sourcegraph))

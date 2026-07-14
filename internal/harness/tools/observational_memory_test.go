@@ -70,7 +70,7 @@ func (r *reviewRunnerStub) RunPrompt(_ context.Context, prompt string) (string, 
 }
 
 func TestObservationalMemoryToolStatusWithoutManager(t *testing.T) {
-	tool := observationalMemoryTool(t.TempDir(), nil, nil)
+	tool := observationalMemoryTool(t.TempDir(), nil, nil, SandboxScopeUnrestricted)
 	out, err := tool.Handler(context.WithValue(context.Background(), ContextKeyRunID, "run_1"), json.RawMessage(`{"action":"status"}`))
 	if err != nil {
 		t.Fatalf("handler error: %v", err)
@@ -88,7 +88,7 @@ func TestObservationalMemoryToolStatusWithoutManager(t *testing.T) {
 func TestObservationalMemoryToolExportWritesFile(t *testing.T) {
 	workspace := t.TempDir()
 	stub := &memoryStub{status: om.Status{Mode: om.ModeLocalCoordinator, MemoryID: "default|conv|agent", Scope: om.ScopeKey{TenantID: "default", ConversationID: "conv", AgentID: "agent"}, Enabled: true, UpdatedAt: time.Now().UTC()}}
-	tool := observationalMemoryTool(workspace, stub, nil)
+	tool := observationalMemoryTool(workspace, stub, nil, SandboxScopeUnrestricted)
 	ctx := context.WithValue(context.Background(), ContextKeyRunMetadata, RunMetadata{RunID: "run_1", TenantID: "default", ConversationID: "conv", AgentID: "agent"})
 	ctx = context.WithValue(ctx, ContextKeyRunID, "run_1")
 	out, err := tool.Handler(ctx, json.RawMessage(`{"action":"export","export":{"format":"json","path":"exports/memory.json"}}`))
@@ -119,7 +119,7 @@ func TestObservationalMemoryToolExportWritesFile(t *testing.T) {
 func TestObservationalMemoryToolEnableUsesConfig(t *testing.T) {
 	workspace := t.TempDir()
 	stub := &memoryStub{status: om.Status{Mode: om.ModeLocalCoordinator, MemoryID: "default|conv|agent", Scope: om.ScopeKey{TenantID: "default", ConversationID: "conv", AgentID: "agent"}, Enabled: false, UpdatedAt: time.Now().UTC()}}
-	tool := observationalMemoryTool(workspace, stub, nil)
+	tool := observationalMemoryTool(workspace, stub, nil, SandboxScopeUnrestricted)
 	ctx := context.WithValue(context.Background(), ContextKeyRunMetadata, RunMetadata{RunID: "run_1", TenantID: "default", ConversationID: "conv", AgentID: "agent"})
 	ctx = context.WithValue(ctx, ContextKeyRunID, "run_1")
 	out, err := tool.Handler(ctx, json.RawMessage(`{"action":"enable","config":{"observe_min_tokens":11,"snippet_max_tokens":22,"reflect_threshold_tokens":33}}`))
@@ -144,7 +144,7 @@ func TestObservationalMemoryToolReviewCallsRunner(t *testing.T) {
 		exported: om.ExportResult{Format: "markdown", Content: "# memory\n- note", Bytes: 14},
 	}
 	runner := &reviewRunnerStub{out: "analysis output"}
-	tool := observationalMemoryTool(workspace, stub, runner)
+	tool := observationalMemoryTool(workspace, stub, runner, SandboxScopeUnrestricted)
 	ctx := context.WithValue(context.Background(), ContextKeyRunMetadata, RunMetadata{RunID: "run_1", TenantID: "default", ConversationID: "conv", AgentID: "agent"})
 	ctx = context.WithValue(ctx, ContextKeyRunID, "run_1")
 
@@ -164,7 +164,7 @@ func TestObservationalMemoryToolReviewCallsRunner(t *testing.T) {
 }
 
 func TestObservationalMemoryToolRejectsUnsupportedAction(t *testing.T) {
-	tool := observationalMemoryTool(t.TempDir(), &memoryStub{}, nil)
+	tool := observationalMemoryTool(t.TempDir(), &memoryStub{}, nil, SandboxScopeUnrestricted)
 	ctx := context.WithValue(context.Background(), ContextKeyRunID, "run_1")
 	ctx = context.WithValue(ctx, ContextKeyRunMetadata, RunMetadata{RunID: "run_1", ConversationID: "conv"})
 	if _, err := tool.Handler(ctx, json.RawMessage(`{"action":"unknown"}`)); err == nil {
@@ -173,7 +173,7 @@ func TestObservationalMemoryToolRejectsUnsupportedAction(t *testing.T) {
 }
 
 func TestObservationalMemoryToolRequiresRunContext(t *testing.T) {
-	tool := observationalMemoryTool(t.TempDir(), &memoryStub{}, nil)
+	tool := observationalMemoryTool(t.TempDir(), &memoryStub{}, nil, SandboxScopeUnrestricted)
 	if _, err := tool.Handler(context.Background(), json.RawMessage(`{"action":"status"}`)); err == nil {
 		t.Fatalf("expected run context error")
 	}
