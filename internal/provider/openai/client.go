@@ -1497,6 +1497,7 @@ type responsesStreamState struct {
 	content      strings.Builder
 	toolCalls    map[string]*responsesStreamedToolCall // keyed by call_id
 	toolCallKeys []string                              // preserves insertion order
+	itemToCall   map[string]string                     // item_id -> call_id
 	usage        *responsesUsage
 }
 
@@ -1513,7 +1514,8 @@ func (c *Client) decodeResponsesStreamingResponse(model string, body io.Reader, 
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 
 	state := &responsesStreamState{
-		toolCalls: make(map[string]*responsesStreamedToolCall),
+		toolCalls:  make(map[string]*responsesStreamedToolCall),
+		itemToCall: make(map[string]string),
 	}
 
 	var currentEvent string
@@ -1598,12 +1600,14 @@ type responsesTextDeltaEvent struct {
 
 // responsesFuncArgsDeltaEvent is the payload of response.function_call_arguments.delta events.
 type responsesFuncArgsDeltaEvent struct {
+	ItemID string `json:"item_id"`
 	CallID string `json:"call_id"`
 	Delta  string `json:"delta"`
 }
 
 // responsesFuncArgsDoneEvent is the payload of response.function_call_arguments.done events.
 type responsesFuncArgsDoneEvent struct {
+	ItemID    string `json:"item_id"`
 	CallID    string `json:"call_id"`
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
@@ -1612,6 +1616,12 @@ type responsesFuncArgsDoneEvent struct {
 // responsesOutputItemDoneEvent is the payload of response.output_item.done events.
 // Used to capture function_call metadata (name, call_id) for tool calls.
 type responsesOutputItemDoneEvent struct {
+	Item responsesOutputItem `json:"item"`
+}
+
+// responsesOutputItemAddedEvent is the payload of response.output_item.added events.
+// Used to establish the item_id -> call_id mapping for streaming tool calls.
+type responsesOutputItemAddedEvent struct {
 	Item responsesOutputItem `json:"item"`
 }
 
@@ -1698,14 +1708,18 @@ func processResponsesSSEBlock(event, data string, state *responsesStreamState, s
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
 			return false, fmt.Errorf("decode response.function_call_arguments.delta: %w", err)
 		}
-		if ev.CallID != "" {
-			tc := state.ensureToolCall(ev.CallID)
+		callID := ev.CallID
+		if callID == "" {
+			callID = state.itemToCall[ev.ItemID]
+		}
+		if callID != "" {
+			tc := state.ensureToolCall(callID)
 			if ev.Delta != "" {
 				tc.Arguments.WriteString(ev.Delta)
 				if streamFn != nil {
 					streamFn(harness.CompletionDelta{
 						ToolCall: harness.ToolCallDelta{
-							ID:        ev.CallID,
+							ID:        callID,
 							Arguments: ev.Delta,
 						},
 					})
@@ -1718,8 +1732,12 @@ func processResponsesSSEBlock(event, data string, state *responsesStreamState, s
 		if err := json.Unmarshal([]byte(data), &ev); err != nil {
 			return false, fmt.Errorf("decode response.function_call_arguments.done: %w", err)
 		}
-		if ev.CallID != "" {
-			tc := state.ensureToolCall(ev.CallID)
+		callID := ev.CallID
+		if callID == "" {
+			callID = state.itemToCall[ev.ItemID]
+		}
+		if callID != "" {
+			tc := state.ensureToolCall(callID)
 			if ev.Name != "" {
 				tc.Name = ev.Name
 			}
@@ -1728,6 +1746,20 @@ func processResponsesSSEBlock(event, data string, state *responsesStreamState, s
 			if ev.Arguments != "" {
 				tc.Arguments.Reset()
 				tc.Arguments.WriteString(ev.Arguments)
+			}
+		}
+
+	case "response.output_item.added":
+		// This event carries the initial item metadata including id and call_id for function calls.
+		var ev responsesOutputItemAddedEvent
+		if err := json.Unmarshal([]byte(data), &ev); err != nil {
+			return false, fmt.Errorf("decode response.output_item.added: %w", err)
+		}
+		if ev.Item.Type == "function_call" && ev.Item.ID != "" && ev.Item.CallID != "" {
+			state.itemToCall[ev.Item.ID] = ev.Item.CallID
+			tc := state.ensureToolCall(ev.Item.CallID)
+			if ev.Item.Name != "" {
+				tc.Name = ev.Item.Name
 			}
 		}
 
