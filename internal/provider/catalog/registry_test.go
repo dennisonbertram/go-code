@@ -496,6 +496,113 @@ func TestIsConfigured_EnvFallback(t *testing.T) {
 	}
 }
 
+func TestCanonicalModelForProvider_StripsMatchingPrefix(t *testing.T) {
+	t.Parallel()
+	cat := registryTestCatalog()
+	reg := NewProviderRegistry(cat)
+
+	// An OpenRouter-qualified slug whose prefix matches the target provider.
+	got := reg.CanonicalModelForProvider("deepseek/deepseek-v4-flash", "deepseek")
+	if got != "deepseek-v4-flash" {
+		t.Errorf("CanonicalModelForProvider = %q, want deepseek-v4-flash", got)
+	}
+}
+
+func TestCanonicalModelForProvider_NonMatchingPrefix(t *testing.T) {
+	t.Parallel()
+	cat := registryTestCatalog()
+	reg := NewProviderRegistry(cat)
+
+	// An OpenRouter-qualified slug whose prefix does NOT match the target provider.
+	got := reg.CanonicalModelForProvider("openai/gpt-4.1", "deepseek")
+	if got != "openai/gpt-4.1" {
+		t.Errorf("CanonicalModelForProvider = %q, want unchanged for non-matching prefix", got)
+	}
+}
+
+func TestCanonicalModelForProvider_OpenRouterPreservesSlug(t *testing.T) {
+	t.Parallel()
+	cat := registryTestCatalog()
+	reg := NewProviderRegistry(cat)
+
+	// OpenRouter provider always preserves qualified slugs.
+	got := reg.CanonicalModelForProvider("deepseek/deepseek-v4-flash", "openrouter")
+	if got != "deepseek/deepseek-v4-flash" {
+		t.Errorf("CanonicalModelForProvider for openrouter = %q, want unchanged", got)
+	}
+}
+
+func TestCanonicalModelForProvider_BareIDPassesThrough(t *testing.T) {
+	t.Parallel()
+	cat := registryTestCatalog()
+	reg := NewProviderRegistry(cat)
+
+	// A bare (non-qualified) model ID is returned unchanged.
+	got := reg.CanonicalModelForProvider("gpt-4.1-mini", "openai")
+	if got != "gpt-4.1-mini" {
+		t.Errorf("CanonicalModelForProvider bare ID = %q, want gpt-4.1-mini", got)
+	}
+}
+
+func TestCanonicalModelForProvider_AliasResolution(t *testing.T) {
+	t.Parallel()
+	cat := registryTestCatalog()
+	reg := NewProviderRegistry(cat)
+
+	// Bare ID that is an alias in the provider's catalog entry.
+	got := reg.CanonicalModelForProvider("deepseek", "deepseek")
+	if got != "deepseek-chat" {
+		t.Errorf("CanonicalModelForProvider alias = %q, want deepseek-chat", got)
+	}
+}
+
+func TestCanonicalModelForProvider_EmptyInput(t *testing.T) {
+	t.Parallel()
+	cat := registryTestCatalog()
+	reg := NewProviderRegistry(cat)
+
+	got := reg.CanonicalModelForProvider("", "deepseek")
+	if got != "" {
+		t.Errorf("CanonicalModelForProvider empty model = %q, want empty", got)
+	}
+}
+
+func TestCanonicalModelForProvider_XAIPrefixAlias(t *testing.T) {
+	t.Parallel()
+	cat := registryTestCatalog()
+	cat.Providers["xai"] = ProviderEntry{
+		DisplayName: "xAI",
+		Models: map[string]Model{
+			"grok-3-mini": {ContextWindow: 131072},
+		},
+	}
+	reg := NewProviderRegistry(cat)
+
+	// x-ai prefix is a known alias for xai provider.
+	got := reg.CanonicalModelForProvider("x-ai/grok-3-mini", "xai")
+	if got != "grok-3-mini" {
+		t.Errorf("CanonicalModelForProvider x-ai prefix = %q, want grok-3-mini", got)
+	}
+}
+
+func TestCanonicalModelForProvider_GooglePrefixForGemini(t *testing.T) {
+	t.Parallel()
+	cat := registryTestCatalog()
+	cat.Providers["gemini"] = ProviderEntry{
+		DisplayName: "Google Gemini",
+		Models: map[string]Model{
+			"gemini-2.5-flash": {ContextWindow: 1048576},
+		},
+	}
+	reg := NewProviderRegistry(cat)
+
+	// google prefix is a known alias for gemini provider.
+	got := reg.CanonicalModelForProvider("google/gemini-2.5-flash", "gemini")
+	if got != "gemini-2.5-flash" {
+		t.Errorf("CanonicalModelForProvider google prefix = %q, want gemini-2.5-flash", got)
+	}
+}
+
 func TestIsConfigured_UnknownProvider(t *testing.T) {
 	t.Parallel()
 	cat := registryTestCatalog()

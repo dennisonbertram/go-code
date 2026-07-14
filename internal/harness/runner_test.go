@@ -4350,6 +4350,196 @@ func TestResolveProviderByNameFallback(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// CanonicalModelForProvider regression tests (issue #574)
+// ---------------------------------------------------------------------------
+
+// TestRunnerCanonicalizesModelForDirectProvider verifies that when a run request
+// specifies a preferred direct (non-OpenRouter) provider and the model is an
+// OpenRouter-qualified slug, the runner canonicalizes the model by stripping the
+// OpenRouter provider prefix before storing it in the run state.
+func TestRunnerCanonicalizesModelForDirectProvider(t *testing.T) {
+	t.Parallel()
+
+	cat := &catalog.Catalog{
+		Providers: map[string]catalog.ProviderEntry{
+			"deepseek": {
+				DisplayName: "DeepSeek",
+				APIKeyEnv:   "DEEPSEEK_API_KEY",
+				Models: map[string]catalog.Model{
+					"deepseek-v4-flash": {DisplayName: "DeepSeek V4 Flash", ContextWindow: 64000},
+				},
+			},
+		},
+	}
+
+	deepseekProvider := &namedProvider{name: "deepseek", result: CompletionResult{Content: "deepseek response"}}
+
+	registry := catalog.NewProviderRegistryWithEnv(cat, func(key string) string {
+		if key == "DEEPSEEK_API_KEY" {
+			return "fake-ds-key"
+		}
+		return ""
+	})
+	registry.SetClientFactory(func(apiKey, baseURL, providerName string) (catalog.ProviderClient, error) {
+		return deepseekProvider, nil
+	})
+
+	defaultProvider := &namedProvider{name: "default", result: CompletionResult{Content: "ok"}}
+	runner := NewRunner(defaultProvider, NewRegistry(), RunnerConfig{
+		DefaultModel:     "gpt-4.1-mini",
+		MaxSteps:         2,
+		ProviderRegistry: registry,
+	})
+
+	// Run with an OpenRouter-qualified deepseek slug and a preferred deepseek provider.
+	run, err := runner.StartRun(RunRequest{
+		Prompt:       "use deepseek v4 flash",
+		Model:        "deepseek/deepseek-v4-flash",
+		ProviderName: "deepseek",
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	_, err = collectRunEvents(t, runner, run.ID)
+	if err != nil {
+		t.Fatalf("collect events: %v", err)
+	}
+
+	state, ok := runner.GetRun(run.ID)
+	if !ok {
+		t.Fatalf("expected run state")
+	}
+	// The model should have been canonicalized to the native ID.
+	if state.Model != "deepseek-v4-flash" {
+		t.Errorf("expected canonical model deepseek-v4-flash, got %q", state.Model)
+	}
+	if state.ProviderName != "deepseek" {
+		t.Errorf("expected provider_name deepseek, got %q", state.ProviderName)
+	}
+}
+
+// TestRunnerPreservesOpenRouterSlugForOpenRouterProvider verifies that when the
+// preferred provider IS OpenRouter, the OpenRouter-qualified slug is preserved.
+func TestRunnerPreservesOpenRouterSlugForOpenRouterProvider(t *testing.T) {
+	t.Parallel()
+
+	cat := &catalog.Catalog{
+		Providers: map[string]catalog.ProviderEntry{
+			"openrouter": {
+				DisplayName: "OpenRouter",
+				APIKeyEnv:   "OPENROUTER_API_KEY",
+				Models: map[string]catalog.Model{
+					"deepseek/deepseek-v4-flash": {DisplayName: "DeepSeek V4 Flash (via OR)", ContextWindow: 64000},
+				},
+			},
+		},
+	}
+
+	orProvider := &namedProvider{name: "openrouter", result: CompletionResult{Content: "or response"}}
+
+	registry := catalog.NewProviderRegistryWithEnv(cat, func(key string) string {
+		if key == "OPENROUTER_API_KEY" {
+			return "fake-or-key"
+		}
+		return ""
+	})
+	registry.SetClientFactory(func(apiKey, baseURL, providerName string) (catalog.ProviderClient, error) {
+		return orProvider, nil
+	})
+
+	defaultProvider := &namedProvider{name: "default", result: CompletionResult{Content: "ok"}}
+	runner := NewRunner(defaultProvider, NewRegistry(), RunnerConfig{
+		DefaultModel:     "gpt-4.1-mini",
+		MaxSteps:         2,
+		ProviderRegistry: registry,
+	})
+
+	// The OpenRouter slug must be preserved when routing to openrouter.
+	run, err := runner.StartRun(RunRequest{
+		Prompt:       "use deepseek v4 flash via openrouter",
+		Model:        "deepseek/deepseek-v4-flash",
+		ProviderName: "openrouter",
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	_, err = collectRunEvents(t, runner, run.ID)
+	if err != nil {
+		t.Fatalf("collect events: %v", err)
+	}
+
+	state, ok := runner.GetRun(run.ID)
+	if !ok {
+		t.Fatalf("expected run state")
+	}
+	// The OpenRouter slug must remain intact.
+	if state.Model != "deepseek/deepseek-v4-flash" {
+		t.Errorf("expected openrouter slug preserved, got %q", state.Model)
+	}
+}
+
+// TestRunnerCanonicalizesModelForXAIProvider verifies x-ai prefix is resolved for xai.
+func TestRunnerCanonicalizesModelForXAIProvider(t *testing.T) {
+	t.Parallel()
+
+	cat := &catalog.Catalog{
+		Providers: map[string]catalog.ProviderEntry{
+			"xai": {
+				DisplayName: "xAI",
+				APIKeyEnv:   "XAI_API_KEY",
+				Models: map[string]catalog.Model{
+					"grok-3-mini": {DisplayName: "Grok 3 Mini", ContextWindow: 131072},
+				},
+			},
+		},
+	}
+
+	xaiProvider := &namedProvider{name: "xai", result: CompletionResult{Content: "xai response"}}
+
+	registry := catalog.NewProviderRegistryWithEnv(cat, func(key string) string {
+		if key == "XAI_API_KEY" {
+			return "fake-xai-key"
+		}
+		return ""
+	})
+	registry.SetClientFactory(func(apiKey, baseURL, providerName string) (catalog.ProviderClient, error) {
+		return xaiProvider, nil
+	})
+
+	defaultProvider := &namedProvider{name: "default", result: CompletionResult{Content: "ok"}}
+	runner := NewRunner(defaultProvider, NewRegistry(), RunnerConfig{
+		DefaultModel:     "gpt-4.1-mini",
+		MaxSteps:         2,
+		ProviderRegistry: registry,
+	})
+
+	// x-ai prefix should map to xai provider.
+	run, err := runner.StartRun(RunRequest{
+		Prompt:       "use grok",
+		Model:        "x-ai/grok-3-mini",
+		ProviderName: "xai",
+	})
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+
+	_, err = collectRunEvents(t, runner, run.ID)
+	if err != nil {
+		t.Fatalf("collect events: %v", err)
+	}
+
+	state, ok := runner.GetRun(run.ID)
+	if !ok {
+		t.Fatalf("expected run state")
+	}
+	if state.Model != "grok-3-mini" {
+		t.Errorf("expected canonical model grok-3-mini, got %q", state.Model)
+	}
+}
+
+// ---------------------------------------------------------------------------
 // Regression tests for issue #230: channel-based recorder goroutine
 // ---------------------------------------------------------------------------
 
