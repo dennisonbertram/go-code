@@ -102,6 +102,18 @@ type Model struct {
 	// nil when no run is active.
 	sseCh <-chan tea.Msg
 
+	// lastEventID is the ID of the most recently delivered SSE event for the
+	// active run (format "runID:seq" — see harness.ParseEventID). Used to
+	// resume the stream via the Last-Event-ID header if the connection drops
+	// mid-run, so the server can skip already-delivered history instead of
+	// replaying it (see internal/server/http_runs.go).
+	lastEventID string
+
+	// sseReconnectAttempts counts how many automatic SSE reconnect attempts
+	// have been made for the current run. Bounded by maxSSEReconnectAttempts;
+	// once exhausted the stream is treated as terminally lost.
+	sseReconnectAttempts int
+
 	// toolExpanded tracks which tool calls are in the expanded view, keyed by
 	// tool call ID. True = expanded, absent/false = collapsed.
 	toolExpanded map[string]bool
@@ -2641,6 +2653,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// set (e.g. injected by tests via WithCancelRun). This avoids overwriting
 		// a test-supplied cancel with a real HTTP bridge.
 		if m.cancelRun == nil {
+			m.lastEventID = ""
+			m.sseReconnectAttempts = 0
 			ch, cancel := startSSEForRun(m.config.BaseURL, msg.RunID)
 			m.sseCh = ch
 			m.cancelRun = cancel
@@ -2774,6 +2788,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case SSEEventMsg:
+		// Track the most recent event ID so a mid-run reconnect (see the
+		// SSEDoneMsg case below) can resume exactly here via Last-Event-ID.
+		if msg.ID != "" {
+			m.lastEventID = msg.ID
+		}
 		// Route event to viewport based on type.
 		switch msg.EventType {
 		case "assistant.message.delta":
@@ -2900,6 +2919,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case SSEDoneMsg:
+		isTerminal := msg.EventType == "run.completed" || msg.EventType == "run.failed"
+
+		// The connection ended without a genuine run.completed/run.failed
+		// event — e.g. the server dropped the TCP connection mid-burst. The
+		// server supports resuming via Last-Event-ID (internal/server/
+		// http_runs.go), so reconnect instead of treating the run as
+		// finished, as long as the run is still active and we have not
+		// exhausted our bounded retry budget.
+		if !isTerminal && m.runActive && m.sseReconnectAttempts < maxSSEReconnectAttempts {
+			m.sseReconnectAttempts++
+			if m.cancelRun != nil {
+				m.cancelRun()
+				m.cancelRun = nil
+			}
+			m.sseCh = nil
+			cmds = append(cmds, reconnectSSECmd(m.config.BaseURL, m.RunID, m.lastEventID, m.sseReconnectAttempts))
+			return m, tea.Batch(cmds...)
+		}
+
+		if !isTerminal && m.sseReconnectAttempts >= maxSSEReconnectAttempts {
+			m.vp.AppendLine(fmt.Sprintf("⚠ SSE stream lost and could not be re-established after %d attempt(s)", m.sseReconnectAttempts))
+			m.vp.AppendLine("")
+		}
+		m.sseReconnectAttempts = 0
 		m.runActive = false
 		m.sseCh = nil
 		m.responseStarted = false
@@ -2923,6 +2966,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.vp.AppendLine("")
+
+	case SSEReconnectedMsg:
+		// A backed-off reconnect attempt (see reconnectSSECmd) has
+		// established a new connection. Only adopt it if the run is still
+		// active — it may have been cancelled or already finished while the
+		// reconnect backoff was pending, in which case the freshly-opened
+		// connection must be closed immediately rather than resurrecting a
+		// dead run.
+		if !m.runActive {
+			if msg.Cancel != nil {
+				msg.Cancel()
+			}
+			return m, nil
+		}
+		m.sseCh = msg.Ch
+		m.cancelRun = msg.Cancel
+		cmds = append(cmds, pollSSECmd(m.sseCh))
 
 	case SSEDropMsg:
 		// Dropped message — continue polling.

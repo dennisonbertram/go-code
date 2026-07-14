@@ -601,3 +601,48 @@ func startSSEForRun(baseURL, runID string) (<-chan tea.Msg, func()) {
 	url := sseEventsURL(baseURL, runID)
 	return StartSSEBridge(context.Background(), url)
 }
+
+// startSSEForRunFrom starts the SSE bridge for the given run, resuming from
+// lastEventID via the Last-Event-ID header (see StartSSEBridgeFrom). Used to
+// reconnect after the stream drops mid-run without losing or duplicating
+// events.
+func startSSEForRunFrom(baseURL, runID, lastEventID string) (<-chan tea.Msg, func()) {
+	url := sseEventsURL(baseURL, runID)
+	return StartSSEBridgeFrom(context.Background(), url, lastEventID)
+}
+
+// maxSSEReconnectAttempts bounds how many times the TUI will automatically
+// reconnect a dropped SSE stream for a single run before giving up and
+// surfacing a clear "connection lost" message to the user.
+const maxSSEReconnectAttempts = 5
+
+// sseReconnectBackoff returns the delay before reconnect attempt N
+// (1-indexed), growing exponentially from a short base and capped so the
+// TUI recovers quickly from a transient drop instead of leaving the user
+// staring at a dead stream for long.
+func sseReconnectBackoff(attempt int) time.Duration {
+	const base = 200 * time.Millisecond
+	const capDelay = 3 * time.Second
+	d := base
+	for i := 1; i < attempt; i++ {
+		d *= 2
+		if d >= capDelay {
+			return capDelay
+		}
+	}
+	return d
+}
+
+// reconnectSSECmd schedules a bounded, backed-off SSE reconnect attempt for
+// the given run that resumes exactly where the previous connection left off
+// via lastEventID (see startSSEForRunFrom and internal/server/http_runs.go's
+// Last-Event-ID handling). It always yields SSEReconnectedMsg so Update()
+// can decide whether the reconnect is still wanted — the run may have been
+// cancelled or completed while the backoff was pending.
+func reconnectSSECmd(baseURL, runID, lastEventID string, attempt int) tea.Cmd {
+	delay := sseReconnectBackoff(attempt)
+	return tea.Tick(delay, func(time.Time) tea.Msg {
+		ch, cancel := startSSEForRunFrom(baseURL, runID, lastEventID)
+		return SSEReconnectedMsg{Ch: ch, Cancel: cancel}
+	})
+}
