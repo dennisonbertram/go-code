@@ -235,6 +235,22 @@ type QuestionResponder interface {
 type PipelineStage func(prev any, item any, index int) (any, error)
 
 // Store is an optional persistence interface for workflow runs and events.
+//
+// IMPORTANT — locking contract: AppendEvent is called by Engine.emit
+// while the Engine holds its own internal global lock (guarding run
+// registration, subscriber fan-out, etc.). Implementations of
+// AppendEvent (and, transitively, anything it shares a lock or resource
+// with) MUST NOT block on unbounded I/O and MUST NOT call back into the
+// Engine (e.g. Subscribe, GetRun, Start) — the Engine's lock is a
+// sync.Mutex, which is not reentrant, so a re-entrant call from inside
+// AppendEvent self-deadlocks. A Store that blocks for a long time in
+// AppendEvent will stall the Engine's global lock, and therefore every
+// concurrently-running workflow, for the duration of that block. The
+// default in-memory Store meets this contract (AppendEvent is an O(1)
+// amortized slice append, no I/O, no callback); a persistent Store
+// implementation should offload slow writes (e.g. queue them and flush
+// asynchronously) rather than perform them synchronously inside
+// AppendEvent.
 type Store interface {
 	CreateRun(ctx context.Context, run *Run) error
 	UpdateRun(ctx context.Context, run *Run) error

@@ -28,6 +28,13 @@ type EngineOptions struct {
 
 	// Store is an optional persistence backend. When nil, an in-memory store
 	// is used. The store persists workflow runs and events.
+	//
+	// A custom Store's AppendEvent is called while the Engine holds its
+	// own internal global lock: it MUST NOT block on unbounded I/O and
+	// MUST NOT call back into the Engine (Subscribe/GetRun/Start/etc.),
+	// or it will stall every concurrently-running workflow (or
+	// self-deadlock, since the Engine's lock is not reentrant). See the
+	// Store interface doc for the full contract.
 	Store Store
 
 	// QuestionResponder handles workflow questions that need a parent/user
@@ -315,15 +322,26 @@ func (e *Engine) GetRun(runID string) (*Run, error) {
 // The returned slice contains all events emitted for this run so far.
 // The channel receives new events as they are emitted during execution.
 //
-// The cancel function unsubscribes and closes the channel. Callers MUST call
-// cancel when done to avoid goroutine leaks; it is always safe to call even
-// if the channel was already closed by a terminal event (see emit()).
+// The cancel function unsubscribes and closes the channel. Callers MUST
+// ALWAYS call cancel when done, to avoid goroutine/channel leaks; it is
+// always safe to call even if the channel was already closed by a
+// terminal event (see emit()).
 //
-// On a terminal event (workflow.completed/workflow.failed), emit() closes
-// and deregisters every subscriber channel for the run, so the channel
-// will also close on its own once the run finishes — subscribers don't
-// strictly need to call cancel() to observe termination, only to clean up
-// early/non-terminal subscriptions.
+// On a terminal event (workflow.completed/workflow.failed), emit()
+// closes and deregisters every subscriber channel for the run that was
+// registered BEFORE that event. A subscriber whose channel was already
+// registered when the terminal event fires will see the channel close
+// on its own, without needing to call cancel() first to observe
+// termination. But a Subscribe call that happens AFTER the run already
+// went terminal does NOT get this: emit() only closes channels it
+// currently knows about, and by the time such a late Subscribe
+// registers, e.subs[runID] has already been deleted — nothing will
+// ever close its channel. Both current callers of Subscribe
+// (internal/server's SSE handler, and TestSubscribeNeverMissesConcurrentEmit)
+// handle this correctly by checking the returned history for a terminal
+// event before relying on the channel at all, and always call cancel()
+// regardless — do the same in any new caller; do not rely on the
+// channel closing itself.
 //
 // Locking: e.mu is held ONLY long enough to register the channel and
 // record the current per-run sequence number (recordedSeq) — both O(1).
@@ -376,21 +394,30 @@ func (e *Engine) Subscribe(runID string) ([]Event, <-chan Event, func(), error) 
 	ch := make(chan Event, 64)
 	entry := &subEntry{pending: []Event{}} // non-nil: this subscriber is initializing
 
-	e.mu.Lock()
-	if _, ok := e.subs[runID]; !ok {
-		e.subs[runID] = make(map[chan Event]*subEntry)
-	}
-	e.subs[runID][ch] = entry
-	recordedSeq := e.eventSeqs[runID]
-	e.mu.Unlock()
+	// Each of Subscribe's critical sections is a separate, short-lived
+	// lock scope (the lock must be released between them to call
+	// store.GetEvents without holding e.mu) — an IIFE per section keeps
+	// every one defer-based, so no future panic on any of these code
+	// paths can leak e.mu, matching the rest of engine.go.
+	recordedSeq := func() int64 {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if _, ok := e.subs[runID]; !ok {
+			e.subs[runID] = make(map[chan Event]*subEntry)
+		}
+		e.subs[runID][ch] = entry
+		return e.eventSeqs[runID]
+	}()
 
 	allEvents, err := e.store.GetEvents(context.Background(), runID, -1)
 	if err != nil {
-		e.mu.Lock()
-		if subsForRun, ok := e.subs[runID]; ok {
-			delete(subsForRun, ch)
-		}
-		e.mu.Unlock()
+		func() {
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			if subsForRun, ok := e.subs[runID]; ok {
+				delete(subsForRun, ch)
+			}
+		}()
 		return nil, nil, nil, err
 	}
 
@@ -420,10 +447,13 @@ func (e *Engine) Subscribe(runID string) ([]Event, <-chan Event, func(), error) 
 	// handling below). entry itself remains valid and still holds
 	// whatever was buffered for us regardless of whether it's still
 	// reachable from e.subs.
-	e.mu.Lock()
-	pending := entry.pending
-	entry.pending = nil
-	e.mu.Unlock()
+	pending := func() []Event {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		p := entry.pending
+		entry.pending = nil
+		return p
+	}()
 	if len(pending) > 0 {
 		history = append(history, pending...)
 	}
