@@ -200,7 +200,7 @@ func TestAutoCompact_FallbackToStrip(t *testing.T) {
 	// Inject messages into the run state.
 	runner2.setMessages(run2.ID, messages)
 
-	result, err := runner2.autoCompactMessages(run2.ID, messages)
+	result, err := runner2.autoCompactMessages(context.Background(), run2.ID, messages)
 	if err != nil {
 		t.Fatalf("autoCompactMessages should not fail with fallback, got: %v", err)
 	}
@@ -273,7 +273,7 @@ func TestAutoCompact_ConcurrentWithCompactRun(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, _ = runner.autoCompactMessages(run.ID, messages)
+			_, _ = runner.autoCompactMessages(context.Background(), run.ID, messages)
 		}()
 	}
 

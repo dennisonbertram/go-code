@@ -272,7 +272,7 @@ func (se *stepEngine) run() {
 					"ratio":            ratio,
 					"mode":             r.config.AutoCompactMode,
 				})
-				compactedMsgs, compactErr := r.autoCompactMessages(runID, messages)
+				compactedMsgs, compactErr := r.autoCompactMessages(ctx, runID, messages)
 				if compactErr == nil && compactedMsgs != nil {
 					afterTokens := 0
 					for _, m := range compactedMsgs {

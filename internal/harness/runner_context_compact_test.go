@@ -1128,7 +1128,7 @@ func TestParseTurnsHTTP_MixedSequence(t *testing.T) {
 	turns := parseTurnsHTTP(msgs)
 
 	want := map[string]int{
-		"system_prefix":  1,
+		"system_prefix":   1,
 		"compact_summary": 1,
 		"user":            2,
 		"assistant_tool":  1,
@@ -1388,7 +1388,7 @@ func TestAutoCompactMessages_SummarizerOverride(t *testing.T) {
 	}
 	runner.setMessages(run.ID, messages)
 
-	result, err := runner.autoCompactMessages(run.ID, messages)
+	result, err := runner.autoCompactMessages(context.Background(), run.ID, messages)
 	if err != nil {
 		t.Fatalf("autoCompactMessages: %v", err)
 	}
@@ -1476,7 +1476,7 @@ func TestAutoCompactMessages_FallbackFromSummarizeToStrip(t *testing.T) {
 	// test configures the runner without a SummarizerModel so
 	// newMessageSummarizerWithModel falls back to the main runner model).
 	// The key assertion is that the function does NOT return an error.
-	result, err := runner.autoCompactMessages(run.ID, messages)
+	result, err := runner.autoCompactMessages(context.Background(), run.ID, messages)
 	if err != nil {
 		t.Fatalf("autoCompactMessages should not return an error even if summarize fails, got: %v", err)
 	}
@@ -1536,7 +1536,7 @@ func TestAutoCompactMessages_HybridFallbackToStripOnError(t *testing.T) {
 	// Override the runner config to use an erroring summarizer indirectly: hybrid
 	// itself does not fail on summarizer error (logs and uses empty summary).
 	// We verify the result is valid regardless.
-	result, err := runner.autoCompactMessages(run.ID, messages)
+	result, err := runner.autoCompactMessages(context.Background(), run.ID, messages)
 	if err != nil {
 		t.Fatalf("autoCompactMessages should not fail for hybrid mode: %v", err)
 	}
@@ -1587,7 +1587,7 @@ func TestAutoCompactMessages_EmptyMessages(t *testing.T) {
 	}
 	runner.setMessages(run.ID, messages)
 
-	result, err := runner.autoCompactMessages(run.ID, messages)
+	result, err := runner.autoCompactMessages(context.Background(), run.ID, messages)
 	if err != nil {
 		t.Fatalf("autoCompactMessages on meta-only messages: %v", err)
 	}
@@ -1604,4 +1604,106 @@ type errorSummarizer struct{}
 
 func (e *errorSummarizer) SummarizeMessages(_ context.Context, _ []map[string]any) (string, error) {
 	return "", fmt.Errorf("summarizer: intentional test error")
+}
+
+// TestAutoCompactMessages_ContextCancelled verifies that autoCompactMessages
+// respects the provided context and returns promptly when the context is
+// already cancelled, rather than hanging on a context.Background() provider
+// call.
+func TestAutoCompactMessages_ContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	provider := &cancelBlockingProvider{started: make(chan struct{})}
+	runner := NewRunner(provider, NewRegistry(), RunnerConfig{
+		DefaultModel:        "test",
+		MaxSteps:            1,
+		AutoCompactEnabled:  false,
+		AutoCompactMode:     "summarize",
+		AutoCompactKeepLast: 1,
+		ModelContextWindow:  100,
+	})
+
+	run, err := runner.StartRun(RunRequest{Prompt: "hello"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+
+	// Wait for the run's execute goroutine to finish preflight and block in
+	// the provider call. This avoids a data race with runPreflight writing
+	// state.resolvedRoleModels while autoCompactMessages reads it.
+	<-provider.started
+
+	messages := []Message{
+		{Role: "user", Content: "hello"},
+		{Role: "assistant", Content: "calling tool"},
+		{Role: "tool", Content: strings.Repeat("x", 3000), ToolCallID: "tc1"},
+		{Role: "user", Content: "follow up"},
+		{Role: "assistant", Content: "done"},
+		{Role: "user", Content: "more"},
+		{Role: "assistant", Content: "also done"},
+	}
+	runner.setMessages(run.ID, messages)
+
+	// Use an already-cancelled context. A correct implementation propagates
+	// this context into the summarizer provider call and returns promptly
+	// (either with a context error or with a strip fallback). Before the fix,
+	// autoCompactMessages passed context.Background() to the provider, so the
+	// cancelBlockingProvider would block forever.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	type result struct {
+		messages []Message
+		err      error
+	}
+	done := make(chan result, 1)
+	go func() {
+		msgs, err := runner.autoCompactMessages(ctx, run.ID, messages)
+		done <- result{msgs, err}
+	}()
+
+	select {
+	case res := <-done:
+		if res.err != nil && res.err != context.Canceled {
+			t.Fatalf("autoCompactMessages returned unexpected error: %v", res.err)
+		}
+		if res.err == nil && res.messages == nil {
+			t.Fatal("autoCompactMessages returned nil result without error")
+		}
+		if len(res.messages) == 0 {
+			t.Fatal("autoCompactMessages returned empty result")
+		}
+		// Verify the large tool output was stripped (fallback) rather than
+		// retained verbatim.
+		for _, m := range res.messages {
+			if m.Role == "tool" && m.ToolCallID == "tc1" {
+				t.Fatal("tool content was not stripped in fallback")
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("autoCompactMessages did not return promptly on a cancelled context")
+	}
+}
+
+// cancelBlockingProvider is a provider that blocks until its request context
+// is cancelled, then returns the context error. It simulates a summarizer
+// provider that cannot make progress until cancellation is propagated.
+type cancelBlockingProvider struct {
+	mu      sync.Mutex
+	calls   int
+	started chan struct{}
+}
+
+func (p *cancelBlockingProvider) Complete(ctx context.Context, _ CompletionRequest) (CompletionResult, error) {
+	p.mu.Lock()
+	p.calls++
+	if p.started != nil && p.calls == 1 {
+		close(p.started)
+	}
+	p.mu.Unlock()
+
+	select {
+	case <-ctx.Done():
+		return CompletionResult{}, ctx.Err()
+	}
 }
