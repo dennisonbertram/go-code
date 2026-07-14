@@ -330,6 +330,119 @@ func TestTouchJobRun_NotFound(t *testing.T) {
 	}
 }
 
+// TestScheduler_FireJob_Integration_PreservesEditsViaRealSQLiteStore
+// (regression for BUG 2) drives Scheduler.fireJob against a real
+// SQLiteStore instead of the mockStore used by the red tests in
+// scheduler_test.go — a different angle that would fail if fireJob is
+// ever changed back to writing a full stale Job snapshot via UpdateJob.
+//
+// It schedules a job, edits it directly in the store (simulating a user
+// PATCH that lands after the job was captured by AddJob's closure), then
+// fires the STALE, pre-edit Job snapshot. The edit must survive in the
+// real database row.
+func TestScheduler_FireJob_Integration_PreservesEditsViaRealSQLiteStore(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	staleJob := testJob("integration-preserve-edits")
+	staleJob.Tags = "original-tag"
+	created, err := store.CreateJob(ctx, staleJob)
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	staleJob = created // this is what fireJob will be handed (pre-edit)
+
+	// Simulate a concurrent user edit landing after the job was scheduled.
+	edited := staleJob
+	edited.Tags = "edited-tag"
+	edited.Schedule = "0 * * * *"
+	edited.UpdatedAt = time.Now().UTC()
+	if err := store.UpdateJob(ctx, edited); err != nil {
+		t.Fatalf("UpdateJob (simulated concurrent edit): %v", err)
+	}
+
+	var executedTags string
+	executor := &mockExecutor{
+		ExecuteFunc: func(_ context.Context, job Job) (string, error) {
+			executedTags = job.Tags
+			return "ok", nil
+		},
+	}
+	clock := newMockClock(time.Now().UTC())
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1, Jitter: JitterConfig{Enabled: false}})
+	s.sleepFn = func(time.Duration) {}
+
+	// Fire using the STALE snapshot (as AddJob's closure would hand to
+	// fireJob) — the fix must re-read live state before acting on it.
+	s.fireJob(staleJob, 0)
+	s.wg.Wait()
+
+	if executedTags != "edited-tag" {
+		t.Fatalf("expected fireJob to execute with the live edited tags %q, got %q", "edited-tag", executedTags)
+	}
+
+	got, err := store.GetJob(ctx, staleJob.ID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Tags != "edited-tag" {
+		t.Fatalf("fireJob reverted the concurrent edit: expected tags %q, got %q", "edited-tag", got.Tags)
+	}
+	if got.Schedule != "0 * * * *" {
+		t.Fatalf("fireJob reverted the concurrent schedule edit: expected %q, got %q", "0 * * * *", got.Schedule)
+	}
+}
+
+// TestScheduler_FireJob_Integration_DoesNotResurrectPausedJob (regression
+// for BUG 2) is the paused-job counterpart of the edit-preservation test
+// above, also driven against a real SQLiteStore. It would fail if fireJob
+// stops re-checking live status before firing.
+func TestScheduler_FireJob_Integration_DoesNotResurrectPausedJob(t *testing.T) {
+	store := newTestStore(t)
+	ctx := context.Background()
+
+	staleJob := testJob("integration-no-resurrect")
+	created, err := store.CreateJob(ctx, staleJob)
+	if err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	staleJob = created // captured as active — this is the stale snapshot
+
+	// Pause the job in the store after it was "scheduled".
+	paused := staleJob
+	paused.Status = StatusPaused
+	paused.UpdatedAt = time.Now().UTC()
+	if err := store.UpdateJob(ctx, paused); err != nil {
+		t.Fatalf("UpdateJob (pause): %v", err)
+	}
+
+	executed := false
+	executor := &mockExecutor{
+		ExecuteFunc: func(_ context.Context, _ Job) (string, error) {
+			executed = true
+			return "ok", nil
+		},
+	}
+	clock := newMockClock(time.Now().UTC())
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1, Jitter: JitterConfig{Enabled: false}})
+	s.sleepFn = func(time.Duration) {}
+
+	s.fireJob(staleJob, 0)
+	s.wg.Wait()
+
+	if executed {
+		t.Fatal("fireJob resurrected a paused job: executor ran despite the job being paused in the store")
+	}
+
+	got, err := store.GetJob(ctx, staleJob.ID)
+	if err != nil {
+		t.Fatalf("GetJob: %v", err)
+	}
+	if got.Status != StatusPaused {
+		t.Fatalf("fireJob resurrected the paused job: expected status %q, got %q", StatusPaused, got.Status)
+	}
+}
+
 func TestDeleteJob_SoftDelete(t *testing.T) {
 	store := newTestStore(t)
 	ctx := context.Background()
