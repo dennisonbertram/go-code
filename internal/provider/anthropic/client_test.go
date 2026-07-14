@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -466,6 +467,134 @@ func TestCompleteStreaming(t *testing.T) {
 	}
 	if !slices.Equal(contentParts, []string{"Hel", "lo"}) {
 		t.Fatalf("unexpected content deltas: %+v", contentParts)
+	}
+}
+
+// withShrunkIdleStreamTimeout temporarily overrides the package-level
+// idleStreamTimeout var for the duration of a test. Callers MUST NOT mark
+// the test t.Parallel(): idleStreamTimeout is process-wide, shared, and
+// mutated without synchronization here — this is safe only because
+// non-parallel tests in this package run strictly before the batch of
+// t.Parallel() tests is allowed to start (Go's testing package pauses every
+// parallel test at its Parallel() call until all non-parallel tests in the
+// same run have completed), so there is no concurrent access.
+func withShrunkIdleStreamTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	original := idleStreamTimeout
+	idleStreamTimeout = d
+	t.Cleanup(func() { idleStreamTimeout = original })
+}
+
+// TestCompleteStreamStallTimesOutWithoutHanging is the BUG1 follow-up's
+// primary red/green test for anthropic: a server that sends headers and one
+// content delta, then goes completely silent (no more bytes, connection
+// stays open) must fail with a typed error within the idle interval instead
+// of hanging forever.
+//
+// NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
+func TestCompleteStreamStallTimesOutWithoutHanging(t *testing.T) {
+	withShrunkIdleStreamTimeout(t, 60*time.Millisecond)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hel"}}`,
+			``,
+		}, "\n")+"\n")
+		flusher.Flush()
+
+		// Go silent forever (from the client's perspective) — bounded by a
+		// safety cap so the test server can always Close() promptly even if
+		// the fix regresses.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+
+	start := time.Now()
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a stall error, got success")
+	}
+	if elapsed > 1*time.Second {
+		t.Fatalf("expected the idle-stream watchdog to fail fast (~60ms), took %s — looks like it hung instead", elapsed)
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if !strings.Contains(phe.Body, "stall") {
+		t.Fatalf("expected error body to mention the stall, got %q", phe.Body)
+	}
+}
+
+// TestCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout is the
+// regression guard proving the idle timeout is gap-based, not a disguised
+// total-duration cap: the server never goes silent for longer than
+// idleStreamTimeout between chunks, but the overall stream runs well past
+// idleStreamTimeout in total.
+//
+// NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
+func TestCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout(t *testing.T) {
+	withShrunkIdleStreamTimeout(t, 50*time.Millisecond)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+
+		write := func(lines ...string) {
+			_, _ = io.WriteString(w, strings.Join(lines, "\n")+"\n\n")
+			flusher.Flush()
+		}
+		write(`event: content_block_start`, `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+		// 3 content deltas, 20ms apart (well under the 50ms idle timeout per
+		// gap), for a total stream duration of ~80ms — more than the idle
+		// timeout, but the stream must still succeed.
+		chunks := []string{"o", "n", "e"}
+		for _, c := range chunks {
+			time.Sleep(20 * time.Millisecond)
+			write(`event: content_block_delta`, `data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"`+c+`"}}`)
+		}
+		time.Sleep(20 * time.Millisecond)
+		write(`event: message_delta`, `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`)
+		write(`event: message_stop`, `data: {"type":"message_stop"}`)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v (a continuously-producing stream must not be killed by the idle timeout just because its TOTAL duration exceeds the idle interval)", err)
+	}
+	if result.Content != "one" {
+		t.Fatalf("unexpected content: %q", result.Content)
 	}
 }
 
