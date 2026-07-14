@@ -445,6 +445,62 @@ func TestClientCompleteNonStreamingStallTimesOutWithoutHanging(t *testing.T) {
 	}
 }
 
+// TestClientCompleteStreamingErrorStallTimesOutWithoutHanging is the
+// error-path counterpart to the stall tests: a provider that returns an HTTP
+// error status (e.g. 429) plus a partial error body and then goes silent must
+// fail with a typed error within the idle interval, not hang on the raw
+// io.ReadAll(httpRes.Body) the error path used.
+//
+// NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
+func TestClientCompleteStreamingErrorStallTimesOutWithoutHanging(t *testing.T) {
+	withShrunkIdleStreamTimeout(t, 60*time.Millisecond)
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		// Partial error body — proves the server returned an error status and
+		// started sending a body, then goes silent forever.
+		_, _ = io.WriteString(w, `{\"error":`)
+		flusher.Flush()
+
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL, Retry: &provider.RetryConfig{MaxAttempts: 1}})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	start := time.Now()
+	_, err = client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a stall error, got success")
+	}
+	if elapsed > 1*time.Second {
+		t.Fatalf("expected the idle-stream watchdog to bound the error-body read (~60ms), took %s", elapsed)
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if !strings.Contains(phe.Body, "stall") {
+		t.Fatalf("expected error body to mention the stall, got %q", phe.Body)
+	}
+}
+
 // TestClientCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout is
 // the regression guard proving the idle timeout is gap-based, not a
 // disguised total-duration cap: the server never goes silent for longer than

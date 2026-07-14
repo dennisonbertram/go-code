@@ -322,8 +322,18 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 
 	if payload.Stream {
 		if httpRes.StatusCode >= 300 {
-			responseBody, readErr := io.ReadAll(httpRes.Body)
+			var errBodyStalled atomic.Bool
+			idleErrBody := newIdleTimeoutReader(httpRes.Body, cancelStream, &errBodyStalled)
+			defer idleErrBody.stop()
+			responseBody, readErr := io.ReadAll(idleErrBody)
 			if readErr != nil {
+				if errBodyStalled.Load() {
+					return harness.CompletionResult{}, &harness.ProviderHTTPError{
+						Provider:   c.providerName,
+						StatusCode: http.StatusServiceUnavailable,
+						Body:       fmt.Sprintf("stream stalled: no data received for %s", idleStreamTimeout),
+					}
+				}
 				return harness.CompletionResult{}, fmt.Errorf("read error response body: %w", readErr)
 			}
 			return harness.CompletionResult{}, &harness.ProviderHTTPError{
@@ -1389,8 +1399,18 @@ func (c *Client) completeWithResponsesAPI(ctx context.Context, req harness.Compl
 
 	if payload.Stream {
 		if httpRes.StatusCode >= 300 {
-			responseBody, readErr := io.ReadAll(httpRes.Body)
+			var errBodyStalled atomic.Bool
+			idleErrBody := newIdleTimeoutReader(httpRes.Body, cancelStream, &errBodyStalled)
+			defer idleErrBody.stop()
+			responseBody, readErr := io.ReadAll(idleErrBody)
 			if readErr != nil {
+				if errBodyStalled.Load() {
+					return harness.CompletionResult{}, &harness.ProviderHTTPError{
+						Provider:   c.providerName,
+						StatusCode: http.StatusServiceUnavailable,
+						Body:       fmt.Sprintf("stream stalled: no data received for %s", idleStreamTimeout),
+					}
+				}
 				return harness.CompletionResult{}, fmt.Errorf("read error response body: %w", readErr)
 			}
 			return harness.CompletionResult{}, &harness.ProviderHTTPError{
