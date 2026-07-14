@@ -2,6 +2,9 @@ package cron
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
@@ -219,4 +222,60 @@ func TestShellExecutor_TimeoutWithOrphanedChildHoldingPipes(t *testing.T) {
 	case <-time.After(12 * time.Second):
 		t.Fatal("Execute did not return within 12s of a 1s timeout: a background child holding the output pipes open is blocking Wait() indefinitely")
 	}
+}
+
+// TestShellExecutor_TimeoutKillsOrphanedChild_DoesNotLeaveItRunning
+// (regression for BUG 5) covers a different angle than the red test: it
+// doesn't just check that Execute returns promptly, it checks that the
+// background grandchild is actually TERMINATED, not merely abandoned to
+// keep running detached from the (now-exited) parent shell.
+//
+// The backgrounded child appends a line to a marker file every 200ms.
+// If the process-group kill in Execute actually reaps it, writes stop
+// shortly after Execute returns. If the child were only orphaned (the
+// pre-fix behavior, modulo WaitDelay), it would keep writing for its
+// full ~10s run, and this test would catch that by observing the marker
+// file still growing well after Execute has returned.
+func TestShellExecutor_TimeoutKillsOrphanedChild_DoesNotLeaveItRunning(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses a POSIX shell backgrounding construct")
+	}
+
+	executor := &ShellExecutor{}
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "marker")
+
+	shCmd := fmt.Sprintf(`(i=0; while [ $i -lt 50 ]; do echo x >> %q; sleep 0.2; i=$((i+1)); done &) ; sleep 60`, marker)
+	job := Job{
+		ExecConfig: fmt.Sprintf(`{"command":%q}`, shCmd),
+		TimeoutSec: 1,
+	}
+
+	if _, err := executor.Execute(context.Background(), job); err == nil {
+		t.Fatal("expected an error for a command killed by its timeout")
+	}
+
+	sizeAfterExecute := markerSize(t, marker)
+
+	// Give a killed-but-still-writing process ample time to prove it's
+	// still alive, while staying well under its ~10s natural run length.
+	time.Sleep(3 * time.Second)
+
+	sizeLater := markerSize(t, marker)
+	if sizeLater > sizeAfterExecute {
+		t.Fatalf("background child kept writing to the marker file after Execute returned (size %d -> %d after a 3s settle wait): it was orphaned rather than actually killed",
+			sizeAfterExecute, sizeLater)
+	}
+}
+
+func markerSize(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatalf("stat marker file: %v", err)
+	}
+	return info.Size()
 }
