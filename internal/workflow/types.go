@@ -243,20 +243,23 @@ type Store interface {
 	GetEvents(ctx context.Context, runID string, afterSeq int64) ([]Event, error)
 }
 
-// runEvents holds one run's event history behind its own lock, so a slow
-// GetEvents (O(history), can be large for a long-running/high-frequency
-// run) on one run never blocks AppendEvent -- or GetEvents -- on any
-// OTHER run. Before this, memoryStore used a single RWMutex shared across
+// runEvents holds one run's event history behind its own lock. Before
+// this type existed, memoryStore used a single RWMutex shared across
 // every run's events; a slow read for run A would force AppendEvent for
 // run B to wait too, since sync.RWMutex.Lock() must wait for all current
-// readers regardless of which run they're reading. That was a real
-// engine-wide production hazard: a Subscribe against one long-running
-// workflow's large history could stall event delivery for every other
-// concurrently-running workflow.
+// readers regardless of which run they're reading. Splitting the lock
+// per-run fixed THAT specific cross-run case, but on its own does NOT
+// make a slow GetEvents engine-wide-safe: see the comment on GetEvents
+// below for why the per-run RLock must also only be held for an O(1)
+// snapshot, not the whole O(history) copy.
 type runEvents struct {
 	mu     sync.RWMutex
 	events []Event
 }
+
+// memoryStoreGetEventsPostSnapshotHook is a test-only seam. See
+// memoryStore.GetEvents for where it fires and why.
+var memoryStoreGetEventsPostSnapshotHook func()
 
 // memoryStore is an in-memory Store implementation.
 type memoryStore struct {
@@ -323,12 +326,45 @@ func (m *memoryStore) AppendEvent(_ context.Context, event *Event) error {
 	return nil
 }
 
+// GetEvents holds the per-run RLock only long enough to take an O(1)
+// snapshot of the events slice header, then copies OUTSIDE any lock.
+//
+// This matters because emit() (engine.go) calls AppendEvent while
+// holding e.mu, the engine's single global lock. If GetEvents held its
+// per-run RLock for the whole O(history) copy (as an earlier version of
+// this method did), a concurrent emit() on THAT SAME run would acquire
+// e.mu and then block on AppendEvent's Lock() behind this RLock --
+// transitively holding e.mu, and therefore blocking every OTHER run's
+// emit (and GetRun/List/Start/Resume), for the full duration of this
+// one run's history copy. A per-run lock alone only narrows the
+// trigger (which run has to be "slow" to cause it); it does not narrow
+// the blast radius (every run stalls regardless), because the stall
+// propagates back through e.mu.
+//
+// Race-free by the append-only invariant: AppendEvent only ever writes
+// at index >= len(snapshot) (either into existing spare capacity, which
+// the snapshot's capped 3-index slice expression makes invisible to
+// this read, or into a freshly-allocated array on realloc, which never
+// touches the old one). This reader only ever touches [0, len(snapshot)),
+// which is disjoint from anything a concurrent append can write to.
 func (m *memoryStore) GetEvents(_ context.Context, runID string, afterSeq int64) ([]Event, error) {
 	re := m.runEventsFor(runID)
 	re.mu.RLock()
-	defer re.mu.RUnlock()
-	out := make([]Event, 0, len(re.events))
-	for _, ev := range re.events {
+	snapshot := re.events[:len(re.events):len(re.events)]
+	re.mu.RUnlock()
+
+	// Test-only seam (nil/no-op in production): fires after the per-run
+	// RLock above has already been released, letting a test hold up the
+	// "slow copy" part of GetEvents deterministically while proving the
+	// lock itself is not held during it (a concurrent AppendEvent for the
+	// same run should complete immediately). See
+	// TestMemoryStoreGetEventsReleasesLockBeforeCopy.
+	if memoryStoreGetEventsPostSnapshotHook != nil {
+		memoryStoreGetEventsPostSnapshotHook()
+	}
+
+	out := make([]Event, 0, len(snapshot))
+	for _, ev := range snapshot {
 		if ev.Seq > afterSeq {
 			out = append(out, ev)
 		}

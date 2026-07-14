@@ -76,3 +76,74 @@ func TestMemoryStorePerRunEventLockIsIndependentPerRun(t *testing.T) {
 		t.Fatal("expected repeated runEventsFor calls for the same run to return the same *runEvents instance (a fresh lock every call would protect nothing)")
 	}
 }
+
+// TestMemoryStoreGetEventsReleasesLockBeforeCopy is REQUIRED 2's
+// deterministic proof: third-round review found that
+// TestMemoryStorePerRunEventLockIsIndependentPerRun above, while true,
+// does not actually establish that GetEvents releases its per-run lock
+// before the O(history) copy -- it passed even when GetEvents held the
+// RLock for the whole call (the actual bug: emit() calls AppendEvent
+// while holding e.mu, so a concurrent AppendEvent for the SAME run
+// blocked behind that RLock transitively held e.mu for every other run
+// too).
+//
+// Using memoryStoreGetEventsPostSnapshotHook (a test-only seam, nil/
+// no-op in production, mirroring the same pattern used elsewhere in this
+// package for subagentPollInterval and resumePreTransitionHook), this
+// test holds GetEvents open AFTER its snapshot step and asserts a
+// concurrent AppendEvent for the SAME run completes near-instantly --
+// which is only possible if the per-run RLock was already released
+// before the hook fired.
+func TestMemoryStoreGetEventsReleasesLockBeforeCopy(t *testing.T) {
+	m := newMemoryStore()
+	ctx := context.Background()
+	const runID = "gated-run"
+
+	if err := m.AppendEvent(ctx, &Event{RunID: runID, Seq: 1}); err != nil {
+		t.Fatalf("AppendEvent: %v", err)
+	}
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	memoryStoreGetEventsPostSnapshotHook = func() {
+		close(entered)
+		<-release
+	}
+	t.Cleanup(func() { memoryStoreGetEventsPostSnapshotHook = nil })
+
+	getEventsDone := make(chan struct{})
+	go func() {
+		defer close(getEventsDone)
+		if _, err := m.GetEvents(ctx, runID, -1); err != nil {
+			t.Errorf("GetEvents: %v", err)
+		}
+	}()
+
+	select {
+	case <-entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("GetEvents never reached the post-snapshot hook")
+	}
+
+	// The per-run RLock must already be released by this point (the hook
+	// fires strictly after re.mu.RUnlock() in the fixed implementation).
+	// A concurrent AppendEvent for the SAME run should therefore complete
+	// near-instantly, not block for as long as the hook is held.
+	appendDone := make(chan struct{})
+	go func() {
+		defer close(appendDone)
+		if err := m.AppendEvent(ctx, &Event{RunID: runID, Seq: 2}); err != nil {
+			t.Errorf("AppendEvent: %v", err)
+		}
+	}()
+
+	select {
+	case <-appendDone:
+	case <-time.After(200 * time.Millisecond):
+		close(release)
+		t.Fatal("AppendEvent for the same run did not complete within 200ms while GetEvents was mid-copy — the per-run lock appears to still be held during the copy")
+	}
+
+	close(release)
+	<-getEventsDone
+}
