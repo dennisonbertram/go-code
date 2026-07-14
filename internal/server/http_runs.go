@@ -805,14 +805,32 @@ func (s *Server) handleRunEvents(w http.ResponseWriter, r *http.Request, runID s
 	defer cancel()
 
 	// Support Last-Event-ID reconnection: skip already-seen events.
+	//
+	// seq is a uint64 (harness.ParseEventID parses it via strconv.ParseUint),
+	// so a crafted huge value (e.g. near math.MaxInt64 or math.MaxUint64) must
+	// never be used to compute seq+1 and slice history directly — converting
+	// such a value to int can wrap to a negative number, and slicing with the
+	// raw uint64 value can panic with "slice bounds out of range" (a one-header
+	// remote DoS). We therefore only ever slice when seq is already known to be
+	// a valid, in-range index (seq < len(history)), which guarantees seq+1 fits
+	// safely within len(history) and cannot overflow.
+	//
+	// Any out-of-range sequence (seq >= len(history), including adversarially
+	// huge values) is treated the same as an unparseable Last-Event-ID: fall
+	// back to a full replay rather than guessing, silently dropping events, or
+	// panicking. This also avoids a separate hang: nil-ing out history for an
+	// out-of-range seq on an already-completed run would skip the terminal
+	// event in the replay loop below and fall through to the live-event wait,
+	// which never fires for a run that has already finished.
 	if lastID := r.Header.Get("Last-Event-ID"); lastID != "" {
 		if _, seq, err := harness.ParseEventID(lastID); err == nil {
-			if int(seq+1) < len(history) {
+			historyLen := uint64(len(history))
+			if seq < historyLen {
 				history = history[seq+1:]
-			} else {
-				history = nil
 			}
+			// seq >= historyLen: leave history as the full replay (no-op).
 		}
+		// Unparseable Last-Event-ID: leave history as the full replay (no-op).
 	}
 
 	flusher, ok := w.(http.Flusher)
