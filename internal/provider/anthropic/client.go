@@ -291,7 +291,7 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 				return harness.CompletionResult{}, fmt.Errorf("read error response body: %w", readErr)
 			}
 			return harness.CompletionResult{}, &harness.ProviderHTTPError{
-				Provider:   "anthropic",
+				Provider:   c.providerName,
 				StatusCode: httpRes.StatusCode,
 				Body:       strings.TrimSpace(string(responseBody)),
 			}
@@ -314,14 +314,33 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 		return result, err
 	}
 
-	responseBody, err := io.ReadAll(httpRes.Body)
+	// MUST-FIX1: the non-streaming body read needs the same idle-stream
+	// watchdog the streaming path already has. Client.Timeout (90s) used to
+	// be the ONLY bound on this read; removing it for BUG1 left
+	// io.ReadAll(httpRes.Body) completely unbounded once headers arrive —
+	// Transport.ResponseHeaderTimeout only bounds the wait for headers, not
+	// the body. A server that answers with 200 + headers then stalls
+	// mid-body would otherwise hang Complete() forever when Stream == nil
+	// (the auto-compaction summarizer reaches this client via
+	// context.Background(), so nothing else would ever unblock that hang).
+	var nonStreamStalled atomic.Bool
+	idleNonStreamBody := newIdleTimeoutReader(httpRes.Body, cancelStream, &nonStreamStalled)
+	defer idleNonStreamBody.stop()
+	responseBody, err := io.ReadAll(idleNonStreamBody)
 	if err != nil {
+		if nonStreamStalled.Load() {
+			return harness.CompletionResult{}, &harness.ProviderHTTPError{
+				Provider:   c.providerName,
+				StatusCode: http.StatusServiceUnavailable,
+				Body:       fmt.Sprintf("response body stalled: no data received for %s", idleStreamTimeout),
+			}
+		}
 		return harness.CompletionResult{}, fmt.Errorf("read response body: %w", err)
 	}
 
 	if httpRes.StatusCode >= 300 {
 		return harness.CompletionResult{}, &harness.ProviderHTTPError{
-			Provider:   "anthropic",
+			Provider:   c.providerName,
 			StatusCode: httpRes.StatusCode,
 			Body:       strings.TrimSpace(string(responseBody)),
 		}
