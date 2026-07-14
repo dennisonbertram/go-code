@@ -9,13 +9,21 @@ import (
 )
 
 // TestPermissionConfigDefaults verifies that DefaultPermissionConfig returns
-// the expected unrestricted/none combination.
+// the expected workspace/none combination.
+//
+// SAFETY DEFAULT (GAP-1): Sandbox defaults to SandboxScopeWorkspace, not
+// SandboxScopeUnrestricted. A caller that submits a run with no Permissions
+// field at all must be workspace-confined by default; callers that
+// legitimately need broader filesystem access must explicitly opt in via
+// PermissionConfig.Sandbox: SandboxScopeLocal or SandboxScopeUnrestricted.
+// See TestDefaultConfiguredRun_CannotReadAbsolutePathOutsideWorkspace for the
+// end-to-end acceptance test of this default.
 func TestPermissionConfigDefaults(t *testing.T) {
 	t.Parallel()
 
 	cfg := DefaultPermissionConfig()
-	if cfg.Sandbox != SandboxScopeUnrestricted {
-		t.Errorf("expected default sandbox %q, got %q", SandboxScopeUnrestricted, cfg.Sandbox)
+	if cfg.Sandbox != SandboxScopeWorkspace {
+		t.Errorf("expected default sandbox %q, got %q", SandboxScopeWorkspace, cfg.Sandbox)
 	}
 	if cfg.Approval != ApprovalPolicyNone {
 		t.Errorf("expected default approval %q, got %q", ApprovalPolicyNone, cfg.Approval)

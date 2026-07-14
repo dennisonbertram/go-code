@@ -3,6 +3,7 @@ package openai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -17,6 +18,493 @@ import (
 	"go-agent-harness/internal/provider"
 	"go-agent-harness/internal/provider/pricing"
 )
+
+// --- NewClient default HTTP client transport (BUG 1: whole-request timeout) ---
+
+// TestNewClientDefaultHTTPClientHasNoWholeRequestTimeout verifies that the
+// client constructed when Config.Client is nil does NOT set http.Client.Timeout,
+// which bounds the entire exchange (including streaming body reads). A 90s
+// whole-request timeout force-closes long-running SSE streams mid-generation.
+// Instead, only per-phase timeouts (dial, TLS handshake, response headers,
+// expect-continue) should be set via a custom Transport, leaving overall
+// cancellation to the request's context.
+func TestNewClientDefaultHTTPClientHasNoWholeRequestTimeout(t *testing.T) {
+	t.Parallel()
+
+	c, err := NewClient(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	if c.client.Timeout != 0 {
+		t.Fatalf("expected no whole-request Client.Timeout (bounds entire exchange incl. streaming body), got %v", c.client.Timeout)
+	}
+
+	transport, ok := c.client.Transport.(*http.Transport)
+	if !ok || transport == nil {
+		t.Fatalf("expected *http.Transport with per-phase timeouts, got %T", c.client.Transport)
+	}
+	if transport.TLSHandshakeTimeout != 10*time.Second {
+		t.Fatalf("expected TLSHandshakeTimeout=10s, got %v", transport.TLSHandshakeTimeout)
+	}
+	// ResponseHeaderTimeout for a NON-streaming completion is, in practice, a
+	// cap on total generation time: the upstream withholds response headers
+	// until the whole completion is ready. It must be raised well above the
+	// 90s whole-request timeout BUG1 removed (adversarial review caught the
+	// original 60s value as a strict regression — tighter than the 90s it
+	// replaced, and now that BUG2a raised Anthropic max_tokens up to 4-8x,
+	// 60s wasn't even enough headroom for a plausible slow generation).
+	// MUST-FIX1's idle-read watchdog (applied to both streaming and
+	// non-streaming body reads) is what now bounds a stalled response once
+	// bytes start flowing; this timeout only bounds the "provider never
+	// responds at all" case.
+	if transport.ResponseHeaderTimeout != nonStreamingHeaderTimeout {
+		t.Fatalf("expected ResponseHeaderTimeout=%v, got %v", nonStreamingHeaderTimeout, transport.ResponseHeaderTimeout)
+	}
+	if transport.ExpectContinueTimeout != 1*time.Second {
+		t.Fatalf("expected ExpectContinueTimeout=1s, got %v", transport.ExpectContinueTimeout)
+	}
+	if transport.DialContext == nil {
+		t.Fatal("expected DialContext to be set with a bounded dial timeout")
+	}
+}
+
+// TestDefaultHTTPClientPreservesHTTP2AndConnectionPooling is a MUST-FIX3
+// regression guard: building the Transport from zero values (rather than
+// cloning http.DefaultTransport) silently disables HTTP/2 — a custom
+// DialContext suppresses Go's automatic HTTP/2 upgrade unless
+// ForceAttemptHTTP2 is explicitly set — and disables connection pooling
+// (MaxIdleConns/IdleConnTimeout default to 0/unset on a zero-value
+// Transport, and MaxIdleConnsPerHost then defaults to 2). This asserts the
+// constructed Transport carries the same connection-reuse configuration as
+// http.DefaultTransport.
+func TestDefaultHTTPClientPreservesHTTP2AndConnectionPooling(t *testing.T) {
+	t.Parallel()
+
+	c, err := NewClient(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	transport, ok := c.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", c.client.Transport)
+	}
+	if !transport.ForceAttemptHTTP2 {
+		t.Fatal("expected ForceAttemptHTTP2=true (lost when building Transport from zero values instead of cloning http.DefaultTransport)")
+	}
+	defaultTransport := http.DefaultTransport.(*http.Transport)
+	if transport.MaxIdleConns != defaultTransport.MaxIdleConns {
+		t.Fatalf("expected MaxIdleConns=%d (from http.DefaultTransport), got %d", defaultTransport.MaxIdleConns, transport.MaxIdleConns)
+	}
+	if transport.IdleConnTimeout != defaultTransport.IdleConnTimeout {
+		t.Fatalf("expected IdleConnTimeout=%v (from http.DefaultTransport), got %v", defaultTransport.IdleConnTimeout, transport.IdleConnTimeout)
+	}
+}
+
+// TestDefaultHTTPClientNegotiatesHTTP2 proves end-to-end (not just field
+// inspection) that the default client can still negotiate HTTP/2 against a
+// server that supports it. A Transport built from zero values with a custom
+// DialContext but no ForceAttemptHTTP2 silently downgrades ALL provider
+// traffic to HTTP/1.1, which cannot multiplex and defaults
+// MaxIdleConnsPerHost to 2 — costly when many concurrent agent runs
+// (the workflow engine allows up to 16) share a provider host.
+func TestDefaultHTTPClientNegotiatesHTTP2(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	c, err := NewClient(Config{APIKey: "test-key", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	transport, ok := c.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", c.client.Transport)
+	}
+	// Trust the test server's ephemeral self-signed cert the same way
+	// httptest.Server.Client() does, so our client's Transport can complete
+	// the handshake against it.
+	transport.TLSClientConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig
+
+	httpReq, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	res, err := c.client.Do(httpReq)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.Proto != "HTTP/2.0" {
+		t.Fatalf("expected HTTP/2.0, got %q — Transport was likely built from zero values without ForceAttemptHTTP2", res.Proto)
+	}
+}
+
+// TestNewClientRespectsConfigClientOverride is a regression guard: callers
+// that pass an explicit Config.Client must have it used verbatim, not
+// replaced by the default transport-timeout client.
+func TestNewClientRespectsConfigClientOverride(t *testing.T) {
+	t.Parallel()
+
+	custom := &http.Client{Timeout: 5 * time.Second}
+	c, err := NewClient(Config{APIKey: "test-key", Client: custom})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if c.client != custom {
+		t.Fatalf("expected Config.Client override to be used verbatim, got a different client")
+	}
+}
+
+// TestNewClientStreamingSurvivesSlowBodyAfterFastHeaders is a BUG1
+// regression guard distinct from the Timeout-field assertion above: it
+// exercises actual traffic through the default client against a server that
+// answers headers immediately but drip-feeds the SSE body with delays
+// between chunks. If a future change reintroduces any whole-request bound
+// (via Client.Timeout or a Transport field that inadvertently caps body
+// reads, e.g. misusing ResponseHeaderTimeout to cover the whole response),
+// this test's flush-delayed multi-chunk stream would fail to complete.
+func TestNewClientStreamingSurvivesSlowBodyAfterFastHeaders(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+
+		chunks := []string{"Hel", "lo", ", ", "world"}
+		for _, c := range chunks {
+			time.Sleep(30 * time.Millisecond)
+			_, _ = io.WriteString(w, `data: {"choices":[{"delta":{"content":"`+c+`"}}]}`+"\n\n")
+			flusher.Flush()
+		}
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer testServer.Close()
+
+	// No Config.Client override — exercises the real default transport built
+	// by defaultHTTPClient().
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.Content != "Hello, world" {
+		t.Fatalf("unexpected content: %q", result.Content)
+	}
+}
+
+// withShrunkIdleStreamTimeout temporarily overrides the package-level
+// idleStreamTimeout var for the duration of a test. Callers MUST NOT mark
+// the test t.Parallel(): idleStreamTimeout is process-wide, shared, and
+// mutated without synchronization here — this is safe only because
+// non-parallel tests in this package run strictly before the batch of
+// t.Parallel() tests is allowed to start (Go's testing package pauses every
+// parallel test at its Parallel() call until all non-parallel tests in the
+// same run have completed), so there is no concurrent access.
+func withShrunkIdleStreamTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	original := idleStreamTimeout
+	idleStreamTimeout = d
+	t.Cleanup(func() { idleStreamTimeout = original })
+}
+
+// --- idleTimeoutReader timer race (SHOULD-FIX1) ---
+//
+// Go's time.Timer docs are explicit that Reset() cannot stop an
+// already-dispatched pending call to an AfterFunc callback. That means
+// idleTimeoutReader.Read (which resets the timer on every successful read)
+// and the timer's fire callback (which declares the stream stalled) can
+// race at the boundary: a Read that returns fresh data at the same moment
+// the timer has already begun firing must not pretend the stall didn't
+// happen, and the fire callback itself must be safely idempotent if
+// invoked more than once. These are white-box tests against the
+// idleTimeoutReader type directly (same package) using a fake timerResetter
+// so the assertions are deterministic rather than depending on real timer
+// firing races.
+
+// fakeResetter is a test double for the subset of *time.Timer's API
+// idleTimeoutReader depends on, letting tests assert on Reset()/Stop() call
+// counts without depending on real timer scheduling.
+type fakeResetter struct {
+	resetCalls atomic.Int64
+	stopCalls  atomic.Int64
+}
+
+func (f *fakeResetter) Reset(time.Duration) bool { f.resetCalls.Add(1); return true }
+func (f *fakeResetter) Stop() bool               { f.stopCalls.Add(1); return true }
+
+// TestIdleTimeoutReaderSkipsResetOnceStalled proves the fix for the race
+// PROVEN by adversarial review: "Read -> n=1 err=<nil>; stalled=true
+// cancelled=true" — a Read that returns fresh data after the idle timer has
+// already fired (stalled already latched true) must NOT re-arm the timer.
+// Before the fix, Read() called Reset() unconditionally on n>0, which is
+// pointless at best once already stalled and, more importantly, signals
+// that Read() disagrees with the already-declared stall instead of
+// deferring to it.
+func TestIdleTimeoutReaderSkipsResetOnceStalled(t *testing.T) {
+	t.Parallel()
+
+	var stalled atomic.Bool
+	stalled.Store(true) // simulate: fire() already ran concurrently with this Read
+	fake := &fakeResetter{}
+	ir := &idleTimeoutReader{r: strings.NewReader("data"), stalled: &stalled, timer: fake, cancel: func() {}}
+
+	buf := make([]byte, 4)
+	n, err := ir.Read(buf)
+	if n == 0 || err != nil {
+		t.Fatalf("Read: n=%d err=%v", n, err)
+	}
+	if got := fake.resetCalls.Load(); got != 0 {
+		t.Fatalf("expected Read to skip Reset once already stalled, got %d Reset call(s)", got)
+	}
+}
+
+// TestIdleTimeoutReaderResetsWhileNotStalled is the regression guard for the
+// test above: a healthy (not-yet-stalled) Read that returns data must still
+// reset the timer exactly once, or the idle watchdog stops working at all.
+func TestIdleTimeoutReaderResetsWhileNotStalled(t *testing.T) {
+	t.Parallel()
+
+	var stalled atomic.Bool
+	fake := &fakeResetter{}
+	ir := &idleTimeoutReader{r: strings.NewReader("data"), stalled: &stalled, timer: fake, cancel: func() {}}
+
+	buf := make([]byte, 4)
+	if _, err := ir.Read(buf); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got := fake.resetCalls.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 Reset call for a healthy read, got %d", got)
+	}
+}
+
+// TestIdleTimeoutReaderFireIsOneShot proves the idle timer's fire callback
+// is idempotent: cancel must be invoked exactly once even if fire() is
+// somehow invoked more than once (e.g. a duplicate/lingering timer signal),
+// and stalled must end up true. Before the fix, the fire callback had no
+// guard at all — repeated firing would call cancel() repeatedly.
+func TestIdleTimeoutReaderFireIsOneShot(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int64
+	var stalled atomic.Bool
+	ir := &idleTimeoutReader{stalled: &stalled, cancel: func() { calls.Add(1) }}
+
+	ir.fire()
+	ir.fire()
+	ir.fire()
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("expected cancel exactly once across repeated fire() calls, got %d", got)
+	}
+	if !stalled.Load() {
+		t.Fatal("expected stalled=true after fire()")
+	}
+}
+
+// TestClientCompleteStreamStallTimesOutWithoutHanging is the BUG1
+// follow-up's primary red/green test: a server that sends headers and a
+// couple of chunks, then goes completely silent (no more bytes, connection
+// stays open) must fail with a typed error within the idle interval instead
+// of hanging forever. This is the exact hole BUG1's fix opened: removing
+// Client.Timeout means nothing else would ever abort a post-headers stall
+// without this idle watchdog.
+//
+// NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
+func TestClientCompleteStreamStallTimesOutWithoutHanging(t *testing.T) {
+	withShrunkIdleStreamTimeout(t, 60*time.Millisecond)
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `data: {"choices":[{"delta":{"content":"Hel"}}]}`+"\n\n")
+		flusher.Flush()
+
+		// Go silent forever (from the client's perspective) — but bound the
+		// handler goroutine with a safety cap and release early if the
+		// client aborts the connection, so the test server can always Close()
+		// promptly instead of hanging the test process on failure.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	start := time.Now()
+	_, err = client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a stall error, got success")
+	}
+	if elapsed > 1*time.Second {
+		t.Fatalf("expected the idle-stream watchdog to fail fast (~60ms), took %s — looks like it hung instead", elapsed)
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if !strings.Contains(phe.Body, "stall") {
+		t.Fatalf("expected error body to mention the stall, got %q", phe.Body)
+	}
+}
+
+// TestClientCompleteNonStreamingStallTimesOutWithoutHanging is MUST-FIX1's
+// most important test: adversarial review proved that the idle-stream
+// watchdog only covered the three SSE decode paths, leaving
+// io.ReadAll(httpRes.Body) on the NON-STREAMING path completely unbounded
+// once BUG1 removed the whole-request Client.Timeout (the ONLY thing that
+// used to bound it — Transport.ResponseHeaderTimeout only bounds the wait
+// for headers, not the body). A server that sends 200 + headers + a partial
+// body then stalls must still fail within the idle interval when
+// req.Stream == nil, not hang. This matters more than the streaming case
+// because the one production non-streaming caller (auto-compaction
+// summarizer) reaches the provider via context.Background(), so an
+// unbounded non-streaming hang would not even be cancellable.
+//
+// NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
+func TestClientCompleteNonStreamingStallTimesOutWithoutHanging(t *testing.T) {
+	withShrunkIdleStreamTimeout(t, 60*time.Millisecond)
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Partial, deliberately-incomplete JSON body — proves the server did
+		// respond and started sending a body (this is not a header-timeout
+		// scenario), then goes silent forever.
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"partial`)
+		flusher.Flush()
+
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	start := time.Now()
+	_, err = client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+		// Stream is deliberately nil: exercises the NON-STREAMING path.
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a stall error, got success")
+	}
+	if elapsed > 1*time.Second {
+		t.Fatalf("expected the idle-stream watchdog to bound the non-streaming read (~60ms), took %s — non-streaming reads are unbounded without MUST-FIX1", elapsed)
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if !strings.Contains(phe.Body, "stall") {
+		t.Fatalf("expected error body to mention the stall, got %q", phe.Body)
+	}
+}
+
+// TestClientCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout is
+// the regression guard proving the idle timeout is gap-based, not a
+// disguised total-duration cap: the server never goes silent for longer than
+// idleStreamTimeout between chunks, but the overall stream runs well past
+// idleStreamTimeout in total. If a future change replaced the per-chunk
+// timer reset with anything resembling a fixed deadline from stream start
+// (i.e. reintroducing BUG1 in a new disguise), this test would start
+// failing even though no individual gap ever exceeded the idle interval.
+//
+// NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
+func TestClientCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout(t *testing.T) {
+	// Idle timeout is widened to 500ms against a 20ms send interval (25x
+	// slack) rather than the original 50ms/20ms (2.5x slack, only 30ms of
+	// margin). This test's entire job is to prove long streams SURVIVE, so a
+	// tight margin risks a false failure under scheduler contention/CI load
+	// even though no genuine flake was reproduced (40 iterations,
+	// GOMAXPROCS=1, 48 competing busy-loops, per adversarial review). The
+	// test is gap-bounded, so widening the timeout costs ~0 wall-clock.
+	withShrunkIdleStreamTimeout(t, 500*time.Millisecond)
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+
+		// 6 chunks, 20ms apart (well under the 500ms idle timeout per gap),
+		// for a total stream duration of ~120ms — the stream must still
+		// succeed because it never goes idle for longer than 500ms at a
+		// stretch.
+		chunks := []string{"o", "n", "e", " ", "t", "wo"}
+		for _, c := range chunks {
+			time.Sleep(20 * time.Millisecond)
+			_, _ = io.WriteString(w, `data: {"choices":[{"delta":{"content":"`+c+`"}}]}`+"\n\n")
+			flusher.Flush()
+		}
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v (a continuously-producing stream must not be killed by the idle timeout just because its TOTAL duration exceeds the idle interval)", err)
+	}
+	if result.Content != "one two" {
+		t.Fatalf("unexpected content: %q", result.Content)
+	}
+}
 
 func TestClientCompleteParsesToolCalls(t *testing.T) {
 	t.Parallel()
@@ -126,6 +614,146 @@ func TestClientCompleteParsesToolCalls(t *testing.T) {
 	}
 }
 
+// --- FinishReason normalization (BUG2b follow-up) ---
+
+// TestClientCompleteNonStreamingSurfacesLengthFinishReason is a BUG2b
+// follow-up test: a non-streaming response with finish_reason: "length"
+// (OpenAI's truncation signal) must surface as harness.FinishReasonLength on
+// CompletionResult, not be silently dropped.
+func TestClientCompleteNonStreamingSurfacesLengthFinishReason(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices":[
+				{"finish_reason":"length","message":{"content":"partial answer that got cut off"}}
+			],
+			"usage":{"prompt_tokens":10,"completion_tokens":4096,"total_tokens":4106}
+		}`))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.FinishReason != harness.FinishReasonLength {
+		t.Fatalf("expected FinishReasonLength, got %q", result.FinishReason)
+	}
+}
+
+// TestClientCompleteNonStreamingSurfacesStopFinishReason verifies a normal
+// completion surfaces the normalized "stop" value rather than leaving
+// FinishReason empty by accident.
+func TestClientCompleteNonStreamingSurfacesStopFinishReason(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices":[
+				{"finish_reason":"stop","message":{"content":"a complete answer"}}
+			],
+			"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}
+		}`))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.FinishReason != harness.FinishReasonStop {
+		t.Fatalf("expected FinishReasonStop, got %q", result.FinishReason)
+	}
+}
+
+// TestClientCompleteStreamSurfacesLengthFinishReason is the streaming
+// counterpart: OpenAI reports finish_reason on the final chunk (typically
+// alongside an empty delta), before [DONE].
+func TestClientCompleteStreamSurfacesLengthFinishReason(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"partial"}}]}`,
+			``,
+			`data: {"choices":[{"delta":{},"finish_reason":"length"}]}`,
+			``,
+			`data: [DONE]`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.FinishReason != harness.FinishReasonLength {
+		t.Fatalf("expected FinishReasonLength, got %q", result.FinishReason)
+	}
+}
+
+// TestClientCompleteStreamSurfacesStopFinishReason is the streaming
+// counterpart of the normal-completion case.
+func TestClientCompleteStreamSurfacesStopFinishReason(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"done"}}]}`,
+			``,
+			`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+			``,
+			`data: [DONE]`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.FinishReason != harness.FinishReasonStop {
+		t.Fatalf("expected FinishReasonStop, got %q", result.FinishReason)
+	}
+}
+
 func TestClientCompleteFailsWithoutChoices(t *testing.T) {
 	t.Parallel()
 
@@ -224,6 +852,96 @@ func TestClientCompleteStreamsAssistantAndToolCallDeltas(t *testing.T) {
 	}
 	if !slices.Equal(toolArgParts, []string{`{"path":"`, `demo.txt"}`}) {
 		t.Fatalf("unexpected tool argument deltas: %+v", toolArgParts)
+	}
+}
+
+// TestClientCompleteStreamMidStreamErrorReturnsTypedFailure is a BUG3 test:
+// a mid-stream `{"error": {...}}` SSE payload was not recognized by the
+// chunk decoder (completionChunk has no error field), so it was silently
+// skipped — the stream then hit [DONE]-less EOF or ended cleanly and the
+// caller received an EMPTY but SUCCESSFUL result instead of a failure. The
+// fix must surface it as a typed *harness.ProviderHTTPError so provider
+// fallback still triggers, matching the non-streaming error path.
+func TestClientCompleteStreamMidStreamErrorReturnsTypedFailure(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"Hel"}}]}`,
+			``,
+			`data: {"choices":[{"delta":{"content":"lo"}}]}`,
+			``,
+			`data: {"error":{"message":"rate limit","type":"rate_limit_error","code":"429"}}`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	var deltas []harness.CompletionDelta
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream: func(delta harness.CompletionDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected a non-nil error for a mid-stream error payload, got empty-success result: %+v", result)
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if phe.Provider != "openai" {
+		t.Fatalf("expected provider %q, got %q", "openai", phe.Provider)
+	}
+	if !strings.Contains(phe.Body, "rate limit") {
+		t.Fatalf("expected error body to mention the upstream error message, got %q", phe.Body)
+	}
+}
+
+// TestClientCompleteStreamContentMentioningErrorIsNotMisdetected is a BUG3
+// regression guard for false positives: the fix must only recognize a
+// top-level JSON "error" object in a chunk, not merely the substring "error"
+// appearing inside legitimate assistant content. A naive string-search based
+// detector (instead of parsing chunk.Error as structured JSON) would
+// misfire here and turn a normal, successful completion into a spurious
+// failure.
+func TestClientCompleteStreamContentMentioningErrorIsNotMisdetected(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"The plan has an "}}]}`,
+			``,
+			`data: {"choices":[{"delta":{"content":"\"error\" handling step."}}]}`,
+			``,
+			`data: [DONE]`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.Content != `The plan has an "error" handling step.` {
+		t.Fatalf("unexpected content: %q", result.Content)
 	}
 }
 
@@ -483,6 +1201,30 @@ func newResponsesClient(t *testing.T, baseURL string) *Client {
 			}
 			return ""
 		},
+	})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+	return client
+}
+
+// newResponsesClientWithRetry is like newResponsesClient but uses a fast
+// bounded retry config, for tests that intentionally exercise the
+// non-2xx/retry path against a responses-routed model.
+func newResponsesClientWithRetry(t *testing.T, baseURL string) *Client {
+	t.Helper()
+	client, err := NewClient(Config{
+		APIKey:       "test-key",
+		BaseURL:      baseURL,
+		Model:        "gpt-5.1-codex-mini",
+		ProviderName: "openai",
+		ModelAPILookup: func(provider, model string) string {
+			if provider == "openai" && model == "gpt-5.1-codex-mini" {
+				return "responses"
+			}
+			return ""
+		},
+		Retry: testRetryConfig(),
 	})
 	if err != nil {
 		t.Fatalf("new client: %v", err)
@@ -970,6 +1712,178 @@ func TestResponsesAPIStreamingTextAndToolCalls(t *testing.T) {
 	}
 }
 
+// TestResponsesAPINonStreamingErrorReturnsTypedFailure is a BUG4 test: the
+// non-streaming Responses API error branch returned a plain fmt.Errorf
+// instead of the typed *harness.ProviderHTTPError the Chat Completions path
+// returns. Callers type-assert on ProviderHTTPError to decide whether to
+// fall back to another provider, so for responses-routed models on a
+// transient upstream failure (e.g. 429), fallback never triggered.
+func TestResponsesAPINonStreamingErrorReturnsTypedFailure(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limit exceeded"}}`))
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClientWithRetry(t, testServer.URL)
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if phe.Provider != "openai" {
+		t.Fatalf("expected provider %q, got %q", "openai", phe.Provider)
+	}
+	if phe.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected status 429, got %d", phe.StatusCode)
+	}
+	if !strings.Contains(phe.Body, "rate limit exceeded") {
+		t.Fatalf("expected body to contain upstream error message, got %q", phe.Body)
+	}
+}
+
+// TestResponsesAPIStreamingErrorReturnsTypedFailure is the streaming
+// counterpart of TestResponsesAPINonStreamingErrorReturnsTypedFailure:
+// the Responses API streaming branch's non-2xx handling also returned a
+// plain fmt.Errorf instead of *harness.ProviderHTTPError.
+func TestResponsesAPIStreamingErrorReturnsTypedFailure(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"stream":true`) {
+			t.Fatalf("expected stream=true in request, got: %s", body)
+		}
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limit exceeded"}}`))
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClientWithRetry(t, testServer.URL)
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if phe.Provider != "openai" {
+		t.Fatalf("expected provider %q, got %q", "openai", phe.Provider)
+	}
+	if phe.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected status 429, got %d", phe.StatusCode)
+	}
+	if !strings.Contains(phe.Body, "rate limit exceeded") {
+		t.Fatalf("expected body to contain upstream error message, got %q", phe.Body)
+	}
+}
+
+// TestResponsesAPINonStreamingClientErrorReturnsTypedFailureWithoutRetry is a
+// BUG4 regression guard covering a status code the earlier 429 tests do not:
+// a 400 (client error, not fallback/retry-eligible) must still come back as
+// a *harness.ProviderHTTPError with the exact status code preserved — this
+// ensures the fix is a general replacement of the error construction, not a
+// special case wired only for 429/5xx. It also confirms 400 is not retried
+// (DoWithRetry only retries 429/500/502/503/504), so the fake server should
+// see exactly one request.
+func TestResponsesAPINonStreamingClientErrorReturnsTypedFailureWithoutRetry(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int64
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid request: unknown model"}}`))
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClientWithRetry(t, testServer.URL)
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if phe.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", phe.StatusCode)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 attempt (400 is not retry-eligible), got %d", got)
+	}
+}
+
+// TestResponsesAPINonStreamingStallTimesOutWithoutHanging is the Responses
+// API counterpart of TestClientCompleteNonStreamingStallTimesOutWithoutHanging
+// (MUST-FIX1): the non-streaming Responses API branch's io.ReadAll(httpRes.Body)
+// was equally unbounded once BUG1 removed the whole-request Client.Timeout.
+//
+// NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
+func TestResponsesAPINonStreamingStallTimesOutWithoutHanging(t *testing.T) {
+	withShrunkIdleStreamTimeout(t, 60*time.Millisecond)
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"resp_stall","output":[{"type":"message","content":[{"type":"output_text","text":"partial`)
+		flusher.Flush()
+
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClient(t, testServer.URL)
+
+	start := time.Now()
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+		// Stream is deliberately nil: exercises the NON-STREAMING path.
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a stall error, got success")
+	}
+	if elapsed > 1*time.Second {
+		t.Fatalf("expected the idle-stream watchdog to bound the non-streaming read (~60ms), took %s", elapsed)
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if !strings.Contains(phe.Body, "stall") {
+		t.Fatalf("expected error body to mention the stall, got %q", phe.Body)
+	}
+}
+
 func TestResponsesAPIStreamingToolCallArgumentsFromOutputItemDone(t *testing.T) {
 	t.Parallel()
 
@@ -1042,6 +1956,88 @@ func TestResponsesAPIStreamingMissingCompleted(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "response.completed") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestResponsesAPIStreamingResponseFailedReturnsTypedFailure is SHOULD-FIX2:
+// processResponsesSSEBlock had no case for "response.failed" (or
+// "response.incomplete" / "error"), so it fell through to the default
+// no-op case, the stream ended without response.completed, and the caller
+// got the generic untyped "responses stream ended before response.completed"
+// error — not fallback-eligible. This is BUG3 all over again on the
+// Responses path (o3/gpt-5 family models).
+func TestResponsesAPIStreamingResponseFailedReturnsTypedFailure(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`event: response.output_text.delta`,
+			`data: {"delta":"partial"}`,
+			``,
+			`event: response.failed`,
+			`data: {"response":{"status":"failed","error":{"message":"context length exceeded","code":"context_length_exceeded"}}}`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClient(t, testServer.URL)
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err == nil {
+		t.Fatal("expected error for response.failed event")
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if !strings.Contains(phe.Body, "context length exceeded") {
+		t.Fatalf("expected error body to mention the upstream error message, got %q", phe.Body)
+	}
+}
+
+// TestResponsesAPIStreamingErrorEventReturnsTypedFailure covers the
+// top-level "error" SSE event type (distinct from "response.failed").
+func TestResponsesAPIStreamingErrorEventReturnsTypedFailure(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`event: response.output_text.delta`,
+			`data: {"delta":"partial"}`,
+			``,
+			`event: error`,
+			`data: {"message":"rate limit exceeded","code":"429"}`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClient(t, testServer.URL)
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err == nil {
+		t.Fatal("expected error for error event")
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if phe.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("expected status 429 (parsed from the event's code field), got %d", phe.StatusCode)
+	}
+	if !strings.Contains(phe.Body, "rate limit exceeded") {
+		t.Fatalf("expected error body to mention the upstream error message, got %q", phe.Body)
 	}
 }
 

@@ -57,7 +57,7 @@ type unifiedPatchHunk struct {
 	NewText string
 }
 
-func applyPatchTool(workspaceRoot string) Tool {
+func applyPatchTool(workspaceRoot string, sandboxScope SandboxScope) Tool {
 	def := Definition{
 		Name:         "apply_patch",
 		Description:  descriptions.Load("apply_patch"),
@@ -96,7 +96,7 @@ func applyPatchTool(workspaceRoot string) Tool {
 		},
 	}
 
-	handler := func(_ context.Context, raw json.RawMessage) (string, error) {
+	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
 		args := struct {
 			Path            string      `json:"path"`
 			FilePath        string      `json:"file_path"`
@@ -122,7 +122,7 @@ func applyPatchTool(workspaceRoot string) Tool {
 			args.Patch = args.UnifiedDiff
 		}
 		if strings.TrimSpace(args.Patch) != "" {
-			return applyUnifiedPatch(workspaceRoot, args.Patch)
+			return applyUnifiedPatch(ctx, workspaceRoot, sandboxScope, args.Patch)
 		}
 		if args.Path == "" {
 			args.Path = args.FilePath
@@ -131,7 +131,7 @@ func applyPatchTool(workspaceRoot string) Tool {
 			return "", fmt.Errorf("path is required")
 		}
 
-		absPath, err := ResolveWorkspacePath(workspaceRoot, args.Path)
+		absPath, err := ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, sandboxScope)
 		if err != nil {
 			return "", err
 		}
@@ -294,7 +294,7 @@ func isStandardUnifiedDiff(patch string) bool {
 	return strings.HasPrefix(trimmed, "--- ")
 }
 
-func applyUnifiedPatch(workspaceRoot, patch string) (string, error) {
+func applyUnifiedPatch(ctx context.Context, workspaceRoot string, sandboxScope SandboxScope, patch string) (string, error) {
 	var files []unifiedPatchFile
 	var err error
 	if isStandardUnifiedDiff(patch) {
@@ -308,7 +308,7 @@ func applyUnifiedPatch(workspaceRoot, patch string) (string, error) {
 
 	results := make([]map[string]any, 0, len(files))
 	for _, filePatch := range files {
-		absPath, err := ResolveWorkspacePath(workspaceRoot, filePatch.Path)
+		absPath, err := ResolveWorkspacePathConfined(ctx, workspaceRoot, filePatch.Path, sandboxScope)
 		if err != nil {
 			return "", err
 		}

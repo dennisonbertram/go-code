@@ -5,10 +5,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go-agent-harness/internal/harness"
@@ -70,7 +73,7 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	httpClient := cfg.Client
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 90 * time.Second}
+		httpClient = defaultHTTPClient()
 	}
 	providerName := cfg.ProviderName
 	if providerName == "" {
@@ -87,6 +90,187 @@ func NewClient(cfg Config) (*Client, error) {
 		catalog:         cfg.Catalog,
 		retry:           cfg.Retry,
 	}, nil
+}
+
+// nonStreamingHeaderTimeout bounds Transport.ResponseHeaderTimeout. For a
+// non-streaming completion, the upstream typically withholds response
+// headers until the entire completion has been generated, so this is, in
+// practice, a cap on total generation time — not merely "time to first
+// byte". It must stay well above any plausible generation time (raised here
+// from an original 60s, which was tighter than the 90s whole-request
+// timeout BUG1 removed, and became actively dangerous once BUG2a raised
+// Anthropic max_tokens up to 4-8x via the model catalog). It is a
+// package-level var (not a const) so tests can shrink it. Genuine
+// mid-transfer stalls, once bytes start flowing, are now bounded
+// separately by the idle-read watchdog (idleStreamTimeout) applied to both
+// streaming and non-streaming body reads — this timeout only bounds "the
+// provider never responds at all".
+var nonStreamingHeaderTimeout = 10 * time.Minute
+
+// defaultHTTPClient builds the *http.Client used when Config.Client is not
+// supplied. It intentionally does NOT set http.Client.Timeout: that field
+// bounds the entire request/response exchange, including the time spent
+// reading a streaming (SSE) response body — so a whole-request timeout would
+// force-close long-running generations mid-stream. Instead, only bounded
+// per-phase timeouts are set on the Transport (connection dial, TLS
+// handshake, waiting for response headers, and the 100-continue handshake).
+// Overall cancellation for a request is the caller's responsibility via the
+// context passed to http.NewRequestWithContext, plus the idle-read watchdog
+// this package applies to response bodies (see idleStreamTimeout).
+//
+// The Transport is cloned from http.DefaultTransport rather than built from
+// zero values: a zero-value Transport with a custom DialContext silently
+// disables Go's automatic HTTP/2 negotiation (ForceAttemptHTTP2 defaults to
+// false) and loses connection-pooling defaults (MaxIdleConns,
+// IdleConnTimeout) that http.DefaultTransport sets. Only the four fields
+// this package actually needs to override are changed on the clone.
+func defaultHTTPClient() *http.Client {
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = (&net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}).DialContext
+	tr.TLSHandshakeTimeout = 10 * time.Second
+	tr.ResponseHeaderTimeout = nonStreamingHeaderTimeout
+	tr.ExpectContinueTimeout = 1 * time.Second
+	return &http.Client{Transport: tr}
+}
+
+// idleStreamTimeout bounds the gap between successive reads from a streaming
+// response body. It is deliberately NOT the same kind of guard as the
+// whole-request Client.Timeout removed for BUG1: it resets on every byte
+// received, so a stream that keeps producing tokens (however slowly, and
+// however long in total) is never killed by it. Only a stream that goes
+// completely silent — connection open, headers already received, but no
+// further bytes — for this long is treated as stalled. It is a package-level
+// var (not a const) so tests can shrink it and callers could override it.
+var idleStreamTimeout = 120 * time.Second
+
+// timerResetter is the subset of *time.Timer's API idleTimeoutReader
+// depends on. Extracted purely so tests can substitute a fake and assert on
+// Reset()/Stop() call counts deterministically, without depending on real
+// timer-firing races. *time.Timer satisfies this interface as-is.
+type timerResetter interface {
+	Reset(d time.Duration) bool
+	Stop() bool
+}
+
+// idleTimeoutReader wraps a streaming response body so that if no Read call
+// returns data for idleStreamTimeout, cancel is invoked (which aborts the
+// in-flight HTTP request/response via its context, unblocking any pending
+// Read) and stalled is set so the caller can distinguish "stalled" from any
+// other read failure (clean EOF, upstream error payload, caller-driven
+// cancellation of the parent context, etc).
+type idleTimeoutReader struct {
+	r       io.Reader
+	cancel  context.CancelFunc
+	stalled *atomic.Bool
+	timer   timerResetter
+}
+
+func newIdleTimeoutReader(r io.Reader, cancel context.CancelFunc, stalled *atomic.Bool) *idleTimeoutReader {
+	ir := &idleTimeoutReader{r: r, cancel: cancel, stalled: stalled}
+	ir.timer = time.AfterFunc(idleStreamTimeout, ir.fire)
+	return ir
+}
+
+// fire is invoked when the idle timer elapses with no Read activity. It is
+// idempotent/one-shot via CompareAndSwap: only the first call actually
+// declares the stream stalled and cancels the request. This matters because
+// Go's time.Timer docs are explicit that Reset() cannot stop an
+// already-dispatched pending call to an AfterFunc callback — so Read() and
+// fire() can race at the boundary (a Read that returns fresh data at the
+// same moment fire() has already begun executing). Guarding with
+// CompareAndSwap ensures cancel is invoked exactly once and stalled
+// transitions cleanly from false->true exactly once, rather than tolerating
+// a double-fire if Read() and the timer race or fire() is otherwise
+// invoked more than once.
+func (ir *idleTimeoutReader) fire() {
+	if !ir.stalled.CompareAndSwap(false, true) {
+		return
+	}
+	ir.cancel()
+}
+
+func (ir *idleTimeoutReader) Read(p []byte) (int, error) {
+	n, err := ir.r.Read(p)
+	// Skip Reset once the stream has already been declared stalled: fire()
+	// may have already run (or be running) concurrently with this Read, and
+	// a Read that "wins" a race against an already-latched stall should
+	// defer to that declaration rather than pretending the stream is
+	// healthy by re-arming the timer.
+	if n > 0 && !ir.stalled.Load() {
+		ir.timer.Reset(idleStreamTimeout)
+	}
+	return n, err
+}
+
+// stop releases the idle timer. Must be called (typically via defer) once
+// the stream is done being read, whether it succeeded, failed, or stalled,
+// so the timer goroutine does not fire and call cancel() on an
+// already-finished request.
+func (ir *idleTimeoutReader) stop() {
+	ir.timer.Stop()
+}
+
+// streamAPIError is an internal sentinel error carrying an in-band
+// `event: error` SSE payload (SHOULD-FIX3). Complete()'s wrapStreamError
+// recognizes it and wraps it into a *harness.ProviderHTTPError so it
+// composes with the existing fallback/retry logic the same way a
+// non-streaming HTTP error does — mirrors the openai package's identical
+// type (BUG3), independently declared here since neither package imports
+// the other's internals.
+type streamAPIError struct {
+	Message    string
+	StatusCode int
+	Raw        string
+}
+
+func (e *streamAPIError) Error() string {
+	return fmt.Sprintf("stream error: %s", e.Message)
+}
+
+// anthropicErrorTypeToStatusCode maps Anthropic's documented error.type
+// vocabulary onto HTTP status codes so a mid-stream error composes with the
+// same isFallbackEligible(429/500/502/503/504) logic a non-streaming HTTP
+// error already does. Unrecognized types conservatively map to 503
+// (Service Unavailable): a failure injected after a 200 response has
+// already started streaming is, in practice, almost always a transient
+// upstream failure worth trying a fallback provider for.
+func anthropicErrorTypeToStatusCode(errType string) int {
+	switch errType {
+	case "overloaded_error":
+		return http.StatusServiceUnavailable
+	case "rate_limit_error":
+		return http.StatusTooManyRequests
+	case "invalid_request_error":
+		return http.StatusBadRequest
+	case "authentication_error":
+		return http.StatusUnauthorized
+	case "permission_error":
+		return http.StatusForbidden
+	case "not_found_error":
+		return http.StatusNotFound
+	default:
+		return http.StatusServiceUnavailable
+	}
+}
+
+// wrapStreamError converts a *streamAPIError (a mid-stream `event: error`
+// SSE payload recognized by processStreamEvent) into a
+// *harness.ProviderHTTPError so it matches the type the non-streaming path
+// returns and provider fallback triggers the same way. Any other error is
+// passed through unchanged.
+func (c *Client) wrapStreamError(err error) error {
+	var streamErr *streamAPIError
+	if !errors.As(err, &streamErr) {
+		return err
+	}
+	return &harness.ProviderHTTPError{
+		Provider:   c.providerName,
+		StatusCode: streamErr.StatusCode,
+		Body:       strings.TrimSpace(streamErr.Raw),
+	}
 }
 
 func (c *Client) maxTokensForModel(modelID string) int {
@@ -167,7 +351,13 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 		return harness.CompletionResult{}, fmt.Errorf("marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/messages", bytes.NewReader(body))
+	// streamCtx/cancelStream let the idle-stream watchdog (below) abort just
+	// this request/response when the stream stalls, without requiring the
+	// caller's ctx to carry any deadline of its own.
+	streamCtx, cancelStream := context.WithCancel(ctx)
+	defer cancelStream()
+
+	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, c.baseURL+"/messages", bytes.NewReader(body))
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("create request: %w", err)
 	}
@@ -178,7 +368,7 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 		httpReq.Header.Set("Accept", "text/event-stream")
 	}
 
-	httpRes, err := provider.DoWithRetry(ctx, c.client, httpReq, c.retry)
+	httpRes, err := provider.DoWithRetry(streamCtx, c.client, httpReq, c.retry)
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("request failed: %w", err)
 	}
@@ -191,22 +381,59 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 				return harness.CompletionResult{}, fmt.Errorf("read error response body: %w", readErr)
 			}
 			return harness.CompletionResult{}, &harness.ProviderHTTPError{
-				Provider:   "anthropic",
+				Provider:   c.providerName,
 				StatusCode: httpRes.StatusCode,
 				Body:       strings.TrimSpace(string(responseBody)),
 			}
 		}
-		return c.decodeStreamingResponse(model, httpRes.Body, req.Stream)
+		// Idle-stream watchdog: aborts streamCtx (and therefore the
+		// in-flight body read) only if no bytes arrive for idleStreamTimeout.
+		// A stream that keeps producing tokens, however slowly and however
+		// long in total, is never touched by this.
+		var stalled atomic.Bool
+		idleBody := newIdleTimeoutReader(httpRes.Body, cancelStream, &stalled)
+		defer idleBody.stop()
+		result, err := c.decodeStreamingResponse(model, idleBody, req.Stream)
+		if err != nil {
+			if stalled.Load() {
+				return harness.CompletionResult{}, &harness.ProviderHTTPError{
+					Provider:   c.providerName,
+					StatusCode: http.StatusServiceUnavailable,
+					Body:       fmt.Sprintf("stream stalled: no data received for %s", idleStreamTimeout),
+				}
+			}
+			return harness.CompletionResult{}, c.wrapStreamError(err)
+		}
+		return result, nil
 	}
 
-	responseBody, err := io.ReadAll(httpRes.Body)
+	// MUST-FIX1: the non-streaming body read needs the same idle-stream
+	// watchdog the streaming path already has. Client.Timeout (90s) used to
+	// be the ONLY bound on this read; removing it for BUG1 left
+	// io.ReadAll(httpRes.Body) completely unbounded once headers arrive —
+	// Transport.ResponseHeaderTimeout only bounds the wait for headers, not
+	// the body. A server that answers with 200 + headers then stalls
+	// mid-body would otherwise hang Complete() forever when Stream == nil
+	// (the auto-compaction summarizer reaches this client via
+	// context.Background(), so nothing else would ever unblock that hang).
+	var nonStreamStalled atomic.Bool
+	idleNonStreamBody := newIdleTimeoutReader(httpRes.Body, cancelStream, &nonStreamStalled)
+	defer idleNonStreamBody.stop()
+	responseBody, err := io.ReadAll(idleNonStreamBody)
 	if err != nil {
+		if nonStreamStalled.Load() {
+			return harness.CompletionResult{}, &harness.ProviderHTTPError{
+				Provider:   c.providerName,
+				StatusCode: http.StatusServiceUnavailable,
+				Body:       fmt.Sprintf("response body stalled: no data received for %s", idleStreamTimeout),
+			}
+		}
 		return harness.CompletionResult{}, fmt.Errorf("read response body: %w", err)
 	}
 
 	if httpRes.StatusCode >= 300 {
 		return harness.CompletionResult{}, &harness.ProviderHTTPError{
-			Provider:   "anthropic",
+			Provider:   c.providerName,
 			StatusCode: httpRes.StatusCode,
 			Body:       strings.TrimSpace(string(responseBody)),
 		}
@@ -268,8 +495,35 @@ func (c *Client) decodeStreamingResponse(model string, body io.Reader, streamFn 
 	return c.resultFromResponse(model, response)
 }
 
+// normalizeAnthropicFinishReason maps Anthropic's stop_reason vocabulary
+// onto the shared harness.FinishReason vocabulary (see BUG2b follow-up),
+// deliberately mapping "max_tokens" onto the SAME value OpenAI's "length"
+// maps to (harness.FinishReasonLength) so callers get one normalized
+// vocabulary instead of two provider-specific ones. An empty input passes
+// through as empty so "the provider didn't report a stop reason" stays
+// distinguishable from "the provider reported an unrecognized value"
+// (harness.FinishReasonOther).
+func normalizeAnthropicFinishReason(raw string) harness.FinishReason {
+	switch raw {
+	case "":
+		return ""
+	case "end_turn", "stop_sequence":
+		return harness.FinishReasonStop
+	case "max_tokens":
+		return harness.FinishReasonLength
+	case "tool_use":
+		return harness.FinishReasonToolCalls
+	case "refusal":
+		return harness.FinishReasonContentFilter
+	default:
+		return harness.FinishReasonOther
+	}
+}
+
 func (c *Client) resultFromResponse(model string, response messageResponse) (harness.CompletionResult, error) {
-	result := harness.CompletionResult{}
+	result := harness.CompletionResult{
+		FinishReason: normalizeAnthropicFinishReason(response.StopReason),
+	}
 
 	// Extract text content and tool_use blocks.
 	var textParts []string
@@ -429,6 +683,18 @@ type streamEvent struct {
 
 	// message_delta
 	Usage *streamUsage `json:"usage,omitempty"`
+
+	// error
+	Error *streamErrorDetail `json:"error,omitempty"`
+}
+
+// streamErrorDetail is the body of an in-band `event: error` SSE payload.
+// Anthropic's documented error.type vocabulary includes overloaded_error,
+// rate_limit_error, api_error, invalid_request_error, authentication_error,
+// permission_error, and not_found_error.
+type streamErrorDetail struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
 }
 
 type streamDelta struct {
@@ -516,8 +782,21 @@ func processStreamEvent(data string, state *streamState, streamFn func(harness.C
 		return true, nil
 
 	case "error":
-		// The event itself is an error from Anthropic
-		return false, fmt.Errorf("anthropic stream error: %s", data)
+		// The event itself is an error from Anthropic, arriving mid-stream
+		// after a 200 response has already started (SHOULD-FIX3). Returned
+		// as a typed *streamAPIError so the caller (Complete()) can wrap it
+		// into a *harness.ProviderHTTPError the same way BUG3's Chat
+		// Completions fix already does for openai, instead of an untyped
+		// error that fallback logic can't recognize.
+		msg := data
+		statusCode := http.StatusServiceUnavailable
+		if ev.Error != nil {
+			if ev.Error.Message != "" {
+				msg = ev.Error.Message
+			}
+			statusCode = anthropicErrorTypeToStatusCode(ev.Error.Type)
+		}
+		return false, &streamAPIError{Message: msg, StatusCode: statusCode, Raw: data}
 	}
 
 	return false, nil

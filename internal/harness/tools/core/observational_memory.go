@@ -150,7 +150,7 @@ func ObservationalMemoryTool(opts tools.BuildOptions) tools.Tool {
 					fmt.Sprintf("memory-%s.%s", time.Now().UTC().Format("20060102-150405"), ext),
 				))
 			}
-			absPath, pathErr := tools.ResolveWorkspacePath(workspaceRoot, exportPath)
+			absPath, pathErr := tools.ResolveWorkspacePathConfined(ctx, workspaceRoot, exportPath, opts.SandboxScope)
 			if pathErr != nil {
 				return "", pathErr
 			}

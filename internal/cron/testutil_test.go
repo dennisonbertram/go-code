@@ -16,6 +16,7 @@ type mockStore struct {
 	GetJobByNameFunc   func(ctx context.Context, name string) (Job, error)
 	ListJobsFunc       func(ctx context.Context) ([]Job, error)
 	UpdateJobFunc      func(ctx context.Context, job Job) error
+	TouchJobRunFunc    func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error
 	DeleteJobFunc      func(ctx context.Context, id string) error
 	CreateExecutionFunc func(ctx context.Context, exec Execution) (Execution, error)
 	UpdateExecutionFunc func(ctx context.Context, exec Execution) error
@@ -61,6 +62,13 @@ func (m *mockStore) ListJobs(ctx context.Context) ([]Job, error) {
 func (m *mockStore) UpdateJob(ctx context.Context, job Job) error {
 	if m.UpdateJobFunc != nil {
 		return m.UpdateJobFunc(ctx, job)
+	}
+	return nil
+}
+
+func (m *mockStore) TouchJobRun(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
+	if m.TouchJobRunFunc != nil {
+		return m.TouchJobRunFunc(ctx, jobID, lastRun, nextRun, updatedAt)
 	}
 	return nil
 }

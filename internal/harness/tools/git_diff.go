@@ -11,7 +11,7 @@ import (
 	"go-agent-harness/internal/harness/tools/descriptions"
 )
 
-func gitDiffTool(workspaceRoot string) Tool {
+func gitDiffTool(workspaceRoot string, sandboxScope SandboxScope) Tool {
 	def := Definition{
 		Name:         "git_diff",
 		Description:  descriptions.Load("git_diff"),
@@ -61,7 +61,7 @@ func gitDiffTool(workspaceRoot string) Tool {
 			cmdArgs = append(cmdArgs, args.Target)
 		}
 		if strings.TrimSpace(args.Path) != "" {
-			absPath, err := ResolveWorkspacePath(workspaceRoot, args.Path)
+			absPath, err := ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, sandboxScope)
 			if err != nil {
 				return "", err
 			}

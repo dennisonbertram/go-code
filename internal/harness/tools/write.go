@@ -12,7 +12,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func writeTool(workspaceRoot string) Tool {
+func writeTool(workspaceRoot string, sandboxScope SandboxScope) Tool {
 	def := Definition{
 		Name:         "write",
 		Description:  descriptions.Load("write"),
@@ -36,7 +36,7 @@ func writeTool(workspaceRoot string) Tool {
 		},
 	}
 
-	handler := func(_ context.Context, raw json.RawMessage) (string, error) {
+	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
 		args := struct {
 			Path            string  `json:"path"`
 			FilePath        string  `json:"file_path"`
@@ -76,7 +76,7 @@ func writeTool(workspaceRoot string) Tool {
 			return "", err
 		}
 
-		absPath, err := ResolveWorkspacePath(workspaceRoot, args.Path)
+		absPath, err := ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, sandboxScope)
 		if err != nil {
 			return "", err
 		}

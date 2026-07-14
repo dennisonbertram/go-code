@@ -40,7 +40,7 @@ func FileInspectTool(opts tools.BuildOptions) tools.Tool {
 
 	workspaceRoot := opts.WorkspaceRoot
 
-	handler := func(_ context.Context, raw json.RawMessage) (string, error) {
+	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
 		var args struct {
 			Path         string `json:"path"`
 			PreviewLines int    `json:"preview_lines"`
@@ -67,7 +67,7 @@ func FileInspectTool(opts tools.BuildOptions) tools.Tool {
 			args.HexBytes = 1024
 		}
 
-		absPath, err := tools.ResolveWorkspacePath(workspaceRoot, args.Path)
+		absPath, err := tools.ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, opts.SandboxScope)
 		if err != nil {
 			return "", err
 		}
