@@ -74,6 +74,56 @@ func TestNewClientRespectsConfigClientOverride(t *testing.T) {
 	}
 }
 
+// TestNewClientStreamingSurvivesSlowBodyAfterFastHeaders is a BUG1
+// regression guard distinct from the Timeout-field assertion above: it
+// exercises actual traffic through the default client against a server that
+// answers headers immediately but drip-feeds the SSE body with delays
+// between chunks. If a future change reintroduces any whole-request bound
+// (via Client.Timeout or a Transport field that inadvertently caps body
+// reads, e.g. misusing ResponseHeaderTimeout to cover the whole response),
+// this test's flush-delayed multi-chunk stream would fail to complete.
+func TestNewClientStreamingSurvivesSlowBodyAfterFastHeaders(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+
+		chunks := []string{"Hel", "lo", ", ", "world"}
+		for _, c := range chunks {
+			time.Sleep(30 * time.Millisecond)
+			_, _ = io.WriteString(w, `data: {"choices":[{"delta":{"content":"`+c+`"}}]}`+"\n\n")
+			flusher.Flush()
+		}
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer testServer.Close()
+
+	// No Config.Client override — exercises the real default transport built
+	// by defaultHTTPClient().
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.Content != "Hello, world" {
+		t.Fatalf("unexpected content: %q", result.Content)
+	}
+}
+
 func TestClientCompleteParsesToolCalls(t *testing.T) {
 	t.Parallel()
 
@@ -330,6 +380,46 @@ func TestClientCompleteStreamMidStreamErrorReturnsTypedFailure(t *testing.T) {
 	}
 	if !strings.Contains(phe.Body, "rate limit") {
 		t.Fatalf("expected error body to mention the upstream error message, got %q", phe.Body)
+	}
+}
+
+// TestClientCompleteStreamContentMentioningErrorIsNotMisdetected is a BUG3
+// regression guard for false positives: the fix must only recognize a
+// top-level JSON "error" object in a chunk, not merely the substring "error"
+// appearing inside legitimate assistant content. A naive string-search based
+// detector (instead of parsing chunk.Error as structured JSON) would
+// misfire here and turn a normal, successful completion into a spurious
+// failure.
+func TestClientCompleteStreamContentMentioningErrorIsNotMisdetected(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"The plan has an "}}]}`,
+			``,
+			`data: {"choices":[{"delta":{"content":"\"error\" handling step."}}]}`,
+			``,
+			`data: [DONE]`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.Content != `The plan has an "error" handling step.` {
+		t.Fatalf("unexpected content: %q", result.Content)
 	}
 }
 
@@ -1178,6 +1268,46 @@ func TestResponsesAPIStreamingErrorReturnsTypedFailure(t *testing.T) {
 	}
 	if !strings.Contains(phe.Body, "rate limit exceeded") {
 		t.Fatalf("expected body to contain upstream error message, got %q", phe.Body)
+	}
+}
+
+// TestResponsesAPINonStreamingClientErrorReturnsTypedFailureWithoutRetry is a
+// BUG4 regression guard covering a status code the earlier 429 tests do not:
+// a 400 (client error, not fallback/retry-eligible) must still come back as
+// a *harness.ProviderHTTPError with the exact status code preserved — this
+// ensures the fix is a general replacement of the error construction, not a
+// special case wired only for 429/5xx. It also confirms 400 is not retried
+// (DoWithRetry only retries 429/500/502/503/504), so the fake server should
+// see exactly one request.
+func TestResponsesAPINonStreamingClientErrorReturnsTypedFailureWithoutRetry(t *testing.T) {
+	t.Parallel()
+
+	var attempts atomic.Int64
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"invalid request: unknown model"}}`))
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClientWithRetry(t, testServer.URL)
+
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if phe.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected status 400, got %d", phe.StatusCode)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 attempt (400 is not retry-eligible), got %d", got)
 	}
 }
 
