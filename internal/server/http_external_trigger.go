@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -109,9 +110,15 @@ func (s *Server) dispatchTriggerEnvelope(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	tenantID := strings.TrimSpace(env.TenantID)
-	if tenantID == "" {
-		tenantID = "default"
+	// SECURITY (S1/S2): never trust the caller-supplied tenant_id verbatim.
+	// These routes authenticate via a single shared per-source HMAC secret,
+	// not a per-caller API key, so the request body is not a trustworthy
+	// source of tenancy — see ServerOptions.WebhookTenantIDs for the full
+	// threat model and resolution rules.
+	tenantID, err := s.resolveWebhookTenantID(env.Source, env.TenantID)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "tenant_mismatch", err.Error())
+		return
 	}
 
 	runs, err := s.runStore.ListRuns(r.Context(), store.RunFilter{
@@ -208,4 +215,41 @@ func (s *Server) dispatchTriggerEnvelope(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, "invalid_request",
 			"unknown action: "+env.Action+"; valid actions are: start, steer, continue")
 	}
+}
+
+// resolveWebhookTenantID resolves the authoritative tenant for a
+// webhook/trigger-initiated run (S1/S2 hardening).
+//
+// These routes (POST /v1/external/trigger and the source-specific webhook
+// endpoints) authenticate via a single shared per-source HMAC secret, not a
+// per-caller API key, so there is no authenticated principal in the request
+// context the way effectiveTenantID relies on for every other endpoint (see
+// buildMux: these routes intentionally bypass authMiddleware). The
+// caller-supplied tenant_id on the envelope is therefore untrustworthy on
+// its own — anyone who knows the shared secret could otherwise inject a run
+// into an arbitrary tenant just by naming it.
+//
+// Resolution:
+//   - source has a configured tenant in ServerOptions.WebhookTenantIDs: that
+//     tenant is authoritative. An empty or matching bodyTenantID is
+//     accepted; a non-matching bodyTenantID is rejected (cross-tenant
+//     injection attempt).
+//   - source has no configured tenant (the zero-config default): bodyTenantID
+//     is ignored outright and "default" is always used. This is the secure
+//     default — an unconfigured deployment can never be tricked into
+//     cross-tenant injection via the request body.
+func (s *Server) resolveWebhookTenantID(source, bodyTenantID string) (string, error) {
+	configured, hasConfig := s.webhookTenantIDs[strings.ToLower(strings.TrimSpace(source))]
+	bodyTenantID = strings.TrimSpace(bodyTenantID)
+
+	if !hasConfig {
+		// No per-source tenant configured: never trust the body's tenant_id.
+		return "default", nil
+	}
+
+	configured = normalizeTenant(configured)
+	if bodyTenantID == "" || normalizeTenant(bodyTenantID) == configured {
+		return configured, nil
+	}
+	return "", fmt.Errorf("tenant_id %q does not match the configured tenant for source %q", bodyTenantID, source)
 }
