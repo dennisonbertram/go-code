@@ -44,35 +44,59 @@ const (
 // (and bounded memory) rather than one giant message at the very end.
 const maxCoalescedDeltaBytes = 32 * 1024
 
+// SSEBridgeOptions configures a single SSE bridge connection attempt.
+type SSEBridgeOptions struct {
+	// LastEventID, if non-empty, is sent as the Last-Event-ID request header
+	// so the server resumes the stream from that point (see
+	// internal/server/http_runs.go, which trims already-delivered history
+	// via harness.ParseEventID) instead of replaying everything from the
+	// start.
+	LastEventID string
+	// APIKey, if non-empty, is sent as "Authorization: Bearer <APIKey>" so
+	// the request authenticates the same way the rest of the harnesscli
+	// client does (see cmd/harnesscli/auth.go's newAuthedRequest, which
+	// sources this key from ~/.harness/config.json via "harnesscli auth
+	// login"). When empty, no Authorization header is sent at all,
+	// preserving today's unauthenticated-local behavior.
+	APIKey string
+}
+
 // StartSSEBridge connects to the SSE endpoint at url and delivers decoded
 // tea.Msg values on the returned channel. Call stop() to disconnect early.
 // The channel is closed when the stream ends or ctx is cancelled.
 //
-// This is equivalent to StartSSEBridgeFrom with an empty lastEventID (i.e.
-// a fresh connection with no resume point).
+// This is equivalent to StartSSEBridgeWithOptions with a zero-value
+// SSEBridgeOptions (i.e. a fresh, unauthenticated connection with no resume
+// point).
 func StartSSEBridge(ctx context.Context, url string) (<-chan tea.Msg, func()) {
-	return StartSSEBridgeFrom(ctx, url, "")
+	return StartSSEBridgeWithOptions(ctx, url, SSEBridgeOptions{})
 }
 
 // StartSSEBridgeFrom is like StartSSEBridge but sets the Last-Event-ID
 // request header to lastEventID (if non-empty) so the server resumes the
-// stream from that point (see internal/server/http_runs.go, which trims
-// already-delivered history via harness.ParseEventID) instead of replaying
-// everything from the start.
+// stream from that point instead of replaying everything from the start.
+//
+// This is equivalent to StartSSEBridgeWithOptions with only LastEventID set.
 func StartSSEBridgeFrom(ctx context.Context, url, lastEventID string) (<-chan tea.Msg, func()) {
+	return StartSSEBridgeWithOptions(ctx, url, SSEBridgeOptions{LastEventID: lastEventID})
+}
+
+// StartSSEBridgeWithOptions is the fully-configurable entry point: see
+// SSEBridgeOptions for what each field controls.
+func StartSSEBridgeWithOptions(ctx context.Context, url string, opts SSEBridgeOptions) (<-chan tea.Msg, func()) {
 	ch := make(chan tea.Msg, sseChanCap)
 	ctx, cancel := context.WithCancel(ctx)
 
 	go func() {
 		defer cancel()
 		defer close(ch)
-		runBridge(ctx, url, lastEventID, ch)
+		runBridge(ctx, url, opts, ch)
 	}()
 
 	return ch, cancel
 }
 
-func runBridge(ctx context.Context, url, lastEventID string, ch chan<- tea.Msg) {
+func runBridge(ctx context.Context, url string, opts SSEBridgeOptions, ch chan<- tea.Msg) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		send(ctx, ch, SSEErrorMsg{Err: err})
@@ -80,8 +104,8 @@ func runBridge(ctx context.Context, url, lastEventID string, ch chan<- tea.Msg) 
 		return
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	if lastEventID != "" {
-		req.Header.Set("Last-Event-ID", lastEventID)
+	if opts.LastEventID != "" {
+		req.Header.Set("Last-Event-ID", opts.LastEventID)
 	}
 
 	resp, err := http.DefaultClient.Do(req)

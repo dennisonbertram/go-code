@@ -589,3 +589,223 @@ func TestRegression_SSEBridgeCoalescesPerCallIDWithoutCrossContamination(t *test
 		t.Errorf("call_id %q content corrupted by coalescing: got %d bytes, want %d bytes", callB, gotB.Len(), expectedB.Len())
 	}
 }
+
+// ---------------------------------------------------------------------------
+// FOLLOW-UP: the SSE request must authenticate like the rest of the CLI, and
+// a rejected/unknown-run status must not burn the bounded reconnect budget.
+//
+// The events endpoint sends no Authorization header at all today (verified:
+// none of api.go's calls to the harnessd BaseURL set one; the only existing
+// Authorization-setting code, fetchOpenRouterModelsFromURL, authenticates to
+// the *external* openrouter.ai API with a provider key, not to harnessd
+// itself). The actual harnessd auth pattern lives in cmd/harnesscli/auth.go's
+// newAuthedRequest, which is only wired into the plain (non-TUI) harnesscli
+// commands. See the accompanying report for the minimal plumbing added to
+// reach the TUI (TUIConfig.APIKey + newTUIConfig loading
+// ~/.harness/config.json via the existing auth.go:loadConfig()).
+// ---------------------------------------------------------------------------
+
+// TestSSEBridgeAuth_InitialRequestCarriesAuthorizationWhenConfigured asserts
+// the bridge sends "Authorization: Bearer <key>" when a key is supplied via
+// SSEBridgeOptions.APIKey.
+func TestSSEBridgeAuth_InitialRequestCarriesAuthorizationWhenConfigured(t *testing.T) {
+	var gotAuth string
+	var sawRequest bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawRequest = true
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "id: run-auth:0\nevent: message\ndata: {\"type\":\"run.completed\",\"payload\":{}}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	msgs, stop := tui.StartSSEBridgeWithOptions(ctx, srv.URL, tui.SSEBridgeOptions{APIKey: "secret-key"})
+	defer stop()
+	for range msgs {
+	}
+
+	if !sawRequest {
+		t.Fatal("expected the server to receive a request")
+	}
+	if gotAuth != "Bearer secret-key" {
+		t.Errorf("expected Authorization header %q, got %q — the SSE request must authenticate the same way the rest of the CLI does", "Bearer secret-key", gotAuth)
+	}
+}
+
+// TestSSEBridgeAuth_NoAuthorizationHeaderWhenKeyEmpty asserts that when no
+// API key is configured, the request carries no Authorization header at
+// all — preserving today's unauthenticated-local behavior.
+func TestSSEBridgeAuth_NoAuthorizationHeaderWhenKeyEmpty(t *testing.T) {
+	var sawHeader bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, sawHeader = r.Header["Authorization"]
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "id: run-noauth:0\nevent: message\ndata: {\"type\":\"run.completed\",\"payload\":{}}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	msgs, stop := tui.StartSSEBridge(ctx, srv.URL) // no options => unauthenticated
+	defer stop()
+	for range msgs {
+	}
+
+	if sawHeader {
+		t.Error("expected no Authorization header when no API key is configured")
+	}
+}
+
+// TestSSEBridgeAuth_ReconnectCarriesAuthorizationAndLastEventID asserts a
+// single connection attempt that sets both LastEventID and APIKey (exactly
+// what a reconnect does — see reconnectSSECmd/startSSEForRunFrom in api.go)
+// carries both headers together, not just one or the other.
+func TestSSEBridgeAuth_ReconnectCarriesAuthorizationAndLastEventID(t *testing.T) {
+	var gotAuth, gotLastEventID string
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotLastEventID = r.Header.Get("Last-Event-ID")
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "id: run-reconnect-auth:1\nevent: message\ndata: {\"type\":\"run.completed\",\"payload\":{}}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	msgs, stop := tui.StartSSEBridgeWithOptions(ctx, srv.URL, tui.SSEBridgeOptions{
+		LastEventID: "run-reconnect-auth:0",
+		APIKey:      "secret-key",
+	})
+	defer stop()
+	for range msgs {
+	}
+
+	if gotAuth != "Bearer secret-key" {
+		t.Errorf("expected reconnect request Authorization = %q, got %q", "Bearer secret-key", gotAuth)
+	}
+	if gotLastEventID != "run-reconnect-auth:0" {
+		t.Errorf("expected reconnect request Last-Event-ID = %q, got %q", "run-reconnect-auth:0", gotLastEventID)
+	}
+}
+
+// TestSSEBridgeAuth_401IsNonRetryable asserts that a 401 response produces
+// exactly one connection attempt (no bounded-reconnect retries burned
+// against a permanent auth rejection) and a single clear error.
+func TestSSEBridgeAuth_401IsNonRetryable(t *testing.T) {
+	var mu sync.Mutex
+	connCount := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		connCount++
+		mu.Unlock()
+		w.WriteHeader(http.StatusUnauthorized)
+		fmt.Fprint(w, `{"error":{"code":"unauthorized","message":"missing or invalid api key"}}`)
+	}))
+	defer srv.Close()
+
+	cfg := tui.DefaultTUIConfig()
+	cfg.BaseURL = srv.URL
+	m := tui.New(cfg)
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model := m2.(tui.Model)
+
+	model2, cmd := model.Update(tui.RunStartedMsg{RunID: "run-401"})
+	model = model2.(tui.Model)
+
+	final := driveModel(t, model, cmd, 10*time.Second, func(m tui.Model, msg tea.Msg) bool {
+		return !m.RunActive()
+	})
+
+	mu.Lock()
+	gotConns := connCount
+	mu.Unlock()
+	if gotConns != 1 {
+		t.Errorf("expected exactly 1 connection attempt on a 401 (non-retryable), got %d — burning the reconnect budget against a permanent auth rejection wastes time and confuses the user", gotConns)
+	}
+	if final.RunActive() {
+		t.Error("expected the run to be marked inactive after a non-retryable 401")
+	}
+
+	view := final.View()
+	errCount := strings.Count(view, "stream error")
+	if errCount != 1 {
+		t.Errorf("expected exactly one clear stream error message for a non-retryable 401, got %d", errCount)
+	}
+}
+
+// TestSSEBridgeAuth_5xxStillRetries is a regression guard proving the 401/403
+// non-retryable fix did not make everything non-retryable: a transient 5xx
+// (or a network-level failure — already covered by the reconnect tests
+// above) must still be retried per the existing bounded/backoff behavior.
+func TestSSEBridgeAuth_5xxStillRetries(t *testing.T) {
+	var mu sync.Mutex
+	connCount := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		connCount++
+		n := connCount
+		mu.Unlock()
+
+		if n < 3 {
+			w.WriteHeader(http.StatusInternalServerError)
+			fmt.Fprint(w, `{"error":"internal"}`)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, "id: run-5xx:0\nevent: message\ndata: {\"type\":\"run.completed\",\"payload\":{}}\n\n")
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	cfg := tui.DefaultTUIConfig()
+	cfg.BaseURL = srv.URL
+	m := tui.New(cfg)
+	m2, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+	model := m2.(tui.Model)
+
+	model2, cmd := model.Update(tui.RunStartedMsg{RunID: "run-5xx"})
+	model = model2.(tui.Model)
+
+	final := driveModel(t, model, cmd, 15*time.Second, func(m tui.Model, msg tea.Msg) bool {
+		if done, ok := msg.(tui.SSEDoneMsg); ok && done.EventType == "run.completed" {
+			return true
+		}
+		return !m.RunActive()
+	})
+
+	mu.Lock()
+	gotConns := connCount
+	mu.Unlock()
+	if gotConns != 3 {
+		t.Errorf("expected exactly 3 connection attempts (2 transient 5xx failures + 1 success), got %d", gotConns)
+	}
+	if final.RunActive() {
+		t.Error("expected run inactive after run.completed")
+	}
+}
