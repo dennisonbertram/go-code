@@ -177,6 +177,147 @@ func TestCompleteTextResponse(t *testing.T) {
 	}
 }
 
+// --- FinishReason normalization (BUG2b follow-up) ---
+
+// TestCompleteNonStreamingSurfacesMaxTokensAsLengthFinishReason is a BUG2b
+// follow-up test: a non-streaming response with stop_reason: "max_tokens"
+// (Anthropic's truncation signal) must surface as the SAME normalized value
+// OpenAI's finish_reason: "length" maps to (harness.FinishReasonLength),
+// rather than leaking a provider-specific vocabulary.
+func TestCompleteNonStreamingSurfacesMaxTokensAsLengthFinishReason(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_trunc",
+			"type": "message",
+			"role": "assistant",
+			"content": [{"type": "text", "text": "partial answer that got cut off"}],
+			"stop_reason": "max_tokens",
+			"usage": {"input_tokens": 10, "output_tokens": 16384}
+		}`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if result.FinishReason != harness.FinishReasonLength {
+		t.Fatalf("expected FinishReasonLength (normalized from anthropic's max_tokens), got %q", result.FinishReason)
+	}
+}
+
+// TestCompleteNonStreamingSurfacesEndTurnAsStopFinishReason verifies a normal
+// completion surfaces the normalized "stop" value rather than leaving
+// FinishReason empty by accident.
+func TestCompleteNonStreamingSurfacesEndTurnAsStopFinishReason(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id": "msg_ok",
+			"type": "message",
+			"role": "assistant",
+			"content": [{"type": "text", "text": "a complete answer"}],
+			"stop_reason": "end_turn",
+			"usage": {"input_tokens": 10, "output_tokens": 5}
+		}`))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if result.FinishReason != harness.FinishReasonStop {
+		t.Fatalf("expected FinishReasonStop, got %q", result.FinishReason)
+	}
+}
+
+// TestCompleteStreamingSurfacesMaxTokensAsLengthFinishReason is the
+// streaming counterpart: Anthropic reports stop_reason on the
+// message_delta event.
+func TestCompleteStreamingSurfacesMaxTokensAsLengthFinishReason(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"max_tokens"},"usage":{"output_tokens":16384}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if result.FinishReason != harness.FinishReasonLength {
+		t.Fatalf("expected FinishReasonLength (normalized from anthropic's max_tokens), got %q", result.FinishReason)
+	}
+}
+
+// TestCompleteStreamingSurfacesEndTurnAsStopFinishReason is the streaming
+// counterpart of the normal-completion case.
+func TestCompleteStreamingSurfacesEndTurnAsStopFinishReason(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`event: content_block_start`,
+			`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			``,
+			`event: content_block_delta`,
+			`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}`,
+			``,
+			`event: message_delta`,
+			`data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}`,
+			``,
+			`event: message_stop`,
+			`data: {"type":"message_stop"}`,
+			``,
+		}, "\n"))
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if result.FinishReason != harness.FinishReasonStop {
+		t.Fatalf("expected FinishReasonStop, got %q", result.FinishReason)
+	}
+}
+
 // --- TestCompleteToolCallResponse ---
 
 func TestCompleteToolCallResponse(t *testing.T) {

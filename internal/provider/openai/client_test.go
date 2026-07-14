@@ -361,6 +361,146 @@ func TestClientCompleteParsesToolCalls(t *testing.T) {
 	}
 }
 
+// --- FinishReason normalization (BUG2b follow-up) ---
+
+// TestClientCompleteNonStreamingSurfacesLengthFinishReason is a BUG2b
+// follow-up test: a non-streaming response with finish_reason: "length"
+// (OpenAI's truncation signal) must surface as harness.FinishReasonLength on
+// CompletionResult, not be silently dropped.
+func TestClientCompleteNonStreamingSurfacesLengthFinishReason(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices":[
+				{"finish_reason":"length","message":{"content":"partial answer that got cut off"}}
+			],
+			"usage":{"prompt_tokens":10,"completion_tokens":4096,"total_tokens":4106}
+		}`))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.FinishReason != harness.FinishReasonLength {
+		t.Fatalf("expected FinishReasonLength, got %q", result.FinishReason)
+	}
+}
+
+// TestClientCompleteNonStreamingSurfacesStopFinishReason verifies a normal
+// completion surfaces the normalized "stop" value rather than leaving
+// FinishReason empty by accident.
+func TestClientCompleteNonStreamingSurfacesStopFinishReason(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"choices":[
+				{"finish_reason":"stop","message":{"content":"a complete answer"}}
+			],
+			"usage":{"prompt_tokens":10,"completion_tokens":5,"total_tokens":15}
+		}`))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.FinishReason != harness.FinishReasonStop {
+		t.Fatalf("expected FinishReasonStop, got %q", result.FinishReason)
+	}
+}
+
+// TestClientCompleteStreamSurfacesLengthFinishReason is the streaming
+// counterpart: OpenAI reports finish_reason on the final chunk (typically
+// alongside an empty delta), before [DONE].
+func TestClientCompleteStreamSurfacesLengthFinishReason(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"partial"}}]}`,
+			``,
+			`data: {"choices":[{"delta":{},"finish_reason":"length"}]}`,
+			``,
+			`data: [DONE]`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.FinishReason != harness.FinishReasonLength {
+		t.Fatalf("expected FinishReasonLength, got %q", result.FinishReason)
+	}
+}
+
+// TestClientCompleteStreamSurfacesStopFinishReason is the streaming
+// counterpart of the normal-completion case.
+func TestClientCompleteStreamSurfacesStopFinishReason(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`data: {"choices":[{"delta":{"content":"done"}}]}`,
+			``,
+			`data: {"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+			``,
+			`data: [DONE]`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("new client: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+	if result.FinishReason != harness.FinishReasonStop {
+		t.Fatalf("expected FinishReasonStop, got %q", result.FinishReason)
+	}
+}
+
 func TestClientCompleteFailsWithoutChoices(t *testing.T) {
 	t.Parallel()
 

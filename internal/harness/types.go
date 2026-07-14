@@ -124,7 +124,52 @@ type CompletionResult struct {
 	// if available (e.g. "gpt-4.1-2025-04-14"). Empty when the provider does not
 	// report this field. Used by the forensics request envelope feature.
 	ModelVersion string `json:"model_version,omitempty"`
+	// FinishReason is a normalized signal for why the completion stopped,
+	// unifying OpenAI's finish_reason and Anthropic's stop_reason into a
+	// single vocabulary (see FinishReason's doc comment). Empty when the
+	// provider did not report a finish reason at all.
+	//
+	// This field is purely additive: it does not change Complete()'s error
+	// contract. A response truncated by the model's max-tokens limit
+	// (FinishReasonLength) is still returned as a successful CompletionResult
+	// with usable partial content, not an error — callers that care about
+	// truncation should inspect this field and decide policy themselves.
+	FinishReason FinishReason `json:"finish_reason,omitempty"`
 }
+
+// FinishReason is a normalized representation of why a completion stopped,
+// unifying provider-specific vocabularies (OpenAI's finish_reason, Anthropic's
+// stop_reason) into a single set of values so callers don't need to branch on
+// provider. Populated by provider clients for both streaming and
+// non-streaming completions. The empty string means the provider did not
+// report a finish reason (distinct from FinishReasonOther, which means the
+// provider reported one but it did not map onto a recognized value).
+type FinishReason string
+
+const (
+	// FinishReasonStop indicates the model reached a natural stopping point.
+	// Maps from OpenAI's "stop" and Anthropic's "end_turn" / "stop_sequence".
+	FinishReasonStop FinishReason = "stop"
+	// FinishReasonLength indicates the completion was truncated because it
+	// hit the configured max-tokens limit. Maps from OpenAI's "length" and
+	// Anthropic's "max_tokens". Content up to this point is usable but
+	// incomplete.
+	FinishReasonLength FinishReason = "length"
+	// FinishReasonToolCalls indicates the model stopped in order to invoke
+	// one or more tools. Maps from OpenAI's "tool_calls" (and the deprecated
+	// "function_call") and Anthropic's "tool_use".
+	FinishReasonToolCalls FinishReason = "tool_calls"
+	// FinishReasonContentFilter indicates the provider's content filter
+	// suppressed or blocked the completion. Maps from OpenAI's
+	// "content_filter" and Anthropic's "refusal".
+	FinishReasonContentFilter FinishReason = "content_filter"
+	// FinishReasonOther is used when the provider reported a finish reason
+	// that does not map onto any of the above (e.g. Anthropic's
+	// "pause_turn"). This constant exists so "provider reported something
+	// unrecognized" is distinguishable from "provider reported nothing"
+	// (empty string).
+	FinishReasonOther FinishReason = "other"
+)
 
 type CompletionDelta struct {
 	Content   string        `json:"content,omitempty"`
