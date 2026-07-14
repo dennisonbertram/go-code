@@ -254,14 +254,22 @@ func (e *Engine) GetRun(runID string) (*Run, error) {
 //
 // If the run completes or fails, the channel will stop receiving events;
 // subscribers should use the cancel function to clean up.
+//
+// The history read and the channel registration happen atomically under
+// e.mu, matching how emit() holds e.mu across its store append and
+// subscriber fan-out. This closes the gap where an event emitted between
+// "read history" and "register channel" would previously land in
+// neither — permanently lost, which is fatal if it's the terminal
+// workflow.completed/failed event (an SSE client would hang forever).
 func (e *Engine) Subscribe(runID string) ([]Event, <-chan Event, func(), error) {
+	ch := make(chan Event, 64)
+
+	e.mu.Lock()
 	history, err := e.store.GetEvents(context.Background(), runID, -1)
 	if err != nil {
+		e.mu.Unlock()
 		return nil, nil, nil, err
 	}
-
-	ch := make(chan Event, 64)
-	e.mu.Lock()
 	if _, ok := e.subs[runID]; !ok {
 		e.subs[runID] = make(map[chan Event]struct{})
 	}
