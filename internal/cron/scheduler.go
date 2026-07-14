@@ -24,6 +24,8 @@ type Scheduler struct {
 	jitterCfg   JitterConfig
 	jitterCache map[string]time.Duration // jobID|schedule -> jitter offset
 	sleepFn     func(time.Duration)      // injectable sleep for testing; defaults to time.Sleep
+	done        chan struct{}           // closed by Stop to interrupt in-flight jitter waits
+	stopOnce    sync.Once               // guards closing done so a double Stop cannot panic
 }
 
 // SchedulerConfig holds scheduler configuration.
@@ -56,6 +58,7 @@ func NewScheduler(store Store, executor Executor, clock Clock, cfg SchedulerConf
 		jitterCfg:   cfg.Jitter,
 		jitterCache: make(map[string]time.Duration),
 		sleepFn:     time.Sleep,
+		done:        make(chan struct{}),
 	}
 }
 
@@ -78,8 +81,20 @@ func (s *Scheduler) Start(ctx context.Context) error {
 }
 
 // Stop stops the cron scheduler and waits for in-flight executions.
+//
+// Stop first tells robfig/cron to stop dispatching new ticks (s.cron.Stop
+// returns a context that becomes Done once any invocation already in
+// progress returns). It then closes s.done — BEFORE waiting on that
+// context — so that any fireJob call currently blocked in its jitter wait
+// is interrupted immediately and returns without executing the job. Only
+// after that does Stop wait for cron's context and then for s.wg, which
+// tracks the async goroutines doing the actual execution work (those are
+// allowed to run to completion; only the pre-execution jitter wait is
+// abandoned on shutdown). Closing done is idempotent (sync.Once) so a
+// double Stop call cannot panic.
 func (s *Scheduler) Stop() {
 	ctx := s.cron.Stop()
+	s.stopOnce.Do(func() { close(s.done) })
 	<-ctx.Done()
 	s.wg.Wait()
 }
@@ -156,7 +171,26 @@ func (s *Scheduler) fireJob(job Job, jitter time.Duration) {
 			log.Printf("cron: job %s jittered by %v (original schedule: %s, base jitter: %v)",
 				job.ID, jitterOffset, job.Schedule, baseJitter)
 		}
-		s.sleepFn(jitterOffset)
+
+		// The jitter wait must be interruptible by Stop(), otherwise
+		// shutdown blocks for up to the full jitter window (which can be
+		// minutes with the default jitter config) before the HTTP server
+		// even begins draining. s.sleepFn is run in a background
+		// goroutine so tests can keep injecting a fast/no-op sleep, while
+		// production (sleepFn == time.Sleep) still returns from fireJob
+		// promptly on shutdown: if s.done closes first, fireJob abandons
+		// this fire entirely rather than executing the job mid-shutdown.
+		sleepDone := make(chan struct{})
+		go func() {
+			s.sleepFn(jitterOffset)
+			close(sleepDone)
+		}()
+		select {
+		case <-sleepDone:
+		case <-s.done:
+			log.Printf("cron: shutdown in progress, skipping fire for job %s", job.ID)
+			return
+		}
 	}
 
 	// Re-read the job's current state from the store before firing. The
