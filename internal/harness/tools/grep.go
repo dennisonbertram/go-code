@@ -17,7 +17,7 @@ import (
 	"go-agent-harness/internal/harness/tools/descriptions"
 )
 
-func grepTool(workspaceRoot string) Tool {
+func grepTool(workspaceRoot string, sandboxScope SandboxScope) Tool {
 	def := Definition{
 		Name:         "grep",
 		Description:  descriptions.Load("grep"),
@@ -38,7 +38,7 @@ func grepTool(workspaceRoot string) Tool {
 		},
 	}
 
-	handler := func(_ context.Context, raw json.RawMessage) (string, error) {
+	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
 		args := struct {
 			Query         string `json:"query"`
 			Path          string `json:"path"`
@@ -63,7 +63,7 @@ func grepTool(workspaceRoot string) Tool {
 			args.Regex = false
 		}
 
-		absPath, err := ResolveWorkspacePath(workspaceRoot, args.Path)
+		absPath, err := ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, sandboxScope)
 		if err != nil {
 			return "", err
 		}

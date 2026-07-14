@@ -42,6 +42,7 @@ func DownloadTool(opts tools.BuildOptions) tools.Tool {
 	if client == nil {
 		client = http.DefaultClient
 	}
+	client = tools.NewGuardedHTTPClient(client, opts.NetworkAllowlist)
 	workspaceRoot := opts.WorkspaceRoot
 
 	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
@@ -80,7 +81,7 @@ func DownloadTool(opts tools.BuildOptions) tools.Tool {
 			args.MaxBytes = 100 * 1024 * 1024
 		}
 
-		absPath, err := tools.ResolveWorkspacePath(workspaceRoot, args.FilePath)
+		absPath, err := tools.ResolveWorkspacePathConfined(ctx, workspaceRoot, args.FilePath, opts.SandboxScope)
 		if err != nil {
 			return "", err
 		}

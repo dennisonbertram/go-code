@@ -122,7 +122,7 @@ func GitDiffTool(opts tools.BuildOptions) tools.Tool {
 			cmdArgs = append(cmdArgs, args.Target)
 		}
 		if strings.TrimSpace(args.Path) != "" {
-			absPath, err := tools.ResolveWorkspacePath(workspaceRoot, args.Path)
+			absPath, err := tools.ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, opts.SandboxScope)
 			if err != nil {
 				return "", err
 			}
