@@ -1768,6 +1768,85 @@ func TestResponsesAPIStreamingTextAndToolCalls(t *testing.T) {
 	}
 }
 
+// TestResponsesAPIStreamingToolCallDeltasByItemID verifies that the streaming
+// parser streams tool-call argument deltas keyed by item_id, not call_id.
+// OpenAI's Responses API sends function_call_arguments.delta/done events with
+// an item_id and no call_id; output_item.added provides the item_id -> call_id
+// mapping, and output_item.done carries the final call_id. This regresses the
+// bug where every delta was dropped because the handler only looked at call_id.
+func TestResponsesAPIStreamingToolCallDeltasByItemID(t *testing.T) {
+	t.Parallel()
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"stream":true`) {
+			t.Fatalf("expected stream=true in request, got: %s", body)
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		_, _ = io.WriteString(w, strings.Join([]string{
+			`event: response.output_item.added`,
+			`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_123","call_id":"call_123","name":"get_weather","arguments":""}}`,
+			``,
+			`event: response.function_call_arguments.delta`,
+			`data: {"type":"response.function_call_arguments.delta","item_id":"fc_123","output_index":0,"delta":"{\""}`,
+			``,
+			`event: response.function_call_arguments.delta`,
+			`data: {"type":"response.function_call_arguments.delta","item_id":"fc_123","output_index":0,"delta":"location"}`,
+			``,
+			`event: response.function_call_arguments.done`,
+			`data: {"type":"response.function_call_arguments.done","item_id":"fc_123","output_index":0,"arguments":"{\"location\":\"Paris\"}"}`,
+			``,
+			`event: response.output_item.done`,
+			`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_123","call_id":"call_123","name":"get_weather","arguments":"{\"location\":\"Paris\"}"}}`,
+			``,
+			`event: response.completed`,
+			`data: {"response":{"id":"resp_abc","output":[],"usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}`,
+			``,
+		}, "\n"))
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClient(t, testServer.URL)
+
+	var deltas []harness.CompletionDelta
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "weather"}},
+		Stream: func(delta harness.CompletionDelta) {
+			deltas = append(deltas, delta)
+		},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(result.ToolCalls))
+	}
+	if result.ToolCalls[0].ID != "call_123" {
+		t.Fatalf("unexpected tool call ID: %q", result.ToolCalls[0].ID)
+	}
+	if result.ToolCalls[0].Name != "get_weather" {
+		t.Fatalf("unexpected tool call name: %q", result.ToolCalls[0].Name)
+	}
+	if result.ToolCalls[0].Arguments != `{"location":"Paris"}` {
+		t.Fatalf("unexpected tool call arguments: %q", result.ToolCalls[0].Arguments)
+	}
+
+	var toolArgDeltas []string
+	for _, d := range deltas {
+		if d.ToolCall.Arguments != "" {
+			toolArgDeltas = append(toolArgDeltas, d.ToolCall.Arguments)
+		}
+	}
+	if len(toolArgDeltas) == 0 {
+		t.Fatal("expected streamed tool-call argument deltas, got none")
+	}
+	if !slices.Equal(toolArgDeltas, []string{`{"`, "location"}) {
+		t.Fatalf("unexpected tool arg deltas: %v", toolArgDeltas)
+	}
+}
+
 // TestResponsesAPINonStreamingErrorReturnsTypedFailure is a BUG4 test: the
 // non-streaming Responses API error branch returned a plain fmt.Errorf
 // instead of the typed *harness.ProviderHTTPError the Chat Completions path
