@@ -749,8 +749,14 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 	}
 
 	// Validate workspace_type early to fail fast before any state is created.
+	// Beyond the name check, also enforce the deterministic provisioning
+	// preconditions (registered backend, worktree repo path) so an HTTP caller
+	// gets a synchronous 400 instead of a queued run that dies in provisioning.
 	if req.WorkspaceType != "" {
 		if err := validateWorkspaceType(req.WorkspaceType); err != nil {
+			return Run{}, err
+		}
+		if err := validateWorkspaceProvisionPreconditions(req.WorkspaceType, r.config.WorkspaceBaseOptions); err != nil {
 			return Run{}, err
 		}
 	}
@@ -5172,24 +5178,8 @@ func stringSlicesEqual(a, b []string) bool {
 // Each backend ignores fields it doesn't use; the same Options struct is
 // passed to all of them.
 func provisionRunWorkspace(ctx context.Context, runID, wsType string, baseOpts WorkspaceProvisionOptions) (workspace.Workspace, error) {
-	// Surface a clearer error than the workspace package's generic ErrNotFound
-	// when the type passed validation but isn't actually registered.
-	known := false
-	for _, name := range workspace.List() {
-		if name == wsType {
-			known = true
-			break
-		}
-	}
-	if !known {
-		return nil, fmt.Errorf("unknown workspace type %q (registered: %v)", wsType, workspace.List())
-	}
-
-	// Worktree-specific precondition: it can only succeed with a real repo path.
-	// Catching this here gives a remediation-shaped message instead of a deeper
-	// "repoPath must be set" from inside the workspace package.
-	if wsType == "worktree" && baseOpts.RepoPath == "" {
-		return nil, fmt.Errorf("workspace_type=worktree requires WorkspaceBaseOptions.RepoPath to be configured in RunnerConfig")
+	if err := validateWorkspaceProvisionPreconditions(wsType, baseOpts); err != nil {
+		return nil, err
 	}
 
 	opts := workspace.Options{
@@ -5205,4 +5195,35 @@ func provisionRunWorkspace(ctx context.Context, runID, wsType string, baseOpts W
 		return nil, fmt.Errorf("provision %s workspace: %w", wsType, err)
 	}
 	return ws, nil
+}
+
+// validateWorkspaceProvisionPreconditions checks the deterministic
+// preconditions for provisioning a workspace of the given type, without
+// touching the environment: the type must be registered (a clearer error than
+// the workspace package's generic ErrNotFound), and worktree can only succeed
+// with a real repo path (a remediation-shaped message instead of a deeper
+// "repoPath must be set" from inside the workspace package).
+//
+// StartRun calls this for explicitly requested workspace types so callers get
+// a synchronous error at run creation instead of a queued run that fails in
+// provisioning; provisionRunWorkspace calls it again as the safety net for
+// profile-resolved workspace types. Environment-dependent failures (Docker
+// daemon unavailable, missing HETZNER_API_KEY) still surface at provisioning
+// time.
+func validateWorkspaceProvisionPreconditions(wsType string, baseOpts WorkspaceProvisionOptions) error {
+	known := false
+	for _, name := range workspace.List() {
+		if name == wsType {
+			known = true
+			break
+		}
+	}
+	if !known {
+		return fmt.Errorf("unknown workspace type %q (registered: %v)", wsType, workspace.List())
+	}
+
+	if wsType == "worktree" && baseOpts.RepoPath == "" {
+		return fmt.Errorf("workspace_type=worktree requires WorkspaceBaseOptions.RepoPath to be configured in RunnerConfig")
+	}
+	return nil
 }
