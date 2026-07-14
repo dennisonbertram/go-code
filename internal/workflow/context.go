@@ -85,7 +85,12 @@ func (c *Context) Agent(prompt string, opts *AgentOpts) (*AgentResult, error) {
 
 	phase := opts.Phase
 	if phase == "" {
+		// c.phase is written by Phase() under c.mu; Parallel()/Pipeline()
+		// goroutines share this Context, so a concurrent Phase() call
+		// from another thunk makes this a real race without the lock.
+		c.mu.Lock()
 		phase = c.phase
+		c.mu.Unlock()
 	}
 
 	c.emit(EventWorkflowAgentStarted, map[string]any{
