@@ -1141,3 +1141,76 @@ func TestScheduler_Stop_InterruptsLongJitterWait(t *testing.T) {
 		t.Fatal("expected fireJob to skip execution when Stop() interrupts the jitter wait, but the executor ran")
 	}
 }
+
+// TestScheduler_Stop_IsIdempotent (regression for BUG 3) verifies that
+// calling Stop() twice does not panic. The fix closes s.done via
+// sync.Once specifically so a double Stop is safe; a regression here
+// would surface as a "close of closed channel" panic.
+func TestScheduler_Stop_IsIdempotent(t *testing.T) {
+	s := NewScheduler(&mockStore{}, &mockExecutor{}, RealClock{}, SchedulerConfig{})
+	s.Stop()
+	s.Stop() // must not panic
+}
+
+// TestScheduler_Stop_InterruptsMultipleConcurrentJitterWaits (regression
+// for BUG 3) covers a different angle than the red test: several fireJob
+// calls blocked in a long jitter wait AT ONCE (rather than one job
+// dispatched through the real robfig cron mechanism). It would fail if
+// Stop() only interrupted the first waiter, or if the done-channel signal
+// were somehow consumed by one goroutine and unavailable to the others
+// (e.g. a regression from `<-s.done` being changed to a receive from a
+// non-broadcasting channel).
+func TestScheduler_Stop_InterruptsMultipleConcurrentJitterWaits(t *testing.T) {
+	var executedCount int32
+
+	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{}, ErrJobNotFound
+		},
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {
+			atomic.AddInt32(&executedCount, 1)
+			return "ok", nil
+		},
+	}
+	clock := newMockClock(time.Now())
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 5})
+
+	const n = 5
+	const longJitter = 5 * time.Second
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			job := testJob(fmt.Sprintf("multi-stop-%d", i))
+			s.fireJob(job, longJitter)
+		}(i)
+	}
+
+	// Give the goroutines a moment to enter their jitter waits.
+	time.Sleep(100 * time.Millisecond)
+
+	stopStart := time.Now()
+	s.Stop()
+	stopDuration := time.Since(stopStart)
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fireJob goroutines did not return promptly after Stop()")
+	}
+
+	if stopDuration > 1500*time.Millisecond {
+		t.Fatalf("Stop() took %v, expected all %d jitter waits to be interrupted promptly", stopDuration, n)
+	}
+	if c := atomic.LoadInt32(&executedCount); c != 0 {
+		t.Fatalf("expected 0 executions (all interrupted by Stop()), got %d", c)
+	}
+}
