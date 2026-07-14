@@ -894,3 +894,134 @@ func TestScheduler_ConcurrentUpdateJobScheduleAndFireJob_NoDataRace(t *testing.T
 	wg.Wait()
 	s.wg.Wait()
 }
+
+// --- BUG 2: fireJob writes back a stale Job snapshot ---
+
+// TestFireJob_SkipsExecutionWhenJobPausedInStore (BT-002, P1) reproduces the
+// "resurrects paused jobs" half of BUG 2: fireJob captures a full Job at
+// AddJob/schedule time and, before the fix, never re-checks the job's
+// current status before firing. If a job is paused via the store after it
+// was scheduled but before the timer fires, fireJob must NOT execute it.
+//
+// Before the fix, fireJob has no way to observe the pause (it never calls
+// store.GetJob), so it fires anyway. This test fails before the fix
+// (executor.Execute is called) and passes after the fix (fireJob re-reads
+// the job from the store and skips firing when the live status isn't
+// active).
+func TestFireJob_SkipsExecutionWhenJobPausedInStore(t *testing.T) {
+	var executed bool
+	var mu sync.Mutex
+
+	// job is the STALE snapshot fireJob receives — captured as active at
+	// schedule time via AddJob's closure.
+	job := testJob("pause-skip-test")
+	job.Status = StatusActive
+
+	// pausedJob is what the store now reports: the user paused the job
+	// after it was scheduled but before this fire.
+	pausedJob := job
+	pausedJob.Status = StatusPaused
+
+	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return pausedJob, nil
+		},
+		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
+			return exec, nil
+		},
+		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error { return nil },
+		UpdateJobFunc: func(ctx context.Context, job Job) error { return nil },
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {
+			mu.Lock()
+			executed = true
+			mu.Unlock()
+			return "ok", nil
+		},
+	}
+
+	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1, Jitter: JitterConfig{Enabled: false}})
+	s.sleepFn = func(time.Duration) {}
+
+	s.fireJob(job, 0)
+	s.wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if executed {
+		t.Fatal("expected fireJob to skip execution for a job that is now paused in the store, but the executor ran (paused job was resurrected)")
+	}
+}
+
+// TestFireJob_DoesNotWriteBackStaleFullSnapshot (BT-003, P1) reproduces the
+// "silently reverts user edits" half of BUG 2: fireJob previously called
+// store.UpdateJob with the full Job struct it captured at schedule time,
+// clobbering any edits (schedule, execution config, timeout, tags) made to
+// the job in the store since it was scheduled.
+//
+// The fix must stop calling store.UpdateJob for run-tracking bookkeeping —
+// it should use a narrower method (TouchJobRun, added in the next commit)
+// that only touches last_run_at/next_run_at/updated_at. This test asserts
+// that fireJob never calls store.UpdateJob at all as part of a normal fire,
+// and that execution uses the CURRENT (re-read) job state rather than the
+// stale snapshot. Before the fix, UpdateJobFunc IS invoked (with the stale
+// snapshot) and the stale ExecConfig/Tags are used, so this test fails.
+// After the fix, UpdateJob is never called and the live state is used.
+func TestFireJob_DoesNotWriteBackStaleFullSnapshot(t *testing.T) {
+	var updateJobCalled bool
+	var mu sync.Mutex
+
+	// job is the STALE snapshot captured at schedule time.
+	job := testJob("stale-snapshot-test")
+	job.Tags = "stale-tag"
+	job.TimeoutSec = 30
+
+	// current is what the store now reports: the user edited tags and
+	// timeout after the job was scheduled.
+	current := job
+	current.Tags = "edited-tag"
+	current.TimeoutSec = 999
+
+	var executedTags string
+	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return current, nil
+		},
+		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
+			return exec, nil
+		},
+		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error { return nil },
+		UpdateJobFunc: func(ctx context.Context, job Job) error {
+			mu.Lock()
+			updateJobCalled = true
+			mu.Unlock()
+			return nil
+		},
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, execJob Job) (string, error) {
+			mu.Lock()
+			executedTags = execJob.Tags
+			mu.Unlock()
+			return "ok", nil
+		},
+	}
+
+	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1, Jitter: JitterConfig{Enabled: false}})
+	s.sleepFn = func(time.Duration) {}
+
+	s.fireJob(job, 0)
+	s.wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if updateJobCalled {
+		t.Fatal("fireJob must not call store.UpdateJob with a full job snapshot (it can silently revert concurrent edits); it should only touch run-tracking columns via TouchJobRun")
+	}
+	if executedTags != "edited-tag" {
+		t.Fatalf("expected fireJob to execute with the current (edited) job state %q, got %q", "edited-tag", executedTags)
+	}
+}
