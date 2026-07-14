@@ -763,10 +763,20 @@ type PermissionConfig struct {
 	Rules *PermissionRuleSet `json:"rules,omitempty"`
 }
 
-// DefaultPermissionConfig returns the default (unrestricted, no approval required).
+// DefaultPermissionConfig returns the default (workspace-confined, no
+// approval required) permission configuration.
+//
+// SAFETY DEFAULT: Sandbox defaults to SandboxScopeWorkspace, not
+// SandboxScopeUnrestricted. The harness is used both as a local coding tool
+// and to run multi-agent/multi-tenant workloads; a caller that does not
+// explicitly opt out must not be able to read/write arbitrary absolute host
+// paths (e.g. ~/.ssh/id_rsa) via the file tools. Callers that legitimately
+// need broader filesystem access must explicitly request
+// SandboxScopeLocal or SandboxScopeUnrestricted via PermissionConfig.Sandbox
+// on the run request.
 func DefaultPermissionConfig() PermissionConfig {
 	return PermissionConfig{
-		Sandbox:  SandboxScopeUnrestricted,
+		Sandbox:  SandboxScopeWorkspace,
 		Approval: ApprovalPolicyNone,
 	}
 }
@@ -792,7 +802,9 @@ func ValidatePermissionConfig(p PermissionConfig) error {
 	case SandboxScopeWorkspace, SandboxScopeLocal, SandboxScopeUnrestricted:
 		// valid
 	case "":
-		// empty defaults to unrestricted — also valid at validation time
+		// empty defaults to workspace (the safety-biased default; see
+		// DefaultPermissionConfig and normalizePermissionConfig) — also valid
+		// at validation time
 	default:
 		return fmt.Errorf("invalid sandbox scope %q: must be one of workspace, local, unrestricted", p.Sandbox)
 	}
