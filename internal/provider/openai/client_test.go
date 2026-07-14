@@ -124,6 +124,135 @@ func TestNewClientStreamingSurvivesSlowBodyAfterFastHeaders(t *testing.T) {
 	}
 }
 
+// withShrunkIdleStreamTimeout temporarily overrides the package-level
+// idleStreamTimeout var for the duration of a test. Callers MUST NOT mark
+// the test t.Parallel(): idleStreamTimeout is process-wide, shared, and
+// mutated without synchronization here — this is safe only because
+// non-parallel tests in this package run strictly before the batch of
+// t.Parallel() tests is allowed to start (Go's testing package pauses every
+// parallel test at its Parallel() call until all non-parallel tests in the
+// same run have completed), so there is no concurrent access.
+func withShrunkIdleStreamTimeout(t *testing.T, d time.Duration) {
+	t.Helper()
+	original := idleStreamTimeout
+	idleStreamTimeout = d
+	t.Cleanup(func() { idleStreamTimeout = original })
+}
+
+// TestClientCompleteStreamStallTimesOutWithoutHanging is the BUG1
+// follow-up's primary red/green test: a server that sends headers and a
+// couple of chunks, then goes completely silent (no more bytes, connection
+// stays open) must fail with a typed error within the idle interval instead
+// of hanging forever. This is the exact hole BUG1's fix opened: removing
+// Client.Timeout means nothing else would ever abort a post-headers stall
+// without this idle watchdog.
+//
+// NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
+func TestClientCompleteStreamStallTimesOutWithoutHanging(t *testing.T) {
+	withShrunkIdleStreamTimeout(t, 60*time.Millisecond)
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `data: {"choices":[{"delta":{"content":"Hel"}}]}`+"\n\n")
+		flusher.Flush()
+
+		// Go silent forever (from the client's perspective) — but bound the
+		// handler goroutine with a safety cap and release early if the
+		// client aborts the connection, so the test server can always Close()
+		// promptly instead of hanging the test process on failure.
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	start := time.Now()
+	_, err = client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a stall error, got success")
+	}
+	if elapsed > 1*time.Second {
+		t.Fatalf("expected the idle-stream watchdog to fail fast (~60ms), took %s — looks like it hung instead", elapsed)
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if !strings.Contains(phe.Body, "stall") {
+		t.Fatalf("expected error body to mention the stall, got %q", phe.Body)
+	}
+}
+
+// TestClientCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout is
+// the regression guard proving the idle timeout is gap-based, not a
+// disguised total-duration cap: the server never goes silent for longer than
+// idleStreamTimeout between chunks, but the overall stream runs well past
+// idleStreamTimeout in total. If a future change replaced the per-chunk
+// timer reset with anything resembling a fixed deadline from stream start
+// (i.e. reintroducing BUG1 in a new disguise), this test would start
+// failing even though no individual gap ever exceeded the idle interval.
+//
+// NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
+func TestClientCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout(t *testing.T) {
+	withShrunkIdleStreamTimeout(t, 50*time.Millisecond)
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "text/event-stream; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+
+		// 6 chunks, 20ms apart (well under the 50ms idle timeout per gap),
+		// for a total stream duration of ~120ms — more than double the idle
+		// timeout, but the stream must still succeed because it never goes
+		// idle for longer than 50ms at a stretch.
+		chunks := []string{"o", "n", "e", " ", "t", "wo"}
+		for _, c := range chunks {
+			time.Sleep(20 * time.Millisecond)
+			_, _ = io.WriteString(w, `data: {"choices":[{"delta":{"content":"`+c+`"}}]}`+"\n\n")
+			flusher.Flush()
+		}
+		_, _ = io.WriteString(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	result, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		Stream:   func(harness.CompletionDelta) {},
+	})
+	if err != nil {
+		t.Fatalf("complete: %v (a continuously-producing stream must not be killed by the idle timeout just because its TOTAL duration exceeds the idle interval)", err)
+	}
+	if result.Content != "one two" {
+		t.Fatalf("unexpected content: %q", result.Content)
+	}
+}
+
 func TestClientCompleteParsesToolCalls(t *testing.T) {
 	t.Parallel()
 
