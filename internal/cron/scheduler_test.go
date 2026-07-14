@@ -138,7 +138,7 @@ func TestFireJob_CreatesExecution(t *testing.T) {
 	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
 	job := testJob("fire-test")
 
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()
@@ -199,7 +199,7 @@ func TestFireJob_ExecutorError(t *testing.T) {
 	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
 	job := testJob("error-test")
 
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()
@@ -246,7 +246,7 @@ func TestFireJob_TimeoutError(t *testing.T) {
 	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
 	job := testJob("timeout-test")
 
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()
@@ -295,7 +295,7 @@ func TestConcurrencySemaphore(t *testing.T) {
 	// Fire 5 jobs concurrently.
 	for i := 0; i < 5; i++ {
 		job := testJob(fmt.Sprintf("concurrent-%d", i))
-		s.fireJob(job)
+		s.fireJob(job, 0)
 	}
 	s.wg.Wait()
 
@@ -379,7 +379,7 @@ func TestStop_WaitsForInFlight(t *testing.T) {
 
 	// Fire a job.
 	job := testJob("inflight")
-	s.fireJob(job)
+	s.fireJob(job, 0)
 
 	// Stop should wait for the in-flight execution.
 	s.Stop()
@@ -456,7 +456,7 @@ func TestScheduler_StopWithInflightExecutions(t *testing.T) {
 	// Fire 3 jobs.
 	for i := 0; i < 3; i++ {
 		job := testJob(fmt.Sprintf("inflight-%d", i))
-		s.fireJob(job)
+		s.fireJob(job, 0)
 	}
 
 	// Immediately call Stop() — should block until all 3 finish.
@@ -485,7 +485,7 @@ func TestFireJob_CreateExecutionError(t *testing.T) {
 	job := testJob("create-exec-error")
 
 	// Should not panic; just logs the error.
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 }
 
@@ -641,15 +641,13 @@ func TestFireJob_JitterAppliedToExecutionTiming(t *testing.T) {
 		sleptDuration = d
 	}
 
-	// Pre-populate the jitter cache with a known value (as AddJob would).
+	// The jitter offset is passed directly to fireJob, as AddJob would do
+	// (fireJob no longer reads s.jitterCache itself).
 	job := testJob("jitter-fire")
 	knownJitter := 1234 * time.Millisecond
-	s.mu.Lock()
-	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = knownJitter
-	s.mu.Unlock()
 
 	// fireJob should call sleepFn with the jitter duration, then proceed.
-	s.fireJob(job)
+	s.fireJob(job, knownJitter)
 	s.wg.Wait()
 
 	if createdExec.JobID != job.ID {
@@ -718,12 +716,7 @@ func TestFireJobAdvancesNextRunAt(t *testing.T) {
 	// Set an obviously stale NextRunAt so we can detect if it is unchanged.
 	job.NextRunAt = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
 
-	// Pre-populate the jitter cache so fireJob does not panic on a missing key.
-	s.mu.Lock()
-	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = 0
-	s.mu.Unlock()
-
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()
@@ -818,7 +811,7 @@ func TestScheduler_ConcurrentAddJobAndFireJob_NoDataRace(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for i := 0; i < iterations; i++ {
-				s.fireJob(fireTarget)
+				s.fireJob(fireTarget, 0)
 			}
 		}()
 	}

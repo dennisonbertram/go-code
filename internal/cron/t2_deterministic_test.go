@@ -255,17 +255,12 @@ func TestFireJob_NSequentialCallsAdvanceState(t *testing.T) {
 		NextRunAt:  baseTime.Add(5 * time.Minute),
 	}
 
-	// Pre-populate jitter cache.
-	s.mu.Lock()
-	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = 0
-	s.mu.Unlock()
-
 	// Fire N times sequentially, advancing the mock clock by 5 minutes each time
 	// so each iteration has a distinct and predictable endTime.
 	for i := 0; i < N; i++ {
 		fireTime := baseTime.Add(time.Duration(i+1) * 5 * time.Minute)
 		clock.Set(fireTime)
-		s.fireJob(job)
+		s.fireJob(job, 0)
 		s.wg.Wait() // ensure goroutine completes before next iteration
 	}
 
@@ -377,11 +372,8 @@ func TestFireJob_FailedExecution_NextRunAtStillAdvanced(t *testing.T) {
 		Status:     StatusActive,
 		NextRunAt:  fireTime, // stale — same as fire time
 	}
-	s.mu.Lock()
-	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = 0
-	s.mu.Unlock()
 
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()
@@ -449,11 +441,8 @@ func TestFireJob_InvalidSchedule_NextRunAtLeftUnchanged(t *testing.T) {
 		ExecConfig: `{"command":"echo ok"}`,
 		Status:     StatusActive,
 	}
-	s.mu.Lock()
-	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = 0
-	s.mu.Unlock()
 
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()

@@ -89,15 +89,20 @@ func (s *Scheduler) AddJob(job Job) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Compute and cache a deterministic jitter offset for this job.
-	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = computeJitter(
-		s.jitterCfg, job.ID, job.Schedule,
-	)
+	// Compute a deterministic jitter offset for this job. jitterCache is
+	// retained (and still populated here, under s.mu) so tests and any
+	// future callers can introspect the cached value, but fireJob itself
+	// no longer reads this map — the computed jitter is captured directly
+	// in the closure below and passed to fireJob as a parameter. This
+	// avoids the unsynchronized read that previously raced with this write
+	// (fireJob ran on the robfig/cron goroutine with no lock held).
+	jitter := computeJitter(s.jitterCfg, job.ID, job.Schedule)
+	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = jitter
 
-	// Capture job for the closure.
+	// Capture job and its jitter offset for the closure.
 	j := job
 	entryID, err := s.cron.AddFunc(job.Schedule, func() {
-		s.fireJob(j)
+		s.fireJob(j, jitter)
 	})
 	if err != nil {
 		return fmt.Errorf("add cron entry: %w", err)
@@ -131,15 +136,20 @@ func (s *Scheduler) UpdateJobSchedule(job Job) error {
 
 // fireJob executes a job: creates an execution record, runs the executor,
 // and updates the execution and job records.
-func (s *Scheduler) fireJob(job Job) {
+//
+// jitter is the base jitter offset computed once by AddJob at registration
+// time. fireJob deliberately does NOT read s.jitterCache itself: fireJob
+// runs on the robfig/cron dispatch goroutine outside of s.mu, and reading
+// the cache concurrently with AddJob's locked write previously caused a
+// fatal, unrecoverable "concurrent map read and map write" runtime error.
+func (s *Scheduler) fireJob(job Job, jitter time.Duration) {
 	ctx := context.Background()
 	now := s.clock.Now()
 
 	// Apply jitter delay before execution work.
 	// The base jitter offset is computed deterministically at registration time.
 	// Minute-mark avoidance is applied now using the actual fire time.
-	jitterKey := jitterCacheKey(job.ID, job.Schedule)
-	baseJitter := s.jitterCache[jitterKey]
+	baseJitter := jitter
 	if baseJitter > 0 {
 		jitterOffset := avoidMinuteMarks(baseJitter, now, s.jitterCfg.AvoidMarks)
 		if s.jitterCfg.LogJitteredTimes {
