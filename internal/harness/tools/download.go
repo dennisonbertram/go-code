@@ -15,7 +15,8 @@ import (
 	"go-agent-harness/internal/harness/tools/descriptions"
 )
 
-func downloadTool(workspaceRoot string, client *http.Client) Tool {
+func downloadTool(workspaceRoot string, client *http.Client, sandboxScope SandboxScope, networkAllowlist []string) Tool {
+	client = NewGuardedHTTPClient(client, networkAllowlist)
 	def := Definition{
 		Name:         "download",
 		Description:  descriptions.Load("download"),
@@ -71,7 +72,7 @@ func downloadTool(workspaceRoot string, client *http.Client) Tool {
 			args.MaxBytes = 100 * 1024 * 1024
 		}
 
-		absPath, err := ResolveWorkspacePath(workspaceRoot, args.FilePath)
+		absPath, err := ResolveWorkspacePathConfined(ctx, workspaceRoot, args.FilePath, sandboxScope)
 		if err != nil {
 			return "", err
 		}

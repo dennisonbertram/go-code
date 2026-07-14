@@ -101,10 +101,23 @@ type PromptExtensionDirs struct {
 }
 
 type BuildOptions struct {
-	WorkspaceRoot      string
-	ApprovalMode       ApprovalMode
-	Policy             Policy
-	SandboxScope       SandboxScope // controls filesystem/network restrictions
+	WorkspaceRoot string
+	ApprovalMode  ApprovalMode
+	Policy        Policy
+	SandboxScope  SandboxScope // controls filesystem/network restrictions
+	// NetworkAllowlist is the explicit opt-in escape hatch for the outbound
+	// fetch/download tools' SSRF guard (see ssrf_guard.go): by default those
+	// tools refuse to dial loopback, link-local, RFC1918/ULA-private, or
+	// otherwise non-public destination IPs, even if a URL's hostname first
+	// resolves to a public address (the check runs at actual dial time, so it
+	// is DNS-rebinding safe). Each entry may be a bare hostname (matched
+	// against the request's original, pre-resolution host — e.g. "localhost")
+	// or a CIDR (e.g. "10.0.0.0/8", "127.0.0.1/32") matched against the
+	// resolved destination IP. Empty means no exceptions: only public
+	// addresses are reachable. This extends the same BuildOptions mechanism
+	// already used to configure SandboxScope, rather than introducing a
+	// separate configuration system.
+	NetworkAllowlist   []string
 	HTTPClient         *http.Client
 	Now                func() time.Time
 	AskUserBroker      AskUserQuestionBroker

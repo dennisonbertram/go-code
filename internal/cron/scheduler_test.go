@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	robfigcron "github.com/robfig/cron/v3"
 )
 
 func TestNewScheduler_DefaultMaxConcurrent(t *testing.T) {
@@ -104,10 +105,15 @@ func TestUpdateJobSchedule(t *testing.T) {
 func TestFireJob_CreatesExecution(t *testing.T) {
 	var createdExec Execution
 	var updatedExecs []Execution
-	var updatedJob Job
+	var touchedJobID string
 	var mu sync.Mutex
 
+	job := testJob("fire-test")
+
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			mu.Lock()
 			createdExec = exec
@@ -120,9 +126,9 @@ func TestFireJob_CreatesExecution(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			mu.Lock()
-			updatedJob = job
+			touchedJobID = jobID
 			mu.Unlock()
 			return nil
 		},
@@ -136,9 +142,8 @@ func TestFireJob_CreatesExecution(t *testing.T) {
 
 	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
-	job := testJob("fire-test")
 
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()
@@ -165,8 +170,8 @@ func TestFireJob_CreatesExecution(t *testing.T) {
 		t.Fatalf("expected output 'test output', got %q", updatedExecs[1].OutputSummary)
 	}
 
-	if updatedJob.ID != job.ID {
-		t.Fatalf("expected job update for %s, got %s", job.ID, updatedJob.ID)
+	if touchedJobID != job.ID {
+		t.Fatalf("expected TouchJobRun for %s, got %s", job.ID, touchedJobID)
 	}
 }
 
@@ -174,7 +179,12 @@ func TestFireJob_ExecutorError(t *testing.T) {
 	var updatedExecs []Execution
 	var mu sync.Mutex
 
+	job := testJob("error-test")
+
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
@@ -184,7 +194,7 @@ func TestFireJob_ExecutorError(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			return nil
 		},
 	}
@@ -197,9 +207,8 @@ func TestFireJob_ExecutorError(t *testing.T) {
 
 	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
-	job := testJob("error-test")
 
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()
@@ -221,7 +230,12 @@ func TestFireJob_TimeoutError(t *testing.T) {
 	var updatedExecs []Execution
 	var mu sync.Mutex
 
+	job := testJob("timeout-test")
+
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
@@ -231,7 +245,7 @@ func TestFireJob_TimeoutError(t *testing.T) {
 			mu.Unlock()
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			return nil
 		},
 	}
@@ -244,9 +258,8 @@ func TestFireJob_TimeoutError(t *testing.T) {
 
 	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
-	job := testJob("timeout-test")
 
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()
@@ -264,13 +277,16 @@ func TestConcurrencySemaphore(t *testing.T) {
 	var mu sync.Mutex
 
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{ID: id, Status: StatusActive, Schedule: "*/5 * * * *"}, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
 		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			return nil
 		},
 	}
@@ -295,7 +311,7 @@ func TestConcurrencySemaphore(t *testing.T) {
 	// Fire 5 jobs concurrently.
 	for i := 0; i < 5; i++ {
 		job := testJob(fmt.Sprintf("concurrent-%d", i))
-		s.fireJob(job)
+		s.fireJob(job, 0)
 	}
 	s.wg.Wait()
 
@@ -355,13 +371,16 @@ func TestStop_WaitsForInFlight(t *testing.T) {
 	var completed int32
 
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{ID: id, Status: StatusActive, Schedule: "*/5 * * * *"}, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
 		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			return nil
 		},
 	}
@@ -379,7 +398,7 @@ func TestStop_WaitsForInFlight(t *testing.T) {
 
 	// Fire a job.
 	job := testJob("inflight")
-	s.fireJob(job)
+	s.fireJob(job, 0)
 
 	// Stop should wait for the in-flight execution.
 	s.Stop()
@@ -426,6 +445,9 @@ func TestScheduler_StopWithInflightExecutions(t *testing.T) {
 	var storedExecs []Execution
 
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{ID: id, Status: StatusActive, Schedule: "*/5 * * * *"}, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
@@ -437,7 +459,7 @@ func TestScheduler_StopWithInflightExecutions(t *testing.T) {
 			}
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			return nil
 		},
 	}
@@ -456,7 +478,7 @@ func TestScheduler_StopWithInflightExecutions(t *testing.T) {
 	// Fire 3 jobs.
 	for i := 0; i < 3; i++ {
 		job := testJob(fmt.Sprintf("inflight-%d", i))
-		s.fireJob(job)
+		s.fireJob(job, 0)
 	}
 
 	// Immediately call Stop() — should block until all 3 finish.
@@ -474,7 +496,11 @@ func TestScheduler_StopWithInflightExecutions(t *testing.T) {
 }
 
 func TestFireJob_CreateExecutionError(t *testing.T) {
+	job := testJob("create-exec-error")
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return Execution{}, fmt.Errorf("db error")
 		},
@@ -482,10 +508,9 @@ func TestFireJob_CreateExecutionError(t *testing.T) {
 
 	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
 	s := NewScheduler(store, &mockExecutor{}, clock, SchedulerConfig{MaxConcurrent: 1})
-	job := testJob("create-exec-error")
 
 	// Should not panic; just logs the error.
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 }
 
@@ -612,7 +637,12 @@ func TestFireJob_JitterAppliedToExecutionTiming(t *testing.T) {
 	var createdExec Execution
 	var sleptDuration time.Duration
 
+	job := testJob("jitter-fire")
+
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			createdExec = exec
 			return exec, nil
@@ -620,7 +650,7 @@ func TestFireJob_JitterAppliedToExecutionTiming(t *testing.T) {
 		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			return nil
 		},
 	}
@@ -641,15 +671,12 @@ func TestFireJob_JitterAppliedToExecutionTiming(t *testing.T) {
 		sleptDuration = d
 	}
 
-	// Pre-populate the jitter cache with a known value (as AddJob would).
-	job := testJob("jitter-fire")
+	// The jitter offset is passed directly to fireJob, as AddJob would do
+	// (fireJob no longer reads s.jitterCache itself).
 	knownJitter := 1234 * time.Millisecond
-	s.mu.Lock()
-	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = knownJitter
-	s.mu.Unlock()
 
 	// fireJob should call sleepFn with the jitter duration, then proceed.
-	s.fireJob(job)
+	s.fireJob(job, knownJitter)
 	s.wg.Wait()
 
 	if createdExec.JobID != job.ID {
@@ -677,19 +704,30 @@ func TestJitter_SameJobSameSchedule_SameJitter(t *testing.T) {
 // TestFireJobAdvancesNextRunAt (T1) — fireJob must recompute NextRunAt after execution.
 // Before P1, fireJob never sets NextRunAt, so the stored job keeps the stale original value.
 func TestFireJobAdvancesNextRunAt(t *testing.T) {
-	var updatedJob Job
+	var touchedLastRun, touchedNextRun time.Time
+	var touchCalled bool
 	var mu sync.Mutex
 
+	job := testJob("advance-next-run-at")
+	job.Schedule = "*/5 * * * *"
+	// Set an obviously stale NextRunAt so we can detect if it is unchanged.
+	job.NextRunAt = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
+
 	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return job, nil
+		},
 		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
 			return exec, nil
 		},
 		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
 			return nil
 		},
-		UpdateJobFunc: func(ctx context.Context, job Job) error {
+		TouchJobRunFunc: func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error {
 			mu.Lock()
-			updatedJob = job
+			touchCalled = true
+			touchedLastRun = lastRun
+			touchedNextRun = nextRun
 			mu.Unlock()
 			return nil
 		},
@@ -713,22 +751,18 @@ func TestFireJobAdvancesNextRunAt(t *testing.T) {
 	s := NewScheduler(store, executor, clock, cfg)
 	s.sleepFn = func(d time.Duration) {} // no-op
 
-	job := testJob("advance-next-run-at")
-	job.Schedule = "*/5 * * * *"
-	// Set an obviously stale NextRunAt so we can detect if it is unchanged.
-	job.NextRunAt = time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	// Pre-populate the jitter cache so fireJob does not panic on a missing key.
-	s.mu.Lock()
-	s.jitterCache[jitterCacheKey(job.ID, job.Schedule)] = 0
-	s.mu.Unlock()
-
-	s.fireJob(job)
+	s.fireJob(job, 0)
 	s.wg.Wait()
 
 	mu.Lock()
-	got := updatedJob
-	mu.Unlock()
+	defer mu.Unlock()
+
+	if !touchCalled {
+		t.Fatal("expected TouchJobRun to be called")
+	}
+	if !touchedLastRun.Equal(fireTime) {
+		t.Fatalf("expected TouchJobRun lastRun %v, got %v", fireTime, touchedLastRun)
+	}
 
 	// Compute the expected NextRunAt: first occurrence of "*/5 * * * *" after fireTime.
 	want, err := NextRunTime(job.Schedule, fireTime)
@@ -736,11 +770,447 @@ func TestFireJobAdvancesNextRunAt(t *testing.T) {
 		t.Fatalf("NextRunTime: %v", err)
 	}
 
-	if got.NextRunAt.IsZero() {
-		t.Fatal("NextRunAt was not set on updated job")
+	if touchedNextRun.IsZero() {
+		t.Fatal("NextRunAt was not set via TouchJobRun")
 	}
-	if !got.NextRunAt.Equal(want) {
+	if !touchedNextRun.Equal(want) {
 		t.Fatalf("NextRunAt = %v, want %v (schedule %q, fire time %v)",
-			got.NextRunAt, want, job.Schedule, fireTime)
+			touchedNextRun, want, job.Schedule, fireTime)
+	}
+}
+
+// --- BUG 1: jitterCache concurrent access ---
+
+// TestScheduler_ConcurrentAddJobAndFireJob_NoDataRace (BT-001, P1) reproduces
+// the fatal, unrecoverable Go runtime error that crashes the daemon when
+// fireJob reads s.jitterCache without holding s.mu while AddJob concurrently
+// writes to the same map under s.mu.
+//
+// fireJob currently reads `s.jitterCache[jitterKey]` with no lock at all
+// (scheduler.go ~141-142), while AddJob writes that map under s.mu
+// (scheduler.go ~93). A concurrent unsynchronized map read + write is a
+// fatal Go runtime error ("concurrent map read and map write") that cannot
+// be recovered with panic/recover — it kills the whole process.
+//
+// This test must be run with `-race` to reliably surface the problem
+// (`go test ./internal/cron/... -race -run TestScheduler_ConcurrentAddJobAndFireJob_NoDataRace`).
+// Before the fix, this crashes the test binary with a fatal runtime error
+// (or is flagged by the race detector) because fireJob's map read at
+// scheduler.go:142 races with AddJob's map write at scheduler.go:93.
+// After the fix, fireJob never touches s.jitterCache (the jitter offset is
+// passed in directly by AddJob's closure), so there is nothing to race on.
+func TestScheduler_ConcurrentAddJobAndFireJob_NoDataRace(t *testing.T) {
+	store := &mockStore{
+		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
+			return exec, nil
+		},
+		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
+			return nil
+		},
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{}, ErrJobNotFound
+		},
+		UpdateJobFunc: func(ctx context.Context, job Job) error {
+			return nil
+		},
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {
+			return "ok", nil
+		},
+	}
+	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 10})
+	s.sleepFn = func(time.Duration) {} // no-op so fireJob returns quickly
+
+	// One job that's already registered, so fireJob has a real jitterCache
+	// entry to read while other goroutines mutate the map.
+	fireTarget := testJob("race-fire-target")
+	if err := s.AddJob(fireTarget); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	const iterations = 200
+
+	// Goroutines that repeatedly AddJob (writes s.jitterCache under s.mu).
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				job := testJob(fmt.Sprintf("race-writer-%d-%d", gid, i))
+				_ = s.AddJob(job)
+			}
+		}(g)
+	}
+
+	// Goroutines that repeatedly call fireJob for the pre-registered job,
+	// exercising the unsynchronized jitterCache read on the old code path.
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				s.fireJob(fireTarget, 0)
+			}
+		}()
+	}
+
+	wg.Wait()
+	s.wg.Wait()
+}
+
+// TestScheduler_ConcurrentUpdateJobScheduleAndFireJob_NoDataRace (regression
+// for BUG 1) exercises UpdateJobSchedule concurrently with fireJob under
+// -race. UpdateJobSchedule takes a different path than plain AddJob (it
+// removes the old entry, recomputes and re-writes s.jitterCache, then calls
+// AddJob again), so it is a distinct angle from the original red test: it
+// would fail (fatal "concurrent map read and map write", or be flagged by
+// -race) if fireJob ever went back to reading s.jitterCache directly instead
+// of using the jitter value captured in AddJob's/UpdateJobSchedule's closure.
+func TestScheduler_ConcurrentUpdateJobScheduleAndFireJob_NoDataRace(t *testing.T) {
+	store := &mockStore{
+		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
+			return exec, nil
+		},
+		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error {
+			return nil
+		},
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{}, ErrJobNotFound
+		},
+		UpdateJobFunc: func(ctx context.Context, job Job) error {
+			return nil
+		},
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {
+			return "ok", nil
+		},
+	}
+	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 10})
+	s.sleepFn = func(time.Duration) {} // no-op so fireJob returns quickly
+
+	fireTarget := testJob("update-schedule-race-target")
+	if err := s.AddJob(fireTarget); err != nil {
+		t.Fatalf("AddJob: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	const iterations = 200
+
+	// Goroutines that repeatedly UpdateJobSchedule for an unrelated job,
+	// exercising RemoveJob + jitterCache re-write + AddJob.
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func(gid int) {
+			defer wg.Done()
+			job := testJob(fmt.Sprintf("update-schedule-race-%d", gid))
+			if err := s.AddJob(job); err != nil {
+				return
+			}
+			for i := 0; i < iterations; i++ {
+				job.Schedule = "*/5 * * * *"
+				_ = s.UpdateJobSchedule(job)
+				job.Schedule = "0 * * * *"
+				_ = s.UpdateJobSchedule(job)
+			}
+		}(g)
+	}
+
+	// Goroutines that repeatedly call fireJob for a stable, already
+	// registered job.
+	for g := 0; g < 4; g++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := 0; i < iterations; i++ {
+				s.fireJob(fireTarget, 0)
+			}
+		}()
+	}
+
+	wg.Wait()
+	s.wg.Wait()
+}
+
+// --- BUG 2: fireJob writes back a stale Job snapshot ---
+
+// TestFireJob_SkipsExecutionWhenJobPausedInStore (BT-002, P1) reproduces the
+// "resurrects paused jobs" half of BUG 2: fireJob captures a full Job at
+// AddJob/schedule time and, before the fix, never re-checks the job's
+// current status before firing. If a job is paused via the store after it
+// was scheduled but before the timer fires, fireJob must NOT execute it.
+//
+// Before the fix, fireJob has no way to observe the pause (it never calls
+// store.GetJob), so it fires anyway. This test fails before the fix
+// (executor.Execute is called) and passes after the fix (fireJob re-reads
+// the job from the store and skips firing when the live status isn't
+// active).
+func TestFireJob_SkipsExecutionWhenJobPausedInStore(t *testing.T) {
+	var executed bool
+	var mu sync.Mutex
+
+	// job is the STALE snapshot fireJob receives — captured as active at
+	// schedule time via AddJob's closure.
+	job := testJob("pause-skip-test")
+	job.Status = StatusActive
+
+	// pausedJob is what the store now reports: the user paused the job
+	// after it was scheduled but before this fire.
+	pausedJob := job
+	pausedJob.Status = StatusPaused
+
+	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return pausedJob, nil
+		},
+		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
+			return exec, nil
+		},
+		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error { return nil },
+		UpdateJobFunc: func(ctx context.Context, job Job) error { return nil },
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {
+			mu.Lock()
+			executed = true
+			mu.Unlock()
+			return "ok", nil
+		},
+	}
+
+	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1, Jitter: JitterConfig{Enabled: false}})
+	s.sleepFn = func(time.Duration) {}
+
+	s.fireJob(job, 0)
+	s.wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if executed {
+		t.Fatal("expected fireJob to skip execution for a job that is now paused in the store, but the executor ran (paused job was resurrected)")
+	}
+}
+
+// TestFireJob_DoesNotWriteBackStaleFullSnapshot (BT-003, P1) reproduces the
+// "silently reverts user edits" half of BUG 2: fireJob previously called
+// store.UpdateJob with the full Job struct it captured at schedule time,
+// clobbering any edits (schedule, execution config, timeout, tags) made to
+// the job in the store since it was scheduled.
+//
+// The fix must stop calling store.UpdateJob for run-tracking bookkeeping —
+// it should use a narrower method (TouchJobRun, added in the next commit)
+// that only touches last_run_at/next_run_at/updated_at. This test asserts
+// that fireJob never calls store.UpdateJob at all as part of a normal fire,
+// and that execution uses the CURRENT (re-read) job state rather than the
+// stale snapshot. Before the fix, UpdateJobFunc IS invoked (with the stale
+// snapshot) and the stale ExecConfig/Tags are used, so this test fails.
+// After the fix, UpdateJob is never called and the live state is used.
+func TestFireJob_DoesNotWriteBackStaleFullSnapshot(t *testing.T) {
+	var updateJobCalled bool
+	var mu sync.Mutex
+
+	// job is the STALE snapshot captured at schedule time.
+	job := testJob("stale-snapshot-test")
+	job.Tags = "stale-tag"
+	job.TimeoutSec = 30
+
+	// current is what the store now reports: the user edited tags and
+	// timeout after the job was scheduled.
+	current := job
+	current.Tags = "edited-tag"
+	current.TimeoutSec = 999
+
+	var executedTags string
+	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return current, nil
+		},
+		CreateExecutionFunc: func(ctx context.Context, exec Execution) (Execution, error) {
+			return exec, nil
+		},
+		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error { return nil },
+		UpdateJobFunc: func(ctx context.Context, job Job) error {
+			mu.Lock()
+			updateJobCalled = true
+			mu.Unlock()
+			return nil
+		},
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, execJob Job) (string, error) {
+			mu.Lock()
+			executedTags = execJob.Tags
+			mu.Unlock()
+			return "ok", nil
+		},
+	}
+
+	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1, Jitter: JitterConfig{Enabled: false}})
+	s.sleepFn = func(time.Duration) {}
+
+	s.fireJob(job, 0)
+	s.wg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if updateJobCalled {
+		t.Fatal("fireJob must not call store.UpdateJob with a full job snapshot (it can silently revert concurrent edits); it should only touch run-tracking columns via TouchJobRun")
+	}
+	if executedTags != "edited-tag" {
+		t.Fatalf("expected fireJob to execute with the current (edited) job state %q, got %q", "edited-tag", executedTags)
+	}
+}
+
+// --- BUG 3: shutdown blocks up to the full jitter window ---
+
+// TestScheduler_Stop_InterruptsLongJitterWait (BT-004, P1) reproduces the
+// shutdown stall: cronScheduler.Stop() blocks until in-flight fireJob
+// invocations dispatched by robfig/cron finish, and fireJob's jitter wait
+// was an UNINTERRUPTIBLE sleep that can be minutes long. So Stop() (and
+// therefore the whole harnessd shutdown sequence, which calls Stop()
+// before draining the HTTP server) stalls for as long as the jitter.
+//
+// This test registers a job directly with the underlying robfig/cron
+// dispatcher (bypassing the 5-field, minute-resolution schedule parser
+// Scheduler.AddJob uses) so that fireJob is invoked the same way
+// production code invokes it: synchronously, from cron's own dispatch
+// goroutine, tracked by cron.Stop()'s returned context. The job's jitter
+// is deliberately long (a few seconds — long enough to prove the point
+// without making the test suite slow, since production jitter can be up
+// to 5 minutes by default).
+//
+// Before the fix: Stop() blocks for close to the full jitter duration
+// (uninterruptible time.Sleep) and the job still fires afterward. After
+// the fix: Stop() returns promptly (closing s.done interrupts the wait)
+// and the job is skipped entirely rather than firing mid-shutdown.
+func TestScheduler_Stop_InterruptsLongJitterWait(t *testing.T) {
+	var executed bool
+	var mu sync.Mutex
+
+	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{}, ErrJobNotFound
+		},
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {
+			mu.Lock()
+			executed = true
+			mu.Unlock()
+			return "ok", nil
+		},
+	}
+	clock := newMockClock(time.Now())
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
+	// sleepFn is left at its default (time.Sleep) deliberately: this test
+	// must exercise a REAL blocking sleep to prove Stop() interrupts it,
+	// not just that a test double happens to return quickly.
+
+	job := testJob("stop-interrupt-test")
+	const longJitter = 3 * time.Second
+
+	// Register directly with the underlying robfig cron dispatcher so
+	// fireJob is invoked synchronously from cron's own goroutine — the
+	// same mechanism Scheduler.Stop()'s `s.cron.Stop()` context waits on.
+	s.cron.Schedule(robfigcron.Every(time.Second), robfigcron.FuncJob(func() {
+		s.fireJob(job, longJitter)
+	}))
+	s.cron.Start()
+
+	// Give the first tick (fires ~1s after Start, per robfig's Every()
+	// minimum resolution) a chance to enter the jitter wait.
+	time.Sleep(1500 * time.Millisecond)
+
+	stopStart := time.Now()
+	s.Stop()
+	stopDuration := time.Since(stopStart)
+
+	if stopDuration > 1500*time.Millisecond {
+		t.Fatalf("Stop() took %v, expected it to return promptly (well under the %v jitter wait)", stopDuration, longJitter)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if executed {
+		t.Fatal("expected fireJob to skip execution when Stop() interrupts the jitter wait, but the executor ran")
+	}
+}
+
+// TestScheduler_Stop_IsIdempotent (regression for BUG 3) verifies that
+// calling Stop() twice does not panic. The fix closes s.done via
+// sync.Once specifically so a double Stop is safe; a regression here
+// would surface as a "close of closed channel" panic.
+func TestScheduler_Stop_IsIdempotent(t *testing.T) {
+	s := NewScheduler(&mockStore{}, &mockExecutor{}, RealClock{}, SchedulerConfig{})
+	s.Stop()
+	s.Stop() // must not panic
+}
+
+// TestScheduler_Stop_InterruptsMultipleConcurrentJitterWaits (regression
+// for BUG 3) covers a different angle than the red test: several fireJob
+// calls blocked in a long jitter wait AT ONCE (rather than one job
+// dispatched through the real robfig cron mechanism). It would fail if
+// Stop() only interrupted the first waiter, or if the done-channel signal
+// were somehow consumed by one goroutine and unavailable to the others
+// (e.g. a regression from `<-s.done` being changed to a receive from a
+// non-broadcasting channel).
+func TestScheduler_Stop_InterruptsMultipleConcurrentJitterWaits(t *testing.T) {
+	var executedCount int32
+
+	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{}, ErrJobNotFound
+		},
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {
+			atomic.AddInt32(&executedCount, 1)
+			return "ok", nil
+		},
+	}
+	clock := newMockClock(time.Now())
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 5})
+
+	const n = 5
+	const longJitter = 5 * time.Second
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			job := testJob(fmt.Sprintf("multi-stop-%d", i))
+			s.fireJob(job, longJitter)
+		}(i)
+	}
+
+	// Give the goroutines a moment to enter their jitter waits.
+	time.Sleep(100 * time.Millisecond)
+
+	stopStart := time.Now()
+	s.Stop()
+	stopDuration := time.Since(stopStart)
+
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("fireJob goroutines did not return promptly after Stop()")
+	}
+
+	if stopDuration > 1500*time.Millisecond {
+		t.Fatalf("Stop() took %v, expected all %d jitter waits to be interrupted promptly", stopDuration, n)
+	}
+	if c := atomic.LoadInt32(&executedCount); c != 0 {
+		t.Fatalf("expected 0 executions (all interrupted by Stop()), got %d", c)
 	}
 }

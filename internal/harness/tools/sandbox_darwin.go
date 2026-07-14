@@ -38,6 +38,19 @@ func buildSandboxedCommand(ctx context.Context, scope SandboxScope, workspaceRoo
 		if absErr != nil {
 			absRoot = workspaceRoot
 		}
+		// Canonicalize through symlinks before embedding the root in the
+		// seatbelt profile's (subpath ...) predicate. macOS resolves /tmp,
+		// /var, and TMPDIR-based paths (as returned by t.TempDir() and most
+		// container/worktree provisioning) through a /var -> /private/var
+		// symlink; sandbox-exec's subpath match is against the kernel's
+		// resolved path, not the symlinked one the caller passed in. Without
+		// this, every legitimate in-workspace write under a symlinked root
+		// is denied with "Operation not permitted" — the same class of
+		// symlink pitfall ConfineWorkspacePath (common_paths.go) already
+		// guards against for the Go-side path checks.
+		if resolvedRoot, err := filepath.EvalSymlinks(absRoot); err == nil {
+			absRoot = resolvedRoot
+		}
 
 		profile := seatbeltProfile(scope, absRoot)
 		f, err := os.CreateTemp("", "harness-sandbox-*.sb")

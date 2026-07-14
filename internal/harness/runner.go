@@ -5116,7 +5116,8 @@ func copyStringSlice(src []string) []string {
 
 func normalizePermissionConfig(p PermissionConfig) PermissionConfig {
 	if p.Sandbox == "" {
-		p.Sandbox = SandboxScopeUnrestricted
+		// Safety-biased default: see DefaultPermissionConfig in types.go.
+		p.Sandbox = SandboxScopeWorkspace
 	}
 	if p.Approval == "" {
 		p.Approval = ApprovalPolicyNone

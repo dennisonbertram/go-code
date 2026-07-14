@@ -29,7 +29,7 @@ type observationalMemoryArgs struct {
 	} `json:"review,omitempty"`
 }
 
-func observationalMemoryTool(workspaceRoot string, manager om.Manager, runner AgentRunner) Tool {
+func observationalMemoryTool(workspaceRoot string, manager om.Manager, runner AgentRunner, sandboxScope SandboxScope) Tool {
 	def := Definition{
 		Name:         "observational_memory",
 		Description:  descriptions.Load("observational_memory"),
@@ -142,7 +142,7 @@ func observationalMemoryTool(workspaceRoot string, manager om.Manager, runner Ag
 					fmt.Sprintf("memory-%s.%s", time.Now().UTC().Format("20060102-150405"), ext),
 				))
 			}
-			absPath, pathErr := ResolveWorkspacePath(workspaceRoot, exportPath)
+			absPath, pathErr := ResolveWorkspacePathConfined(ctx, workspaceRoot, exportPath, sandboxScope)
 			if pathErr != nil {
 				return "", pathErr
 			}

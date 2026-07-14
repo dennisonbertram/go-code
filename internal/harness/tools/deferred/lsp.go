@@ -43,7 +43,7 @@ func LspDiagnosticsTool(opts tools.BuildOptions) tools.Tool {
 		}
 		target := "./..."
 		if strings.TrimSpace(args.FilePath) != "" {
-			absPath, err := tools.ResolveWorkspacePath(opts.WorkspaceRoot, args.FilePath)
+			absPath, err := tools.ResolveWorkspacePathConfined(ctx, opts.WorkspaceRoot, args.FilePath, opts.SandboxScope)
 			if err != nil {
 				return "", err
 			}
@@ -95,7 +95,7 @@ func LspReferencesTool(opts tools.BuildOptions) tools.Tool {
 			return "", fmt.Errorf("resolve workspace root: %w", err)
 		}
 		if strings.TrimSpace(args.Path) != "" {
-			resolved, err := tools.ResolveWorkspacePath(opts.WorkspaceRoot, args.Path)
+			resolved, err := tools.ResolveWorkspacePathConfined(ctx, opts.WorkspaceRoot, args.Path, opts.SandboxScope)
 			if err != nil {
 				return "", err
 			}

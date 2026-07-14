@@ -40,7 +40,7 @@ func WriteTool(opts tools.BuildOptions) tools.Tool {
 
 	workspaceRoot := opts.WorkspaceRoot
 
-	handler := func(_ context.Context, raw json.RawMessage) (string, error) {
+	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
 		var args struct {
 			Path            string  `json:"path"`
 			FilePath        string  `json:"file_path"`
@@ -80,7 +80,7 @@ func WriteTool(opts tools.BuildOptions) tools.Tool {
 			return "", err
 		}
 
-		absPath, err := tools.ResolveWorkspacePath(workspaceRoot, args.Path)
+		absPath, err := tools.ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, opts.SandboxScope)
 		if err != nil {
 			return "", err
 		}

@@ -13,7 +13,8 @@ import (
 	"go-agent-harness/internal/harness/tools/descriptions"
 )
 
-func fetchTool(client *http.Client) Tool {
+func fetchTool(client *http.Client, networkAllowlist []string) Tool {
+	client = NewGuardedHTTPClient(client, networkAllowlist)
 	def := Definition{
 		Name:         "fetch",
 		Description:  descriptions.Load("fetch"),

@@ -32,21 +32,21 @@ func BuildCatalog(opts BuildOptions) ([]Tool, error) {
 
 	tools := []Tool{
 		askUserQuestionTool(opts.AskUserBroker, opts.AskUserTimeout),
-		observationalMemoryTool(opts.WorkspaceRoot, opts.MemoryManager, opts.AgentRunner),
-		readTool(opts.WorkspaceRoot),
-		writeTool(opts.WorkspaceRoot),
-		editTool(opts.WorkspaceRoot),
+		observationalMemoryTool(opts.WorkspaceRoot, opts.MemoryManager, opts.AgentRunner, opts.SandboxScope),
+		readTool(opts.WorkspaceRoot, opts.SandboxScope),
+		writeTool(opts.WorkspaceRoot, opts.SandboxScope),
+		editTool(opts.WorkspaceRoot, opts.SandboxScope),
 		bashTool(jobManager),
 		jobOutputTool(jobManager),
 		jobKillTool(jobManager),
-		lsTool(opts.WorkspaceRoot),
-		globTool(opts.WorkspaceRoot),
-		grepTool(opts.WorkspaceRoot),
-		applyPatchTool(opts.WorkspaceRoot),
+		lsTool(opts.WorkspaceRoot, opts.SandboxScope),
+		globTool(opts.WorkspaceRoot, opts.SandboxScope),
+		grepTool(opts.WorkspaceRoot, opts.SandboxScope),
+		applyPatchTool(opts.WorkspaceRoot, opts.SandboxScope),
 		gitStatusTool(opts.WorkspaceRoot),
-		gitDiffTool(opts.WorkspaceRoot),
-		fetchTool(opts.HTTPClient),
-		downloadTool(opts.WorkspaceRoot, opts.HTTPClient),
+		gitDiffTool(opts.WorkspaceRoot, opts.SandboxScope),
+		fetchTool(opts.HTTPClient, opts.NetworkAllowlist),
+		downloadTool(opts.WorkspaceRoot, opts.HTTPClient, opts.SandboxScope, opts.NetworkAllowlist),
 		contextStatusTool(),
 		compactHistoryTool(opts.MessageSummarizer),
 	}
@@ -55,7 +55,7 @@ func BuildCatalog(opts BuildOptions) ([]Tool, error) {
 		tools = append(tools, todosTool(todos))
 	}
 	if opts.EnableLSP {
-		tools = append(tools, lspDiagnosticsTool(opts.WorkspaceRoot), lspReferencesTool(opts.WorkspaceRoot), lspRestartTool(opts.WorkspaceRoot))
+		tools = append(tools, lspDiagnosticsTool(opts.WorkspaceRoot, opts.SandboxScope), lspReferencesTool(opts.WorkspaceRoot, opts.SandboxScope), lspRestartTool(opts.WorkspaceRoot))
 	}
 	if opts.Sourcegraph.Endpoint != "" {
 		tools = append(tools, sourcegraphTool(opts.HTTPClient, opts.Sourcegraph))
@@ -80,7 +80,14 @@ func BuildCatalog(opts BuildOptions) ([]Tool, error) {
 	if opts.EnableAgent && opts.AgentRunner != nil {
 		tools = append(tools, agentTool(opts.AgentRunner))
 		if opts.EnableWebOps && opts.WebFetcher != nil {
-			tools = append(tools, agenticFetchTool(opts.WebFetcher, opts.AgentRunner), webSearchTool(opts.WebFetcher), webFetchTool(opts.WebFetcher))
+			// GAP-2: web_fetch/web_search/agentic_fetch are all backed by
+			// WebFetcher, whose Fetch(url) argument is chosen by the LLM.
+			// Wrap with the same dial-time SSRF guard used by the
+			// fetch/download tools (ssrf_guard.go) rather than trusting
+			// whatever transport the supplied WebFetcher implementation uses
+			// internally. See web_fetcher_guard.go.
+			guardedFetcher := NewGuardedWebFetcher(opts.WebFetcher, opts.NetworkAllowlist)
+			tools = append(tools, agenticFetchTool(guardedFetcher, opts.AgentRunner), webSearchTool(guardedFetcher), webFetchTool(guardedFetcher))
 		}
 	}
 	if opts.EnableCron && opts.CronClient != nil {

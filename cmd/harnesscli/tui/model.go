@@ -3028,6 +3028,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.modelSwitcher = m.modelSwitcher.WithCurrentReasoning(msg.ReasoningEffort)
 		m.modelSwitcher = m.modelSwitcher.WithStarred(currentStarred)
 		m.statusBar.SetModel(m.statusBarModelLabel())
+		// Keep the /cost overlay's model label current even if it is already
+		// open and no usage.delta event arrives before the next render.
+		m.costDisplay = m.costDisplay.Update(costSnapshotFromModel(&m))
 		label := displayModelName(msg.ModelID)
 		if msg.ReasoningEffort != "" {
 			label += " (" + msg.ReasoningEffort + ")"
