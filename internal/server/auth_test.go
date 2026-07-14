@@ -68,8 +68,13 @@ func TestAuthMiddleware_Invalid(t *testing.T) {
 	}
 }
 
-// TestAuthMiddleware_QueryParam verifies the ?token= fallback for SSE clients.
-func TestAuthMiddleware_QueryParam(t *testing.T) {
+// TestAuthMiddleware_QueryParamRejected is an ATTACK test (S4): a valid API key
+// leaked into a URL query string (e.g. via access logs, proxies, browser
+// history) must NOT authenticate a request. Query-parameter auth was removed
+// because it leaks secrets into logs; only the Authorization: Bearer header is
+// accepted now. The first-party CLI (cmd/harnesscli/tui/api.go) already uses
+// the Authorization header, so this is not a breaking change for it.
+func TestAuthMiddleware_QueryParamRejected(t *testing.T) {
 	ms := store.NewMemoryStore()
 	rawToken, key := generateFastAPIKey(t, "tenant-sse", "sse key", []string{store.ScopeRunsRead})
 	if err := ms.CreateAPIKey(context.Background(), key); err != nil {
@@ -82,8 +87,31 @@ func TestAuthMiddleware_QueryParam(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
 
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("?token= must no longer authenticate: expected 401, got %d", w.Code)
+	}
+}
+
+// TestAuthMiddleware_HeaderStillWorksWhenQueryParamPresent verifies that a
+// valid Authorization header still authenticates even when an (now-ignored)
+// ?token= query parameter is also present on the URL, so removing query-param
+// auth does not regress the header path.
+func TestAuthMiddleware_HeaderStillWorksWhenQueryParamPresent(t *testing.T) {
+	ms := store.NewMemoryStore()
+	rawToken, key := generateFastAPIKey(t, "tenant-sse", "sse key", []string{store.ScopeRunsRead})
+	if err := ms.CreateAPIKey(context.Background(), key); err != nil {
+		t.Fatalf("CreateAPIKey: %v", err)
+	}
+
+	h := server.NewWithOptions(server.ServerOptions{Store: ms})
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models?token=garbage-not-a-real-key", nil)
+	req.Header.Set("Authorization", "Bearer "+rawToken)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
 	if w.Code == http.StatusUnauthorized {
-		t.Errorf("?token= fallback: expected non-401, got 401")
+		t.Errorf("expected non-401 when a valid Authorization header is present, got 401")
 	}
 }
 

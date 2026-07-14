@@ -287,6 +287,60 @@ func TestPOC3_StartScriptWorkflowRun(t *testing.T) {
 	assert.Equal(t, "test-workflow", resp.WorkflowName)
 }
 
+// TestC4_StartScriptWorkflowRun_MalformedJSONReturns400 verifies that a
+// malformed (syntactically invalid) JSON body on POST .../runs is rejected
+// with 400, rather than silently ignored and treated as "no args". Distinct
+// from an EMPTY body (nil / zero-length), which legitimately means "no args"
+// and must keep succeeding — see TestPOC4_GetRunStatusAndStreamEvents, which
+// starts a run with a nil body.
+func TestC4_StartScriptWorkflowRun_MalformedJSONReturns400(t *testing.T) {
+	mgr := newMockScriptWorkflowMgr()
+	srv := newTestServerWithScriptWorkflows(mgr)
+
+	mux := http.NewServeMux()
+	srv.registerScriptWorkflowRoutes(mux, testAuth)
+
+	body := strings.NewReader(`{"args": {"target": "production"`) // truncated / malformed JSON
+	req := httptest.NewRequest(http.MethodPost, "/v1/script-workflows/test-workflow/runs", body)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+	mgr.mu.Lock()
+	runCount := len(mgr.runs)
+	mgr.mu.Unlock()
+	assert.Equal(t, 0, runCount, "malformed JSON must not start a run with nil args")
+}
+
+// TestC4_ResumeScriptWorkflowRun_MalformedJSONReturns400 mirrors the Start
+// case for POST .../resume.
+func TestC4_ResumeScriptWorkflowRun_MalformedJSONReturns400(t *testing.T) {
+	mgr := newMockScriptWorkflowMgr()
+	srv := newTestServerWithScriptWorkflows(mgr)
+
+	mux := http.NewServeMux()
+	srv.registerScriptWorkflowRoutes(mux, testAuth)
+
+	run := &workflow.Run{
+		ID:           "wf_failed",
+		WorkflowName: "test-workflow",
+		Status:       workflow.RunStatusFailed,
+		CreatedAt:    time.Now().UTC(),
+		UpdatedAt:    time.Now().UTC(),
+	}
+	mgr.mu.Lock()
+	mgr.runs[run.ID] = run
+	mgr.mu.Unlock()
+
+	body := strings.NewReader(`not json at all`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/script-workflow-runs/wf_failed/resume", body)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
 // =============================================================================
 // POC 4: Get run status and stream events via SSE
 // =============================================================================

@@ -3,9 +3,11 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"go-agent-harness/internal/harness"
 	"go-agent-harness/internal/store"
@@ -100,6 +102,17 @@ func (s *Server) handleExternalTrigger(w http.ResponseWriter, r *http.Request) {
 // store, and routes to StartRun, SteerRun, or ContinueRun based on the action
 // and current run state.
 func (s *Server) dispatchTriggerEnvelope(w http.ResponseWriter, r *http.Request, env *trigger.ExternalTriggerEnvelope) {
+	// SECURITY (S5): reject replayed deliveries. HMAC signature validation
+	// alone does not stop a captured, validly-signed payload from being
+	// replayed indefinitely to re-trigger runs — dedup on the provider's
+	// delivery ID (env.SourceID, e.g. GitHub's X-GitHub-Delivery) closes that
+	// gap. A source that supplies no delivery ID (env.SourceID == "") is
+	// never deduped — there is nothing to key on.
+	if err := s.triggerDedupCache().CheckAndRecord(env.Source, env.SourceID); err != nil {
+		writeError(w, http.StatusConflict, "duplicate_delivery", err.Error())
+		return
+	}
+
 	// Derive the deterministic thread ID.
 	threadID := trigger.DeriveExternalThreadID(env.Source, env.RepoOwner, env.RepoName, env.ThreadID)
 
@@ -109,9 +122,15 @@ func (s *Server) dispatchTriggerEnvelope(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	tenantID := strings.TrimSpace(env.TenantID)
-	if tenantID == "" {
-		tenantID = "default"
+	// SECURITY (S1/S2): never trust the caller-supplied tenant_id verbatim.
+	// These routes authenticate via a single shared per-source HMAC secret,
+	// not a per-caller API key, so the request body is not a trustworthy
+	// source of tenancy — see ServerOptions.WebhookTenantIDs for the full
+	// threat model and resolution rules.
+	tenantID, err := s.resolveWebhookTenantID(env.Source, env.TenantID)
+	if err != nil {
+		writeError(w, http.StatusForbidden, "tenant_mismatch", err.Error())
+		return
 	}
 
 	runs, err := s.runStore.ListRuns(r.Context(), store.RunFilter{
@@ -208,4 +227,62 @@ func (s *Server) dispatchTriggerEnvelope(w http.ResponseWriter, r *http.Request,
 		writeError(w, http.StatusBadRequest, "invalid_request",
 			"unknown action: "+env.Action+"; valid actions are: start, steer, continue")
 	}
+}
+
+// resolveWebhookTenantID resolves the authoritative tenant for a
+// webhook/trigger-initiated run (S1/S2 hardening).
+//
+// These routes (POST /v1/external/trigger and the source-specific webhook
+// endpoints) authenticate via a single shared per-source HMAC secret, not a
+// per-caller API key, so there is no authenticated principal in the request
+// context the way effectiveTenantID relies on for every other endpoint (see
+// buildMux: these routes intentionally bypass authMiddleware). The
+// caller-supplied tenant_id on the envelope is therefore untrustworthy on
+// its own — anyone who knows the shared secret could otherwise inject a run
+// into an arbitrary tenant just by naming it.
+//
+// Resolution:
+//   - source has a configured tenant in ServerOptions.WebhookTenantIDs: that
+//     tenant is authoritative. An empty or matching bodyTenantID is
+//     accepted; a non-matching bodyTenantID is rejected (cross-tenant
+//     injection attempt).
+//   - source has no configured tenant (the zero-config default): bodyTenantID
+//     is ignored outright and "default" is always used. This is the secure
+//     default — an unconfigured deployment can never be tricked into
+//     cross-tenant injection via the request body.
+func (s *Server) resolveWebhookTenantID(source, bodyTenantID string) (string, error) {
+	configured, hasConfig := s.webhookTenantIDs[strings.ToLower(strings.TrimSpace(source))]
+	bodyTenantID = strings.TrimSpace(bodyTenantID)
+
+	if !hasConfig {
+		// No per-source tenant configured: never trust the body's tenant_id.
+		return "default", nil
+	}
+
+	configured = normalizeTenant(configured)
+	if bodyTenantID == "" || normalizeTenant(bodyTenantID) == configured {
+		return configured, nil
+	}
+	return "", fmt.Errorf("tenant_id %q does not match the configured tenant for source %q", bodyTenantID, source)
+}
+
+// triggerDedupTTL and triggerDedupMaxSize bound the S5 replay-dedup cache.
+// 10 minutes comfortably covers typical webhook redelivery windows (e.g.
+// GitHub retries for up to a few minutes) while ensuring a replay attempt is
+// eventually forgotten rather than blocked forever. 10000 entries bounds
+// memory use regardless of traffic volume (see DeliveryDedupCache).
+const (
+	triggerDedupTTL     = 10 * time.Minute
+	triggerDedupMaxSize = 10000
+)
+
+// triggerDedupCache lazily constructs the server's shared S5 replay-dedup
+// cache. Lazy + sync.Once so every Server construction path (New,
+// NewWithCron, NewWithSkills, NewWithOptions) gets one without each needing
+// to be updated individually.
+func (s *Server) triggerDedupCache() *trigger.DeliveryDedupCache {
+	s.triggerDedupOnce.Do(func() {
+		s.triggerDedup = trigger.NewDeliveryDedupCache(triggerDedupTTL, triggerDedupMaxSize)
+	})
+	return s.triggerDedup
 }
