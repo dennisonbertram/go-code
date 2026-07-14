@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -70,7 +71,7 @@ func NewClient(cfg Config) (*Client, error) {
 	}
 	httpClient := cfg.Client
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 90 * time.Second}
+		httpClient = defaultHTTPClient()
 	}
 	providerName := cfg.ProviderName
 	if providerName == "" {
@@ -87,6 +88,30 @@ func NewClient(cfg Config) (*Client, error) {
 		catalog:         cfg.Catalog,
 		retry:           cfg.Retry,
 	}, nil
+}
+
+// defaultHTTPClient builds the *http.Client used when Config.Client is not
+// supplied. It intentionally does NOT set http.Client.Timeout: that field
+// bounds the entire request/response exchange, including the time spent
+// reading a streaming (SSE) response body — so a whole-request timeout would
+// force-close long-running generations mid-stream. Instead, only bounded
+// per-phase timeouts are set on the Transport (connection dial, TLS
+// handshake, waiting for response headers, and the 100-continue handshake).
+// Overall cancellation for a request is the caller's responsibility via the
+// context passed to http.NewRequestWithContext.
+func defaultHTTPClient() *http.Client {
+	return &http.Client{
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
 }
 
 func (c *Client) maxTokensForModel(modelID string) int {
