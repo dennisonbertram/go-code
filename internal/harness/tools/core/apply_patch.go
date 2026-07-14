@@ -68,7 +68,7 @@ func ApplyPatchTool(opts tools.BuildOptions) tools.Tool {
 
 	workspaceRoot := opts.WorkspaceRoot
 
-	handler := func(_ context.Context, raw json.RawMessage) (string, error) {
+	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
 		var args struct {
 			Path            string      `json:"path"`
 			FilePath        string      `json:"file_path"`
@@ -83,7 +83,7 @@ func ApplyPatchTool(opts tools.BuildOptions) tools.Tool {
 			return "", fmt.Errorf("parse apply_patch args: %w", err)
 		}
 		if strings.TrimSpace(args.Patch) != "" {
-			return applyUnifiedPatch(workspaceRoot, args.Patch)
+			return applyUnifiedPatch(ctx, workspaceRoot, opts.SandboxScope, args.Patch)
 		}
 		if args.Path == "" {
 			args.Path = args.FilePath
@@ -92,7 +92,7 @@ func ApplyPatchTool(opts tools.BuildOptions) tools.Tool {
 			return "", fmt.Errorf("path is required")
 		}
 
-		absPath, err := tools.ResolveWorkspacePath(workspaceRoot, args.Path)
+		absPath, err := tools.ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, opts.SandboxScope)
 		if err != nil {
 			return "", err
 		}
@@ -212,7 +212,7 @@ func isStandardUnifiedDiff(patch string) bool {
 	return strings.HasPrefix(trimmed, "--- ")
 }
 
-func applyUnifiedPatch(workspaceRoot, patch string) (string, error) {
+func applyUnifiedPatch(ctx context.Context, workspaceRoot string, sandboxScope tools.SandboxScope, patch string) (string, error) {
 	var files []unifiedPatchFile
 	var err error
 	if isStandardUnifiedDiff(patch) {
@@ -226,7 +226,7 @@ func applyUnifiedPatch(workspaceRoot, patch string) (string, error) {
 
 	results := make([]map[string]any, 0, len(files))
 	for _, filePatch := range files {
-		absPath, err := tools.ResolveWorkspacePath(workspaceRoot, filePatch.Path)
+		absPath, err := tools.ResolveWorkspacePathConfined(ctx, workspaceRoot, filePatch.Path, sandboxScope)
 		if err != nil {
 			return "", err
 		}

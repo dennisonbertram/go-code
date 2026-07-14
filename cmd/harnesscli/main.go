@@ -489,6 +489,16 @@ func newTUIConfig(baseURL, workspace, resumeConversationID string) tui.TUIConfig
 	if colorProfile == "" {
 		colorProfile = "auto"
 	}
+	// Reuse the exact same harnessd auth key the rest of the CLI already
+	// uses (see auth.go's newAuthedRequest / loadConfig, populated by
+	// "harnesscli auth login"), so the TUI's requests — including the SSE
+	// event stream — authenticate the same way as every other harnesscli
+	// command. A missing or unreadable config file just means "no key",
+	// preserving today's unauthenticated-local default.
+	var apiKey string
+	if cfg, err := loadConfig(); err == nil && cfg != nil {
+		apiKey = cfg.APIKey
+	}
 	return tui.TUIConfig{
 		BaseURL:              baseURL,
 		Workspace:            workspace,
@@ -496,6 +506,7 @@ func newTUIConfig(baseURL, workspace, resumeConversationID string) tui.TUIConfig
 		ColorProfile:         colorProfile,
 		AltScreen:            true,
 		ResumeConversationID: resumeConversationID,
+		APIKey:               apiKey,
 	}
 }
 

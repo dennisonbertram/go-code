@@ -131,7 +131,7 @@ func GitLogSearchTool(opts tools.BuildOptions) tools.Tool {
 		// Build optional path suffix
 		var pathSuffix []string
 		if strings.TrimSpace(args.Path) != "" {
-			absPath, err := tools.ResolveWorkspacePath(workspaceRoot, args.Path)
+			absPath, err := tools.ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, opts.SandboxScope)
 			if err != nil {
 				return "", err
 			}
@@ -263,7 +263,7 @@ func GitFileHistoryTool(opts tools.BuildOptions) tools.Tool {
 		if err != nil {
 			return "", fmt.Errorf("resolve workspace root: %w", err)
 		}
-		absPath, err := tools.ResolveWorkspacePath(workspaceRoot, args.Path)
+		absPath, err := tools.ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, opts.SandboxScope)
 		if err != nil {
 			return "", err
 		}
@@ -433,7 +433,7 @@ func GitBlameContextTool(opts tools.BuildOptions) tools.Tool {
 		if err != nil {
 			return "", fmt.Errorf("resolve workspace root: %w", err)
 		}
-		absPath, err := tools.ResolveWorkspacePath(workspaceRoot, args.Path)
+		absPath, err := tools.ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, opts.SandboxScope)
 		if err != nil {
 			return "", err
 		}
@@ -657,7 +657,7 @@ func GitDiffRangeTool(opts tools.BuildOptions) tools.Tool {
 		// Build optional path suffix
 		var pathSuffix []string
 		if strings.TrimSpace(args.Path) != "" {
-			absPath, err := tools.ResolveWorkspacePath(workspaceRoot, args.Path)
+			absPath, err := tools.ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, opts.SandboxScope)
 			if err != nil {
 				return "", err
 			}
@@ -795,7 +795,7 @@ func GitContributorContextTool(opts tools.BuildOptions) tools.Tool {
 			cmdArgs = append(cmdArgs, "--since="+args.Since)
 		}
 		if strings.TrimSpace(args.Path) != "" {
-			absPath, err := tools.ResolveWorkspacePath(workspaceRoot, args.Path)
+			absPath, err := tools.ResolveWorkspacePathConfined(ctx, workspaceRoot, args.Path, opts.SandboxScope)
 			if err != nil {
 				return "", err
 			}

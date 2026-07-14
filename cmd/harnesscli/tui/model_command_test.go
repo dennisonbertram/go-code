@@ -507,6 +507,11 @@ func TestTUI137_ModelSelectedMsgSetsStatusMsg(t *testing.T) {
 
 // TestTUI137_ModelOverlayUpDownNavigates verifies Up/Down keys navigate the provider list
 // at level 0, and navigate the model list at level 1.
+//
+// This deliberately does not hardcode which two OpenAI models are adjacent —
+// the OpenAI catalog grows over time (see catalog/models.json), so the test
+// asserts the navigational behavior (Down moves forward, Up returns to the
+// starting model) rather than baking in a specific pair of model names.
 func TestTUI137_ModelOverlayUpDownNavigates(t *testing.T) {
 	m := initModel(t, 80, 24)
 	m = sendSlashCommand(m, "/model")
@@ -525,25 +530,31 @@ func TestTUI137_ModelOverlayUpDownNavigates(t *testing.T) {
 	m3, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = m3.(tui.Model)
 
-	// At level 1: Down moves model cursor. OpenAI has gpt-4.1 and gpt-4.1-mini.
-	// Navigate to gpt-4.1-mini by pressing Down.
+	startEntry, _ := m.ModelSwitcher().Accept()
+
+	// At level 1: Down moves the model cursor to a different model.
 	m4, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
 	m = m4.(tui.Model)
 
-	// The view should now show gpt-4.1-mini highlighted.
-	v := m.View()
-	if !strings.Contains(v, "GPT-4.1 Mini") {
-		t.Errorf("view must contain 'GPT-4.1 Mini' after Down at level 1:\n%s", v)
+	movedEntry, _ := m.ModelSwitcher().Accept()
+	if movedEntry.ID == startEntry.ID {
+		t.Fatalf("Down at level 1 should move the cursor to a different model, still on %q", movedEntry.ID)
 	}
 
-	// Press Up to go back to gpt-4.1.
+	// The view should now show the newly selected model's display name.
+	v := m.View()
+	if !strings.Contains(v, movedEntry.DisplayName) {
+		t.Errorf("view must contain %q after Down at level 1:\n%s", movedEntry.DisplayName, v)
+	}
+
+	// Press Up to go back to the starting model.
 	m5, _ := m.Update(tea.KeyMsg{Type: tea.KeyUp})
 	m = m5.(tui.Model)
 
-	// Verify gpt-4.1 is selected.
+	// Verify the starting model is selected again.
 	entry, _ := m.ModelSwitcher().Accept()
-	if entry.ID != "gpt-4.1" {
-		t.Errorf("after Down+Up at level 1: selected model = %q, want %q", entry.ID, "gpt-4.1")
+	if entry.ID != startEntry.ID {
+		t.Errorf("after Down+Up at level 1: selected model = %q, want %q", entry.ID, startEntry.ID)
 	}
 }
 

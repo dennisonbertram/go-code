@@ -26,7 +26,7 @@ func TestStartRunCmdIncludesWorkspacePath(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	msg := startRunCmd(ts.URL, "hello", "", "gpt-test", "openai", "low", "default", "/tmp/project-root")()
+	msg := startRunCmd(ts.URL, "hello", "", "gpt-test", "openai", "low", "default", "/tmp/project-root", "")()
 	if _, ok := msg.(RunStartedMsg); !ok {
 		t.Fatalf("expected RunStartedMsg, got %T: %+v", msg, msg)
 	}
@@ -51,7 +51,7 @@ func TestStartRunCmdSendsCapabilityProfileAsProfileField(t *testing.T) {
 	// A capability profile selected via /profiles (e.g. "researcher") must be
 	// sent in the "profile" field (harness.RunRequest.ProfileName), NOT in
 	// "prompt_profile" — the server rejects unknown prompt profiles with HTTP 400.
-	msg := startRunCmd(ts.URL, "hello", "", "gpt-test", "openai", "", "researcher", "/tmp/x")()
+	msg := startRunCmd(ts.URL, "hello", "", "gpt-test", "openai", "", "researcher", "/tmp/x", "")()
 	if _, ok := msg.(RunStartedMsg); !ok {
 		t.Fatalf("expected RunStartedMsg, got %T: %+v", msg, msg)
 	}
@@ -83,7 +83,7 @@ func TestLoadSubagentsCmdReturnsDecodedSubagents(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	msg := loadSubagentsCmd(ts.URL)()
+	msg := loadSubagentsCmd(ts.URL, "")()
 	loaded, ok := msg.(SubagentsLoadedMsg)
 	if !ok {
 		t.Fatalf("expected SubagentsLoadedMsg, got %T", msg)
@@ -158,7 +158,7 @@ func TestStartRunCmdSetsAllowFallback(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	msg := startRunCmd(ts.URL, "hello", "", "gpt-test", "openai", "low", "default", "")()
+	msg := startRunCmd(ts.URL, "hello", "", "gpt-test", "openai", "low", "default", "", "")()
 	if _, ok := msg.(RunStartedMsg); !ok {
 		t.Fatalf("expected RunStartedMsg, got %T: %+v", msg, msg)
 	}

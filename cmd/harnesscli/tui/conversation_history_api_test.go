@@ -8,9 +8,11 @@ import (
 
 // TestFetchConversationMessagesCmd_Success verifies that fetchConversationMessagesCmd
 // hits the correct path (GET /v1/conversations/{id}/messages), sends no
-// Authorization header (matching the unauthenticated pattern used by the other
-// plain api.go calls such as fetchSessionRunsCmd and cancelRunCmd), and decodes
-// the message list into ConversationHistoryMsg.
+// Authorization header when no API key is configured (preserving
+// unauthenticated-local behavior — see TestAllHarnessdCallsAuthenticate in
+// api_auth_test.go for the header-present case shared across every
+// harnessd-targeting call), and decodes the message list into
+// ConversationHistoryMsg.
 func TestFetchConversationMessagesCmd_Success(t *testing.T) {
 	t.Parallel()
 
@@ -24,7 +26,7 @@ func TestFetchConversationMessagesCmd_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	msg := fetchConversationMessagesCmd(ts.URL, "conv-history-1")()
+	msg := fetchConversationMessagesCmd(ts.URL, "conv-history-1", "")()
 
 	if gotMethod != http.MethodGet {
 		t.Errorf("method: want GET, got %q", gotMethod)
@@ -33,7 +35,7 @@ func TestFetchConversationMessagesCmd_Success(t *testing.T) {
 		t.Errorf("path: want /v1/conversations/conv-history-1/messages, got %q", gotPath)
 	}
 	if gotAuth != "" {
-		t.Errorf("Authorization header: want empty (matching the unauthenticated api.go pattern), got %q", gotAuth)
+		t.Errorf("Authorization header: want empty when no API key is configured, got %q", gotAuth)
 	}
 
 	got, ok := msg.(ConversationHistoryMsg)
@@ -65,7 +67,7 @@ func TestFetchConversationMessagesCmd_ErrorStatus(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	msg := fetchConversationMessagesCmd(ts.URL, "conv-missing")()
+	msg := fetchConversationMessagesCmd(ts.URL, "conv-missing", "")()
 	got, ok := msg.(ConversationHistoryErrorMsg)
 	if !ok {
 		t.Fatalf("expected ConversationHistoryErrorMsg, got %T", msg)
@@ -83,7 +85,7 @@ func TestFetchConversationMessagesCmd_ErrorStatus(t *testing.T) {
 func TestFetchConversationMessagesCmd_NetworkError(t *testing.T) {
 	t.Parallel()
 
-	msg := fetchConversationMessagesCmd("http://127.0.0.1:1", "conv-err")()
+	msg := fetchConversationMessagesCmd("http://127.0.0.1:1", "conv-err", "")()
 	got, ok := msg.(ConversationHistoryErrorMsg)
 	if !ok {
 		t.Fatalf("expected ConversationHistoryErrorMsg, got %T", msg)

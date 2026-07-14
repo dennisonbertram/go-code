@@ -33,7 +33,7 @@ func TestFetchSessionRunsCmd_Success(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	msg := fetchSessionRunsCmd(ts.URL, "conv-abc")()
+	msg := fetchSessionRunsCmd(ts.URL, "conv-abc", "")()
 	got, ok := msg.(SessionRunsFetchedMsg)
 	if !ok {
 		t.Fatalf("expected SessionRunsFetchedMsg, got %T", msg)
@@ -65,7 +65,7 @@ func TestFetchSessionRunsCmd_501ReturnsEmptyMsg(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	msg := fetchSessionRunsCmd(ts.URL, "conv-xyz")()
+	msg := fetchSessionRunsCmd(ts.URL, "conv-xyz", "")()
 	got, ok := msg.(SessionRunsFetchedMsg)
 	if !ok {
 		t.Fatalf("expected SessionRunsFetchedMsg, got %T", msg)
@@ -87,7 +87,7 @@ func TestFetchSessionRunsCmd_NetworkErrorReturnsEmptyMsg(t *testing.T) {
 	t.Parallel()
 
 	// Use an address that will immediately refuse/error.
-	msg := fetchSessionRunsCmd("http://127.0.0.1:1", "conv-err")()
+	msg := fetchSessionRunsCmd("http://127.0.0.1:1", "conv-err", "")()
 	got, ok := msg.(SessionRunsFetchedMsg)
 	if !ok {
 		t.Fatalf("expected SessionRunsFetchedMsg, got %T", msg)
@@ -112,7 +112,7 @@ func TestFetchSessionRunsCmd_MalformedJSONReturnsEmptyMsg(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	msg := fetchSessionRunsCmd(ts.URL, "conv-json-err")()
+	msg := fetchSessionRunsCmd(ts.URL, "conv-json-err", "")()
 	got, ok := msg.(SessionRunsFetchedMsg)
 	if !ok {
 		t.Fatalf("expected SessionRunsFetchedMsg, got %T", msg)
@@ -142,7 +142,7 @@ func TestFetchSessionRunsCmd_TrailingSlashNormalised(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	msg := fetchSessionRunsCmd(ts.URL+"/", "conv-slash")()
+	msg := fetchSessionRunsCmd(ts.URL+"/", "conv-slash", "")()
 	got, ok := msg.(SessionRunsFetchedMsg)
 	if !ok {
 		t.Fatalf("expected SessionRunsFetchedMsg, got %T", msg)

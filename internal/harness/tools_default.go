@@ -23,7 +23,28 @@ type DefaultRegistryOptions struct {
 	ApprovalMode        ToolApprovalMode
 	Policy              ToolPolicy
 	SandboxScope        SandboxScope // controls filesystem/network restrictions
-	AskUserBroker       htools.AskUserQuestionBroker
+	// NetworkAllowlist is the operator-configured, explicit opt-in escape
+	// hatch for the outbound network guard (GAP-3): by default the
+	// fetch/download tools and the WebFetcher-backed tools (web_fetch,
+	// web_search, agentic_fetch) refuse to dial loopback, link-local,
+	// RFC1918/ULA-private, or otherwise non-public destinations, even when a
+	// URL's hostname first resolves to a public address. Each entry may be a
+	// bare hostname (matched against the request's original,
+	// pre-resolution host — e.g. "localhost") or a CIDR (e.g. "10.0.0.0/8",
+	// "127.0.0.1/32") matched against the resolved destination IP. Empty
+	// (the default) means no exceptions: only public addresses are
+	// reachable. See htools.BuildOptions.NetworkAllowlist and
+	// htools.NewGuardedHTTPClient (ssrf_guard.go).
+	NetworkAllowlist []string
+	// WebFetcher backs the web_fetch, web_search, and agentic_fetch tools.
+	// When nil (the default), those tools are not registered. When set, it
+	// is automatically wrapped with htools.GuardedWebFetcher (GAP-2) before
+	// being handed to the tool constructors, so Fetch(url) — the
+	// agent-supplied-destination surface — is always subject to the same
+	// dial-time SSRF guard as the fetch/download tools, regardless of what
+	// this implementation would otherwise have done for Fetch itself.
+	WebFetcher    htools.WebFetcher
+	AskUserBroker htools.AskUserQuestionBroker
 	AskUserTimeout      time.Duration
 	MemoryManager       om.Manager
 	WorkingMemoryStore  workingmemory.Store
@@ -157,6 +178,8 @@ func NewDefaultRegistryWithOptions(workspaceRoot string, opts DefaultRegistryOpt
 		ApprovalMode:       approvalMode,
 		Policy:             policyAdapter,
 		SandboxScope:       htools.SandboxScope(opts.SandboxScope),
+		NetworkAllowlist:   opts.NetworkAllowlist,
+		WebFetcher:         opts.WebFetcher,
 		HTTPClient:         httpClient,
 		Now:                time.Now,
 		AskUserBroker:      opts.AskUserBroker,
@@ -274,10 +297,14 @@ func NewDefaultRegistryWithOptions(workspaceRoot string, opts DefaultRegistryOpt
 			deferred.TaskCompleteTool(opts.AgentRunner),
 		)
 		if buildOpts.EnableWebOps && buildOpts.WebFetcher != nil {
+			// GAP-2: see the identical comment in tools/catalog.go. Wrap
+			// before wiring into the tool constructors so Fetch(url) is
+			// always subject to the dial-time SSRF guard.
+			guardedFetcher := htools.NewGuardedWebFetcher(buildOpts.WebFetcher, buildOpts.NetworkAllowlist)
 			deferredTools = append(deferredTools,
-				deferred.AgenticFetchTool(buildOpts.WebFetcher, opts.AgentRunner),
-				deferred.WebSearchTool(buildOpts.WebFetcher),
-				deferred.WebFetchTool(buildOpts.WebFetcher),
+				deferred.AgenticFetchTool(guardedFetcher, opts.AgentRunner),
+				deferred.WebSearchTool(guardedFetcher),
+				deferred.WebFetchTool(guardedFetcher),
 			)
 		}
 	}

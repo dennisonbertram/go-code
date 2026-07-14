@@ -11,7 +11,7 @@ import (
 	"go-agent-harness/internal/harness/tools/descriptions"
 )
 
-func globTool(workspaceRoot string) Tool {
+func globTool(workspaceRoot string, sandboxScope SandboxScope) Tool {
 	def := Definition{
 		Name:         "glob",
 		Description:  descriptions.Load("glob"),
@@ -28,7 +28,7 @@ func globTool(workspaceRoot string) Tool {
 		},
 	}
 
-	handler := func(_ context.Context, raw json.RawMessage) (string, error) {
+	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
 		args := struct {
 			Pattern    string `json:"pattern"`
 			MaxMatches int    `json:"max_matches"`
@@ -59,6 +59,7 @@ func globTool(workspaceRoot string) Tool {
 			return "", fmt.Errorf("glob pattern: %w", err)
 		}
 
+		scope := EffectiveSandboxScope(ctx, sandboxScope)
 		filtered := make([]string, 0, len(matches))
 		for _, match := range matches {
 			rel, err := filepath.Rel(absRoot, match)
@@ -66,6 +67,13 @@ func globTool(workspaceRoot string) Tool {
 				continue
 			}
 			if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				continue
+			}
+			// Under workspace scope, also drop matches that only appear inside the
+			// workspace because a symlink component in the pattern resolves outside
+			// it (e.g. a `workspace/escape-link -> /etc` symlink followed by the
+			// glob library when matching `escape-link/*`).
+			if _, err := ConfineWorkspacePath(scope, workspaceRoot, nil, match); err != nil {
 				continue
 			}
 			filtered = append(filtered, filepath.ToSlash(rel))

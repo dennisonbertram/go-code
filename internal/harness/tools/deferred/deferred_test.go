@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
@@ -93,18 +94,34 @@ func withRunMetadata(ctx context.Context, md tools.RunMetadata) context.Context 
 	return context.WithValue(ctx, tools.ContextKeyRunMetadata, md)
 }
 
+// testServerHost extracts the host (without port) from an httptest.Server URL,
+// for use as an SSRF-guard NetworkAllowlist entry in tests that legitimately
+// need to reach a local test server.
+func testServerHost(t *testing.T, rawURL string) string {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parse test server URL %q: %v", rawURL, err)
+	}
+	host := u.Hostname()
+	if host == "" {
+		t.Fatalf("test server URL %q has no host", rawURL)
+	}
+	return host
+}
+
 // ---------- tests ----------
 
 // TestFetchTool_Definition verifies the fetch tool constructor.
 func TestFetchTool_Definition(t *testing.T) {
-	tool := FetchTool(http.DefaultClient)
+	tool := FetchTool(http.DefaultClient, nil)
 	assertToolDef(t, tool, "fetch", tools.TierDeferred)
 	assertHasTags(t, tool, "http", "web")
 }
 
 // TestFetchTool_Handler_MissingURL verifies fetch returns an error when url is empty.
 func TestFetchTool_Handler_MissingURL(t *testing.T) {
-	tool := FetchTool(http.DefaultClient)
+	tool := FetchTool(http.DefaultClient, nil)
 	_, err := tool.Handler(context.Background(), json.RawMessage(`{}`))
 	if err == nil {
 		t.Fatal("expected error for missing url")
@@ -113,7 +130,7 @@ func TestFetchTool_Handler_MissingURL(t *testing.T) {
 
 // TestFetchTool_Handler_BadScheme verifies fetch rejects non-http schemes.
 func TestFetchTool_Handler_BadScheme(t *testing.T) {
-	tool := FetchTool(http.DefaultClient)
+	tool := FetchTool(http.DefaultClient, nil)
 	_, err := tool.Handler(context.Background(), json.RawMessage(`{"url":"ftp://example.com"}`))
 	if err == nil {
 		t.Fatal("expected error for ftp scheme")
@@ -121,13 +138,17 @@ func TestFetchTool_Handler_BadScheme(t *testing.T) {
 }
 
 // TestFetchTool_Handler_Success verifies fetch returns content from a test server.
+// The test server listens on loopback, which the SSRF guard blocks by
+// default (see ssrf_guard_test.go in the parent package) — so this test
+// exercises the explicit opt-in allowlist to reach it, proving the guard
+// doesn't break legitimate, explicitly-permitted local fetches.
 func TestFetchTool_Handler_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintln(w, "hello from server")
 	}))
 	defer ts.Close()
 
-	tool := FetchTool(ts.Client())
+	tool := FetchTool(ts.Client(), []string{testServerHost(t, ts.URL)})
 	args, _ := json.Marshal(map[string]string{"url": ts.URL})
 	result, err := tool.Handler(context.Background(), json.RawMessage(args))
 	if err != nil {
@@ -163,7 +184,34 @@ func TestDownloadTool_Handler_MissingFilePath(t *testing.T) {
 	}
 }
 
+// TestDownloadTool_Handler_BlocksLoopbackByDefault is a regression test for
+// the SSRF guard wiring specifically on the production download tool
+// (BUG-2): without an explicit NetworkAllowlist entry, a request to a
+// loopback test server must be refused, proving DownloadTool actually routes
+// through the guarded client rather than the raw one.
+func TestDownloadTool_Handler_BlocksLoopbackByDefault(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("should never reach the agent"))
+	}))
+	defer ts.Close()
+
+	dir := t.TempDir()
+	tool := DownloadTool(tools.BuildOptions{WorkspaceRoot: dir, HTTPClient: ts.Client()})
+	args, _ := json.Marshal(map[string]string{"url": ts.URL, "file_path": "dl.txt"})
+	_, err := tool.Handler(context.Background(), json.RawMessage(args))
+	if err == nil {
+		t.Fatal("expected download from an unallowlisted loopback destination to be blocked by default")
+	}
+	if _, statErr := os.Stat(filepath.Join(dir, "dl.txt")); statErr == nil {
+		t.Fatal("expected no file to be written when the destination is blocked")
+	}
+}
+
 // TestDownloadTool_Handler_Success verifies download saves content from a test server.
+// The test server listens on loopback, which the SSRF guard blocks by
+// default — so this test exercises the explicit opt-in NetworkAllowlist to
+// reach it, proving the guard doesn't break legitimate, explicitly-permitted
+// local fetches.
 func TestDownloadTool_Handler_Success(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("downloaded content"))
@@ -171,7 +219,7 @@ func TestDownloadTool_Handler_Success(t *testing.T) {
 	defer ts.Close()
 
 	dir := t.TempDir()
-	tool := DownloadTool(tools.BuildOptions{WorkspaceRoot: dir, HTTPClient: ts.Client()})
+	tool := DownloadTool(tools.BuildOptions{WorkspaceRoot: dir, HTTPClient: ts.Client(), NetworkAllowlist: []string{testServerHost(t, ts.URL)}})
 	args, _ := json.Marshal(map[string]string{"url": ts.URL, "file_path": "dl.txt"})
 	result, err := tool.Handler(context.Background(), json.RawMessage(args))
 	if err != nil {

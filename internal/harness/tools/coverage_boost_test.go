@@ -353,7 +353,7 @@ func TestApplyUnifiedPatchAddFile(t *testing.T) {
 	workspace := t.TempDir()
 	patch := "*** Begin Patch\n*** Add File: newfile.txt\n+hello world\n*** End Patch"
 
-	result, err := applyUnifiedPatch(workspace, patch)
+	result, err := applyUnifiedPatch(context.Background(), workspace, SandboxScopeUnrestricted, patch)
 	if err != nil {
 		t.Fatalf("applyUnifiedPatch: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestApplyUnifiedPatchDeleteFile(t *testing.T) {
 	}
 
 	patch := "*** Begin Patch\n*** Delete File: todelete.txt\n*** End Patch"
-	result, err := applyUnifiedPatch(workspace, patch)
+	result, err := applyUnifiedPatch(context.Background(), workspace, SandboxScopeUnrestricted, patch)
 	if err != nil {
 		t.Fatalf("applyUnifiedPatch: %v", err)
 	}
@@ -404,7 +404,7 @@ func TestApplyUnifiedPatchUpdateFile(t *testing.T) {
 	}
 
 	patch := "*** Begin Patch\n*** Update File: src.txt\n@@ section\n-old line\n+new line\n*** End Patch"
-	result, err := applyUnifiedPatch(workspace, patch)
+	result, err := applyUnifiedPatch(context.Background(), workspace, SandboxScopeUnrestricted, patch)
 	if err != nil {
 		t.Fatalf("applyUnifiedPatch: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestApplyUnifiedPatchUpdateMissingOldText(t *testing.T) {
 	}
 
 	patch := "*** Begin Patch\n*** Update File: src.txt\n@@ section\n+only new\n*** End Patch"
-	_, err := applyUnifiedPatch(workspace, patch)
+	_, err := applyUnifiedPatch(context.Background(), workspace, SandboxScopeUnrestricted, patch)
 	if err == nil || !strings.Contains(err.Error(), "missing old text") {
 		t.Fatalf("expected missing old text error, got: %v", err)
 	}
@@ -445,7 +445,7 @@ func TestApplyUnifiedPatchUpdateHunkNotPresent(t *testing.T) {
 	}
 
 	patch := "*** Begin Patch\n*** Update File: src.txt\n@@ section\n-nonexistent content\n+replacement\n*** End Patch"
-	_, err := applyUnifiedPatch(workspace, patch)
+	_, err := applyUnifiedPatch(context.Background(), workspace, SandboxScopeUnrestricted, patch)
 	if err == nil || !strings.Contains(err.Error(), "not present") {
 		t.Fatalf("expected hunk not present error, got: %v", err)
 	}

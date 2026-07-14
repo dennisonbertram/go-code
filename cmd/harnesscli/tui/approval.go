@@ -8,8 +8,10 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -49,23 +51,28 @@ type ToolApprovalErrorMsg struct {
 // approveToolCmd sends POST /v1/runs/{id}/approve. On success it returns
 // ToolApprovalDecidedMsg{Decision: "approved"}; on failure it returns
 // ToolApprovalErrorMsg.
-func approveToolCmd(baseURL, runID string) tea.Cmd {
-	return toolApprovalDecisionCmd(baseURL, runID, "approve", "approved")
+func approveToolCmd(baseURL, runID, apiKey string) tea.Cmd {
+	return toolApprovalDecisionCmd(baseURL, runID, "approve", "approved", apiKey)
 }
 
 // denyToolCmd sends POST /v1/runs/{id}/deny. On success it returns
 // ToolApprovalDecidedMsg{Decision: "denied"}; on failure it returns
 // ToolApprovalErrorMsg.
-func denyToolCmd(baseURL, runID string) tea.Cmd {
-	return toolApprovalDecisionCmd(baseURL, runID, "deny", "denied")
+func denyToolCmd(baseURL, runID, apiKey string) tea.Cmd {
+	return toolApprovalDecisionCmd(baseURL, runID, "deny", "denied", apiKey)
 }
 
 // toolApprovalDecisionCmd posts an empty body to /v1/runs/{id}/{path} and
 // translates the response into ToolApprovalDecidedMsg or ToolApprovalErrorMsg.
-func toolApprovalDecisionCmd(baseURL, runID, path, decision string) tea.Cmd {
+func toolApprovalDecisionCmd(baseURL, runID, path, decision, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		postURL := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/" + path
-		resp, err := httpClientWithTimeout.Post(postURL, "application/json", bytes.NewReader(nil))
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, postURL, bytes.NewReader(nil), apiKey)
+		if err != nil {
+			return ToolApprovalErrorMsg{Err: fmt.Sprintf("%s tool call: %s", path, err.Error())}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := httpClientWithTimeout.Do(req)
 		if err != nil {
 			return ToolApprovalErrorMsg{Err: fmt.Sprintf("%s tool call: %s", path, err.Error())}
 		}
@@ -95,15 +102,15 @@ func (m Model) handleToolApprovalKey(msg tea.KeyMsg) (toolApprovalState, tea.Cmd
 
 	switch msg.Type {
 	case tea.KeyEnter:
-		return toolApprovalState{}, approveToolCmd(m.config.BaseURL, runID)
+		return toolApprovalState{}, approveToolCmd(m.config.BaseURL, runID, m.config.APIKey)
 	case tea.KeyEsc:
-		return toolApprovalState{}, cancelRunCmd(m.config.BaseURL, runID)
+		return toolApprovalState{}, cancelRunCmd(m.config.BaseURL, runID, m.config.APIKey)
 	case tea.KeyRunes:
 		switch string(msg.Runes) {
 		case "a", "A", "y", "Y":
-			return toolApprovalState{}, approveToolCmd(m.config.BaseURL, runID)
+			return toolApprovalState{}, approveToolCmd(m.config.BaseURL, runID, m.config.APIKey)
 		case "d", "D", "n", "N":
-			return toolApprovalState{}, denyToolCmd(m.config.BaseURL, runID)
+			return toolApprovalState{}, denyToolCmd(m.config.BaseURL, runID, m.config.APIKey)
 		}
 	}
 	return st, nil
