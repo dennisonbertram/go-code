@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	robfigcron "github.com/robfig/cron/v3"
 )
 
 func TestNewScheduler_DefaultMaxConcurrent(t *testing.T) {
@@ -1063,5 +1064,80 @@ func TestFireJob_DoesNotWriteBackStaleFullSnapshot(t *testing.T) {
 	}
 	if executedTags != "edited-tag" {
 		t.Fatalf("expected fireJob to execute with the current (edited) job state %q, got %q", "edited-tag", executedTags)
+	}
+}
+
+// --- BUG 3: shutdown blocks up to the full jitter window ---
+
+// TestScheduler_Stop_InterruptsLongJitterWait (BT-004, P1) reproduces the
+// shutdown stall: cronScheduler.Stop() blocks until in-flight fireJob
+// invocations dispatched by robfig/cron finish, and fireJob's jitter wait
+// was an UNINTERRUPTIBLE sleep that can be minutes long. So Stop() (and
+// therefore the whole harnessd shutdown sequence, which calls Stop()
+// before draining the HTTP server) stalls for as long as the jitter.
+//
+// This test registers a job directly with the underlying robfig/cron
+// dispatcher (bypassing the 5-field, minute-resolution schedule parser
+// Scheduler.AddJob uses) so that fireJob is invoked the same way
+// production code invokes it: synchronously, from cron's own dispatch
+// goroutine, tracked by cron.Stop()'s returned context. The job's jitter
+// is deliberately long (a few seconds — long enough to prove the point
+// without making the test suite slow, since production jitter can be up
+// to 5 minutes by default).
+//
+// Before the fix: Stop() blocks for close to the full jitter duration
+// (uninterruptible time.Sleep) and the job still fires afterward. After
+// the fix: Stop() returns promptly (closing s.done interrupts the wait)
+// and the job is skipped entirely rather than firing mid-shutdown.
+func TestScheduler_Stop_InterruptsLongJitterWait(t *testing.T) {
+	var executed bool
+	var mu sync.Mutex
+
+	store := &mockStore{
+		GetJobFunc: func(ctx context.Context, id string) (Job, error) {
+			return Job{}, ErrJobNotFound
+		},
+	}
+	executor := &mockExecutor{
+		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {
+			mu.Lock()
+			executed = true
+			mu.Unlock()
+			return "ok", nil
+		},
+	}
+	clock := newMockClock(time.Now())
+	s := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
+	// sleepFn is left at its default (time.Sleep) deliberately: this test
+	// must exercise a REAL blocking sleep to prove Stop() interrupts it,
+	// not just that a test double happens to return quickly.
+
+	job := testJob("stop-interrupt-test")
+	const longJitter = 3 * time.Second
+
+	// Register directly with the underlying robfig cron dispatcher so
+	// fireJob is invoked synchronously from cron's own goroutine — the
+	// same mechanism Scheduler.Stop()'s `s.cron.Stop()` context waits on.
+	s.cron.Schedule(robfigcron.Every(time.Second), robfigcron.FuncJob(func() {
+		s.fireJob(job, longJitter)
+	}))
+	s.cron.Start()
+
+	// Give the first tick (fires ~1s after Start, per robfig's Every()
+	// minimum resolution) a chance to enter the jitter wait.
+	time.Sleep(1500 * time.Millisecond)
+
+	stopStart := time.Now()
+	s.Stop()
+	stopDuration := time.Since(stopStart)
+
+	if stopDuration > 1500*time.Millisecond {
+		t.Fatalf("Stop() took %v, expected it to return promptly (well under the %v jitter wait)", stopDuration, longJitter)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if executed {
+		t.Fatal("expected fireJob to skip execution when Stop() interrupts the jitter wait, but the executor ran")
 	}
 }
