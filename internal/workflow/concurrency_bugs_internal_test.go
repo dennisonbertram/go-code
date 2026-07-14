@@ -327,6 +327,75 @@ func TestConcurrentResumeExecutesScriptExactlyOnce(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------
+// BUG 5: Subscribe history/live gap loses terminal events
+// ---------------------------------------------------------------------
+//
+// Subscribe read history via store.GetEvents and only THEN registered its
+// channel in e.subs. An event emitted in that gap is in neither the
+// returned history nor delivered on the channel -- permanently lost. If
+// the lost event is the terminal workflow.completed/failed event, an SSE
+// client hangs forever.
+//
+// This test races emit() against Subscribe() for the same runID many
+// times (alternating which starts first) and asserts the event is always
+// observed either in history or on the live channel -- never neither.
+func TestSubscribeNeverMissesConcurrentEmit(t *testing.T) {
+	e := NewEngine(EngineOptions{Subagents: noopSubagentManager{}})
+	const iterations = 500
+
+	for i := 0; i < iterations; i++ {
+		runID := fmt.Sprintf("run-%d", i)
+
+		var emitWG sync.WaitGroup
+		emitWG.Add(1)
+		fireEmit := func() {
+			defer emitWG.Done()
+			e.emit(runID, EventWorkflowCompleted, map[string]any{"i": i})
+		}
+
+		var history []Event
+		var ch <-chan Event
+		var cancel func()
+		var subErr error
+
+		if i%2 == 0 {
+			go fireEmit()
+			history, ch, cancel, subErr = e.Subscribe(runID)
+		} else {
+			history, ch, cancel, subErr = e.Subscribe(runID)
+			go fireEmit()
+		}
+		if subErr != nil {
+			t.Fatalf("iteration %d: Subscribe: %v", i, subErr)
+		}
+
+		emitWG.Wait()
+
+		found := false
+		for _, ev := range history {
+			if ev.Type == EventWorkflowCompleted {
+				found = true
+				break
+			}
+		}
+		if !found {
+			select {
+			case ev := <-ch:
+				if ev.Type == EventWorkflowCompleted {
+					found = true
+				}
+			case <-time.After(200 * time.Millisecond):
+			}
+		}
+		cancel()
+
+		if !found {
+			t.Fatalf("iteration %d: terminal event lost — not in history and not delivered live", i)
+		}
+	}
+}
+
 // waitForStatus polls GetRun until the run reaches want or the deadline
 // expires.
 func waitForStatus(t *testing.T, e *Engine, runID string, want RunStatus) {
