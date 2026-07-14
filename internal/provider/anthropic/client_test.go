@@ -762,6 +762,65 @@ func TestCompleteStreamStallTimesOutWithoutHanging(t *testing.T) {
 	}
 }
 
+// TestCompleteNonStreamingStallTimesOutWithoutHanging is MUST-FIX1's most
+// important test for this package: adversarial review proved the idle-stream
+// watchdog only covered the streaming decode path, leaving
+// io.ReadAll(httpRes.Body) on the NON-STREAMING path completely unbounded
+// once BUG1 removed the whole-request Client.Timeout. A server that sends
+// 200 + headers + a partial body then stalls must still fail within the
+// idle interval when req.Stream == nil, not hang. This matters more than
+// the streaming case because the one production non-streaming caller
+// (auto-compaction summarizer) reaches the provider via
+// context.Background(), so an unbounded non-streaming hang would not even
+// be cancellable.
+//
+// NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
+func TestCompleteNonStreamingStallTimesOutWithoutHanging(t *testing.T) {
+	withShrunkIdleStreamTimeout(t, 60*time.Millisecond)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Partial, deliberately-incomplete JSON body — proves the server did
+		// respond and started sending a body, then goes silent forever.
+		_, _ = io.WriteString(w, `{"id":"msg_stall","type":"message","role":"assistant","content":[{"type":"text","text":"partial`)
+		flusher.Flush()
+
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv)
+
+	start := time.Now()
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
+		// Stream is deliberately nil: exercises the NON-STREAMING path.
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a stall error, got success")
+	}
+	if elapsed > 1*time.Second {
+		t.Fatalf("expected the idle-stream watchdog to bound the non-streaming read (~60ms), took %s — non-streaming reads are unbounded without MUST-FIX1", elapsed)
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if !strings.Contains(phe.Body, "stall") {
+		t.Fatalf("expected error body to mention the stall, got %q", phe.Body)
+	}
+}
+
 // TestCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout is the
 // regression guard proving the idle timeout is gap-based, not a disguised
 // total-duration cap: the server never goes silent for longer than
@@ -770,7 +829,10 @@ func TestCompleteStreamStallTimesOutWithoutHanging(t *testing.T) {
 //
 // NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
 func TestCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout(t *testing.T) {
-	withShrunkIdleStreamTimeout(t, 50*time.Millisecond)
+	// Idle timeout is widened to 500ms against a 20ms send interval (25x
+	// slack) rather than the original 50ms/20ms (2.5x slack). See the
+	// identical comment in the openai package's equivalent test.
+	withShrunkIdleStreamTimeout(t, 500*time.Millisecond)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
@@ -786,9 +848,9 @@ func TestCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout(t *testing
 			flusher.Flush()
 		}
 		write(`event: content_block_start`, `data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
-		// 3 content deltas, 20ms apart (well under the 50ms idle timeout per
-		// gap), for a total stream duration of ~80ms — more than the idle
-		// timeout, but the stream must still succeed.
+		// 3 content deltas, 20ms apart (well under the 500ms idle timeout
+		// per gap), for a total stream duration of ~80ms — the stream must
+		// still succeed.
 		chunks := []string{"o", "n", "e"}
 		for _, c := range chunks {
 			time.Sleep(20 * time.Millisecond)

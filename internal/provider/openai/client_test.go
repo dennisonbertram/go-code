@@ -287,6 +287,70 @@ func TestClientCompleteStreamStallTimesOutWithoutHanging(t *testing.T) {
 	}
 }
 
+// TestClientCompleteNonStreamingStallTimesOutWithoutHanging is MUST-FIX1's
+// most important test: adversarial review proved that the idle-stream
+// watchdog only covered the three SSE decode paths, leaving
+// io.ReadAll(httpRes.Body) on the NON-STREAMING path completely unbounded
+// once BUG1 removed the whole-request Client.Timeout (the ONLY thing that
+// used to bound it — Transport.ResponseHeaderTimeout only bounds the wait
+// for headers, not the body). A server that sends 200 + headers + a partial
+// body then stalls must still fail within the idle interval when
+// req.Stream == nil, not hang. This matters more than the streaming case
+// because the one production non-streaming caller (auto-compaction
+// summarizer) reaches the provider via context.Background(), so an
+// unbounded non-streaming hang would not even be cancellable.
+//
+// NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
+func TestClientCompleteNonStreamingStallTimesOutWithoutHanging(t *testing.T) {
+	withShrunkIdleStreamTimeout(t, 60*time.Millisecond)
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Partial, deliberately-incomplete JSON body — proves the server did
+		// respond and started sending a body (this is not a header-timeout
+		// scenario), then goes silent forever.
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"partial`)
+		flusher.Flush()
+
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer testServer.Close()
+
+	client, err := NewClient(Config{APIKey: "test-key", BaseURL: testServer.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	start := time.Now()
+	_, err = client.Complete(context.Background(), harness.CompletionRequest{
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+		// Stream is deliberately nil: exercises the NON-STREAMING path.
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a stall error, got success")
+	}
+	if elapsed > 1*time.Second {
+		t.Fatalf("expected the idle-stream watchdog to bound the non-streaming read (~60ms), took %s — non-streaming reads are unbounded without MUST-FIX1", elapsed)
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if !strings.Contains(phe.Body, "stall") {
+		t.Fatalf("expected error body to mention the stall, got %q", phe.Body)
+	}
+}
+
 // TestClientCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout is
 // the regression guard proving the idle timeout is gap-based, not a
 // disguised total-duration cap: the server never goes silent for longer than
@@ -298,7 +362,14 @@ func TestClientCompleteStreamStallTimesOutWithoutHanging(t *testing.T) {
 //
 // NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
 func TestClientCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout(t *testing.T) {
-	withShrunkIdleStreamTimeout(t, 50*time.Millisecond)
+	// Idle timeout is widened to 500ms against a 20ms send interval (25x
+	// slack) rather than the original 50ms/20ms (2.5x slack, only 30ms of
+	// margin). This test's entire job is to prove long streams SURVIVE, so a
+	// tight margin risks a false failure under scheduler contention/CI load
+	// even though no genuine flake was reproduced (40 iterations,
+	// GOMAXPROCS=1, 48 competing busy-loops, per adversarial review). The
+	// test is gap-bounded, so widening the timeout costs ~0 wall-clock.
+	withShrunkIdleStreamTimeout(t, 500*time.Millisecond)
 
 	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		flusher, ok := w.(http.Flusher)
@@ -309,10 +380,10 @@ func TestClientCompleteStreamSlowButContinuousSurvivesLongerThanIdleTimeout(t *t
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
 
-		// 6 chunks, 20ms apart (well under the 50ms idle timeout per gap),
-		// for a total stream duration of ~120ms — more than double the idle
-		// timeout, but the stream must still succeed because it never goes
-		// idle for longer than 50ms at a stretch.
+		// 6 chunks, 20ms apart (well under the 500ms idle timeout per gap),
+		// for a total stream duration of ~120ms — the stream must still
+		// succeed because it never goes idle for longer than 500ms at a
+		// stretch.
 		chunks := []string{"o", "n", "e", " ", "t", "wo"}
 		for _, c := range chunks {
 			time.Sleep(20 * time.Millisecond)
@@ -1665,6 +1736,57 @@ func TestResponsesAPINonStreamingClientErrorReturnsTypedFailureWithoutRetry(t *t
 	}
 	if got := attempts.Load(); got != 1 {
 		t.Fatalf("expected exactly 1 attempt (400 is not retry-eligible), got %d", got)
+	}
+}
+
+// TestResponsesAPINonStreamingStallTimesOutWithoutHanging is the Responses
+// API counterpart of TestClientCompleteNonStreamingStallTimesOutWithoutHanging
+// (MUST-FIX1): the non-streaming Responses API branch's io.ReadAll(httpRes.Body)
+// was equally unbounded once BUG1 removed the whole-request Client.Timeout.
+//
+// NOT t.Parallel(): mutates the shared idleStreamTimeout package var.
+func TestResponsesAPINonStreamingStallTimesOutWithoutHanging(t *testing.T) {
+	withShrunkIdleStreamTimeout(t, 60*time.Millisecond)
+
+	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			t.Fatal("test server ResponseWriter does not support flushing")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"id":"resp_stall","output":[{"type":"message","content":[{"type":"output_text","text":"partial`)
+		flusher.Flush()
+
+		select {
+		case <-r.Context().Done():
+		case <-time.After(2 * time.Second):
+		}
+	}))
+	defer testServer.Close()
+
+	client := newResponsesClient(t, testServer.URL)
+
+	start := time.Now()
+	_, err := client.Complete(context.Background(), harness.CompletionRequest{
+		Model:    "gpt-5.1-codex-mini",
+		Messages: []harness.Message{{Role: "user", Content: "hi"}},
+		// Stream is deliberately nil: exercises the NON-STREAMING path.
+	})
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected a stall error, got success")
+	}
+	if elapsed > 1*time.Second {
+		t.Fatalf("expected the idle-stream watchdog to bound the non-streaming read (~60ms), took %s", elapsed)
+	}
+	var phe *harness.ProviderHTTPError
+	if !errors.As(err, &phe) {
+		t.Fatalf("expected *harness.ProviderHTTPError, got %T: %v", err, err)
+	}
+	if !strings.Contains(phe.Body, "stall") {
+		t.Fatalf("expected error body to mention the stall, got %q", phe.Body)
 	}
 }
 
