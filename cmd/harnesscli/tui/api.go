@@ -37,12 +37,9 @@ func newHarnessRequest(ctx context.Context, method, url string, body io.Reader, 
 	if err != nil {
 		return nil, err
 	}
-	// TODO(fix/sse-bridge-resilience): set Authorization here. Left as a
-	// stub for the red commit — every caller already threads apiKey through,
-	// but the header is not attached yet, so TestAllHarnessdCallsAuthenticate
-	// fails for every endpoint at once (proving the single choke point this
-	// helper is meant to be).
-	_ = apiKey
+	if apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+apiKey)
+	}
 	return req, nil
 }
 
