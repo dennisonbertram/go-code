@@ -47,14 +47,102 @@ func TestNewClientDefaultHTTPClientHasNoWholeRequestTimeout(t *testing.T) {
 	if transport.TLSHandshakeTimeout != 10*time.Second {
 		t.Fatalf("expected TLSHandshakeTimeout=10s, got %v", transport.TLSHandshakeTimeout)
 	}
-	if transport.ResponseHeaderTimeout != 60*time.Second {
-		t.Fatalf("expected ResponseHeaderTimeout=60s, got %v", transport.ResponseHeaderTimeout)
+	// ResponseHeaderTimeout for a NON-streaming completion is, in practice, a
+	// cap on total generation time: the upstream withholds response headers
+	// until the whole completion is ready. It must be raised well above the
+	// 90s whole-request timeout BUG1 removed (adversarial review caught the
+	// original 60s value as a strict regression — tighter than the 90s it
+	// replaced, and now that BUG2a raised Anthropic max_tokens up to 4-8x,
+	// 60s wasn't even enough headroom for a plausible slow generation).
+	// MUST-FIX1's idle-read watchdog (applied to both streaming and
+	// non-streaming body reads) is what now bounds a stalled response once
+	// bytes start flowing; this timeout only bounds the "provider never
+	// responds at all" case.
+	if transport.ResponseHeaderTimeout != nonStreamingHeaderTimeout {
+		t.Fatalf("expected ResponseHeaderTimeout=%v, got %v", nonStreamingHeaderTimeout, transport.ResponseHeaderTimeout)
 	}
 	if transport.ExpectContinueTimeout != 1*time.Second {
 		t.Fatalf("expected ExpectContinueTimeout=1s, got %v", transport.ExpectContinueTimeout)
 	}
 	if transport.DialContext == nil {
 		t.Fatal("expected DialContext to be set with a bounded dial timeout")
+	}
+}
+
+// TestDefaultHTTPClientPreservesHTTP2AndConnectionPooling is a MUST-FIX3
+// regression guard: building the Transport from zero values (rather than
+// cloning http.DefaultTransport) silently disables HTTP/2 — a custom
+// DialContext suppresses Go's automatic HTTP/2 upgrade unless
+// ForceAttemptHTTP2 is explicitly set — and disables connection pooling
+// (MaxIdleConns/IdleConnTimeout default to 0/unset on a zero-value
+// Transport, and MaxIdleConnsPerHost then defaults to 2). This asserts the
+// constructed Transport carries the same connection-reuse configuration as
+// http.DefaultTransport.
+func TestDefaultHTTPClientPreservesHTTP2AndConnectionPooling(t *testing.T) {
+	t.Parallel()
+
+	c, err := NewClient(Config{APIKey: "test-key"})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	transport, ok := c.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", c.client.Transport)
+	}
+	if !transport.ForceAttemptHTTP2 {
+		t.Fatal("expected ForceAttemptHTTP2=true (lost when building Transport from zero values instead of cloning http.DefaultTransport)")
+	}
+	defaultTransport := http.DefaultTransport.(*http.Transport)
+	if transport.MaxIdleConns != defaultTransport.MaxIdleConns {
+		t.Fatalf("expected MaxIdleConns=%d (from http.DefaultTransport), got %d", defaultTransport.MaxIdleConns, transport.MaxIdleConns)
+	}
+	if transport.IdleConnTimeout != defaultTransport.IdleConnTimeout {
+		t.Fatalf("expected IdleConnTimeout=%v (from http.DefaultTransport), got %v", defaultTransport.IdleConnTimeout, transport.IdleConnTimeout)
+	}
+}
+
+// TestDefaultHTTPClientNegotiatesHTTP2 proves end-to-end (not just field
+// inspection) that the default client can still negotiate HTTP/2 against a
+// server that supports it. A Transport built from zero values with a custom
+// DialContext but no ForceAttemptHTTP2 silently downgrades ALL provider
+// traffic to HTTP/1.1, which cannot multiplex and defaults
+// MaxIdleConnsPerHost to 2 — costly when many concurrent agent runs
+// (the workflow engine allows up to 16) share a provider host.
+func TestDefaultHTTPClientNegotiatesHTTP2(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	srv.EnableHTTP2 = true
+	srv.StartTLS()
+	defer srv.Close()
+
+	c, err := NewClient(Config{APIKey: "test-key", BaseURL: srv.URL})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	transport, ok := c.client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", c.client.Transport)
+	}
+	// Trust the test server's ephemeral self-signed cert the same way
+	// httptest.Server.Client() does, so our client's Transport can complete
+	// the handshake against it.
+	transport.TLSClientConfig = srv.Client().Transport.(*http.Transport).TLSClientConfig
+
+	httpReq, err := http.NewRequest(http.MethodGet, srv.URL, nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	res, err := c.client.Do(httpReq)
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	defer res.Body.Close()
+
+	if res.Proto != "HTTP/2.0" {
+		t.Fatalf("expected HTTP/2.0, got %q — Transport was likely built from zero values without ForceAttemptHTTP2", res.Proto)
 	}
 }
 
