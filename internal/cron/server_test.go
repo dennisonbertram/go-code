@@ -346,6 +346,45 @@ func TestServerUpdateJobResume(t *testing.T) {
 	}
 }
 
+// TestServerUpdateJobResumeAndSchedule_ReArms (regression for BUG 4) is the
+// positive counterpart of TestServerUpdateJobSchedule_PausedJobNotReArmed:
+// a PATCH that resumes AND reschedules a paused job in the same request
+// must still re-arm it in the live scheduler. This guards against
+// overcorrecting the BUG-4 fix into never re-arming (e.g. accidentally
+// checking req.Status instead of the freshly-set job.Status, or checking
+// the OLD status instead of the effective one).
+func TestServerUpdateJobResumeAndSchedule_ReArms(t *testing.T) {
+	store := &mockStore{}
+	clock := newMockClock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+	executor := &mockExecutor{}
+	scheduler := NewScheduler(store, executor, clock, SchedulerConfig{MaxConcurrent: 1})
+	handler := NewServer(store, scheduler, clock)
+
+	j := testJob("resume-and-schedule")
+	j.Status = StatusPaused
+
+	store.GetJobFunc = func(_ context.Context, id string) (Job, error) {
+		return j, nil
+	}
+	store.UpdateJobFunc = func(_ context.Context, job Job) error { return nil }
+
+	payload := `{"status":"active","schedule":"0 * * * *"}`
+	req := httptest.NewRequest(http.MethodPatch, "/v1/jobs/"+j.ID, strings.NewReader(payload))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+
+	scheduler.mu.Lock()
+	_, scheduled := scheduler.entries[j.ID]
+	scheduler.mu.Unlock()
+	if !scheduled {
+		t.Fatal("expected a resume+schedule PATCH to re-arm the job in the live scheduler")
+	}
+}
+
 func TestServerUpdateJobNotFound(t *testing.T) {
 	handler, store := newTestServer(t)
 	store.GetJobFunc = func(_ context.Context, id string) (Job, error) {
