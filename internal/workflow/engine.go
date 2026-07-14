@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -139,6 +140,26 @@ func (e *Engine) List() []Meta {
 	return out
 }
 
+// scriptFor looks up a registered script by name under e.mu. It is the
+// single shared, defer-safe way to read e.scripts from a standalone
+// caller (Start, Context.Workflow). Callers that already hold e.mu for a
+// larger compound operation (e.g. Resume's check-and-transition) must NOT
+// call this — sync.Mutex is not reentrant, and doing so would deadlock.
+// Those callers read e.scripts directly under their own lock instead.
+func (e *Engine) scriptFor(name string) (registeredScript, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	reg, ok := e.scripts[name]
+	return reg, ok
+}
+
+// registerRun records a newly-created run under e.mu.
+func (e *Engine) registerRun(run *Run) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.runs[run.ID] = run
+}
+
 // Start begins executing a workflow by name with the given args.
 // The workflow runs asynchronously in a goroutine. The returned Run has
 // status RunStatusRunning and can be monitored via Subscribe.
@@ -146,9 +167,7 @@ func (e *Engine) List() []Meta {
 // Start creates a new run ID, persists it via the Store, emits a
 // workflow.started event, then executes the script in a goroutine.
 func (e *Engine) Start(ctx context.Context, name string, args any) (*Run, error) {
-	e.mu.Lock()
-	reg, ok := e.scripts[name]
-	e.mu.Unlock()
+	reg, ok := e.scriptFor(name)
 	if !ok {
 		return nil, fmt.Errorf("workflow %q not found", name)
 	}
@@ -161,9 +180,7 @@ func (e *Engine) Start(ctx context.Context, name string, args any) (*Run, error)
 		UpdatedAt:    e.now().UTC(),
 	}
 
-	e.mu.Lock()
-	e.runs[run.ID] = run
-	e.mu.Unlock()
+	e.registerRun(run)
 
 	if err := e.store.CreateRun(ctx, run); err != nil {
 		return nil, fmt.Errorf("persist run: %w", err)
@@ -180,6 +197,19 @@ func (e *Engine) Start(ctx context.Context, name string, args any) (*Run, error)
 	return &cp, nil
 }
 
+// resumePreTransitionHook is a test-only seam. When non-nil, Resume calls
+// it after the status check passes (run.Status == RunStatusFailed, script
+// still registered) but before it transitions the run to
+// RunStatusRunning — while STILL HOLDING e.mu. It is nil (a no-op) in
+// production.
+//
+// This lets tests deterministically pause Resume mid-critical-section and
+// assert that no concurrently-racing Resume call can complete until this
+// one does, proving the check-and-transition is genuinely atomic rather
+// than relying on winning a timing race under -race. See
+// TestConcurrentResumeCriticalSectionIsAtomic.
+var resumePreTransitionHook func()
+
 // Resume continues a previously failed workflow run. The args are passed to
 // the script, which should use them to pick up where it left off.
 //
@@ -189,44 +219,58 @@ func (e *Engine) Start(ctx context.Context, name string, args any) (*Run, error)
 // Only runs with status RunStatusFailed can be resumed. The run's error is
 // cleared and its status reset to RunStatusRunning before re-execution.
 func (e *Engine) Resume(ctx context.Context, runID string, args any) (*Run, error) {
-	// The status check and the transition to RunStatusRunning must be
-	// atomic under e.mu. Otherwise two concurrent Resume calls can both
-	// observe RunStatusFailed before either mutates the run, and both
-	// spawn `go e.execute` — running the script twice for one Resume.
-	e.mu.Lock()
-	run, ok := e.runs[runID]
-	if !ok {
-		e.mu.Unlock()
-		return nil, fmt.Errorf("workflow run %q not found", runID)
-	}
-	if run.Status != RunStatusFailed {
-		e.mu.Unlock()
-		return nil, fmt.Errorf("workflow run %q has status %s, can only resume failed runs", runID, run.Status)
-	}
-	reg, ok := e.scripts[run.WorkflowName]
-	if !ok {
-		e.mu.Unlock()
-		return nil, fmt.Errorf("workflow %q no longer registered", run.WorkflowName)
-	}
+	// The status check, the registered-script lookup, and the transition
+	// to RunStatusRunning are one atomic critical section under e.mu.
+	// Otherwise two concurrent Resume calls could both observe
+	// RunStatusFailed before either mutates the run, and both spawn
+	// `go e.execute` — running the script twice for one Resume. e.scripts
+	// is read directly here (not via scriptFor) because this goroutine
+	// already holds e.mu and sync.Mutex is not reentrant.
+	reg, cp, err := func() (registeredScript, Run, error) {
+		e.mu.Lock()
+		defer e.mu.Unlock()
 
-	run.Status = RunStatusRunning
-	run.Error = ""
-	run.UpdatedAt = e.now().UTC()
-	// Copy while still holding the lock so later readers of the shared
-	// *Run (e.g. GetRun, or another goroutine) never race with this
-	// mutation, and so the persisted/emitted view matches what we just
-	// committed.
-	cp := *run
-	e.mu.Unlock()
+		run, ok := e.runs[runID]
+		if !ok {
+			return registeredScript{}, Run{}, fmt.Errorf("workflow run %q not found", runID)
+		}
+		if run.Status != RunStatusFailed {
+			return registeredScript{}, Run{}, fmt.Errorf("workflow run %q has status %s, can only resume failed runs", runID, run.Status)
+		}
+		reg, ok := e.scripts[run.WorkflowName]
+		if !ok {
+			return registeredScript{}, Run{}, fmt.Errorf("workflow %q no longer registered", run.WorkflowName)
+		}
+
+		if resumePreTransitionHook != nil {
+			resumePreTransitionHook()
+		}
+
+		run.Status = RunStatusRunning
+		run.Error = ""
+		run.UpdatedAt = e.now().UTC()
+		// Copy while still holding the lock. This is what actually
+		// prevents a race with concurrent readers of the shared *Run:
+		// every other engine.go call site that reads or writes a run
+		// (GetRun, and executeScriptAsync's terminal transition via
+		// finishRun/transitionRunTerminal) also only ever touches a
+		// private copy taken under e.mu, or the map entry itself under
+		// e.mu — never this pointer after it's released. Passing &cp
+		// (not run) to store.UpdateRun below is what closes that loop.
+		return reg, *run, nil
+	}()
+	if err != nil {
+		return nil, err
+	}
 
 	_ = e.store.UpdateRun(ctx, &cp)
 
-	e.emit(run.ID, EventWorkflowStarted, map[string]any{
+	e.emit(cp.ID, EventWorkflowStarted, map[string]any{
 		"workflow": reg.Meta.Name,
 		"resumed":  true,
 	})
 
-	go e.execute(run.ID, reg, args)
+	go e.execute(cp.ID, reg, args)
 	return &cp, nil
 }
 
@@ -234,13 +278,12 @@ func (e *Engine) Resume(ctx context.Context, runID string, args any) (*Run, erro
 // The returned Run is a copy, safe for concurrent reading.
 func (e *Engine) GetRun(runID string) (*Run, error) {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	run, ok := e.runs[runID]
 	if !ok {
-		e.mu.Unlock()
 		return nil, fmt.Errorf("workflow run %q not found", runID)
 	}
 	cp := *run // copy while holding the lock
-	e.mu.Unlock()
 	return &cp, nil
 }
 
@@ -265,16 +308,16 @@ func (e *Engine) Subscribe(runID string) ([]Event, <-chan Event, func(), error) 
 	ch := make(chan Event, 64)
 
 	e.mu.Lock()
+	defer e.mu.Unlock()
+
 	history, err := e.store.GetEvents(context.Background(), runID, -1)
 	if err != nil {
-		e.mu.Unlock()
 		return nil, nil, nil, err
 	}
 	if _, ok := e.subs[runID]; !ok {
 		e.subs[runID] = make(map[chan Event]struct{})
 	}
 	e.subs[runID][ch] = struct{}{}
-	e.mu.Unlock()
 
 	cancel := func() {
 		e.mu.Lock()
@@ -294,11 +337,30 @@ func (e *Engine) Subscribe(runID string) ([]Event, <-chan Event, func(), error) 
 func (e *Engine) execute(runID string, reg registeredScript, args any) {
 	// Defense in depth: this runs on a bare `go e.execute(...)` goroutine
 	// with no caller to recover a panic. executeScript already recovers
-	// panics from the script body itself, but this guards against any
-	// panic elsewhere in the execution/emit path (e.g. a future bug in
-	// emit) so it can never take down the whole process.
+	// panics from the script body itself; this guards against a panic
+	// ANYWHERE ELSE in the execution/emit path (e.g. a panicking
+	// MarshalJSON on the script's result, invoked by json.Marshal in
+	// executeScriptAsync).
+	//
+	// This must NEVER be a bare `recover()` that discards the panic: a
+	// swallowed panic here leaves the run stuck at RunStatusRunning
+	// forever with no persisted error and no terminal event, which hangs
+	// every SSE subscriber and every status poll indefinitely — worse
+	// than not recovering at all. So this recover makes the run terminal
+	// and observable: it logs the panic, marks the run Failed via the
+	// same finishRun/transitionRunTerminal helper executeScriptAsync
+	// uses for a normal script error, persists it, and emits
+	// workflow.failed.
+	//
+	// json.Marshal is deliberately called OUTSIDE e.mu in
+	// executeScriptAsync (see below) specifically so a panic there is
+	// caught here with no lock held — finishRun's own e.mu.Lock() below
+	// is therefore guaranteed to succeed, never self-deadlock.
 	defer func() {
-		_ = recover()
+		if r := recover(); r != nil {
+			log.Printf("workflow: recovered panic in Engine.execute for run %s: %v", runID, r)
+			e.finishRun(runID, reg, fmt.Errorf("workflow engine panic: %v", r), "")
+		}
 	}()
 
 	budget := newBudget(e.defaultBudget)
@@ -342,40 +404,86 @@ func (e *Engine) executeScript(ctx *Context, reg registeredScript) (any, error) 
 func (e *Engine) executeScriptAsync(runID string, reg registeredScript, ctx *Context) {
 	result, err := e.executeScript(ctx, reg)
 
-	e.mu.Lock()
-	run, ok := e.runs[runID]
+	// json.Marshal is called BEFORE taking e.mu and is NOT wrapped in its
+	// own recover here. It can invoke arbitrary user-supplied
+	// MarshalJSON/String methods on the script's result, and
+	// encoding/json only recovers its OWN internal sentinel error type —
+	// any other panic (e.g. a MarshalJSON that indexes a nil map) is
+	// re-panicked out of json.Marshal. No user-supplied code may EVER
+	// run while e.mu is held (a MarshalJSON that itself calls ctx.Log()
+	// would re-enter emit() -> e.mu on this same, non-reentrant mutex and
+	// self-deadlock even with e.mu correctly scoped). If it panics, it
+	// propagates to execute()'s outer recover, which converts it into a
+	// terminal Failed run via this same finishRun helper — so the
+	// failure mode is "run fails with a descriptive error", never "run
+	// hangs" or "process wedges".
+	var resultJSON string
+	if err == nil && result != nil {
+		if raw, marshalErr := json.Marshal(result); marshalErr == nil {
+			resultJSON = string(raw)
+		}
+		// A normal (non-panic) marshal error is non-fatal, exactly as
+		// before: ResultJSON simply stays empty and the run still
+		// completes.
+	}
+
+	e.finishRun(runID, reg, err, resultJSON)
+}
+
+// finishRun applies the terminal status transition for a run and persists
+// + emits it. It is used both by the normal executeScriptAsync path and
+// by execute()'s outer panic recovery, so every terminal transition goes
+// through the same, single code path.
+//
+// scriptErr nil means the script (and marshaling) succeeded; non-nil
+// means it failed (including a recovered panic, wrapped by the caller).
+func (e *Engine) finishRun(runID string, reg registeredScript, scriptErr error, resultJSON string) {
+	cp, ok := e.transitionRunTerminal(runID, scriptErr, resultJSON)
 	if !ok {
-		e.mu.Unlock()
+		// Run no longer tracked (e.g. removed concurrently) — nothing to
+		// persist or emit.
 		return
 	}
 
-	if err != nil {
-		run.Status = RunStatusFailed
-		run.Error = err.Error()
-	} else {
-		run.Status = RunStatusCompleted
-		if result != nil {
-			raw, marshalErr := json.Marshal(result)
-			if marshalErr == nil {
-				run.ResultJSON = string(raw)
-			}
-		}
-	}
-	run.UpdatedAt = e.now().UTC()
-	e.mu.Unlock()
+	_ = e.store.UpdateRun(context.Background(), &cp)
 
-	_ = e.store.UpdateRun(context.Background(), run)
-
-	if err != nil {
+	if scriptErr != nil {
 		e.emit(runID, EventWorkflowFailed, map[string]any{
 			"workflow": reg.Meta.Name,
-			"error":    err.Error(),
+			"error":    scriptErr.Error(),
 		})
 	} else {
 		e.emit(runID, EventWorkflowCompleted, map[string]any{
 			"workflow": reg.Meta.Name,
 		})
 	}
+}
+
+// transitionRunTerminal mutates the run's status under e.mu and returns a
+// private copy for the caller to persist/emit OUTSIDE the lock. Passing
+// this copy (never the shared *Run pointer) to store.UpdateRun is what
+// prevents it from racing a concurrent Resume's mutation of the same run
+// under e.mu.
+func (e *Engine) transitionRunTerminal(runID string, scriptErr error, resultJSON string) (Run, bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	run, ok := e.runs[runID]
+	if !ok {
+		return Run{}, false
+	}
+
+	if scriptErr != nil {
+		run.Status = RunStatusFailed
+		run.Error = scriptErr.Error()
+	} else {
+		run.Status = RunStatusCompleted
+		if resultJSON != "" {
+			run.ResultJSON = resultJSON
+		}
+	}
+	run.UpdatedAt = e.now().UTC()
+	return *run, true
 }
 
 // emit sends an event to all subscribers of a run and persists it via the Store.
