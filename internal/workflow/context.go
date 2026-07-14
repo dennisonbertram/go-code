@@ -397,7 +397,13 @@ func (c *Context) Question(prompt string, choices []QuestionOption) (any, error)
 // Returns the nested workflow's result. Errors from the nested workflow
 // are propagated.
 func (c *Context) Workflow(name string, args any) (any, error) {
+	// c.engine.scripts is mutated by Engine.Register from arbitrary
+	// goroutines, so it must only be read under c.engine.mu — exactly as
+	// Engine.Start does. Copy the value out while holding the lock, then
+	// unlock before proceeding.
+	c.engine.mu.Lock()
 	meta, ok := c.engine.scripts[name]
+	c.engine.mu.Unlock()
 	if !ok {
 		return nil, fmt.Errorf("nested workflow %q not found", name)
 	}
