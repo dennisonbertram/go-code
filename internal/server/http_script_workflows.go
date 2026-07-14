@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -89,7 +90,13 @@ func (s *Server) handleScriptWorkflowByName(w http.ResponseWriter, r *http.Reque
 			Args map[string]any `json:"args"`
 		}
 		if r.Body != nil {
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			// io.EOF means an empty body, which legitimately means "no args";
+			// any other decode error means the body is malformed and must be
+			// rejected rather than silently proceeding with nil args.
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+				writeJSONDecodeError(w, err)
+				return
+			}
 		}
 		run, err := s.scriptWorkflows.Start(r.Context(), name, req.Args)
 		if err != nil {
@@ -159,7 +166,10 @@ func (s *Server) handleScriptWorkflowRunByID(w http.ResponseWriter, r *http.Requ
 			Args map[string]any `json:"args"`
 		}
 		if r.Body != nil {
-			_ = json.NewDecoder(r.Body).Decode(&req)
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+				writeJSONDecodeError(w, err)
+				return
+			}
 		}
 		run, err := s.scriptWorkflows.Resume(r.Context(), runID, req.Args)
 		if err != nil {
