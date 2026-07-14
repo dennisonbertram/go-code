@@ -936,6 +936,85 @@ func TestLastEventIDSkipsSeenEvents(t *testing.T) {
 	}
 }
 
+// TestLastEventID_AdversarialValuesDoNotPanic is an ATTACK test (C1): a
+// crafted Last-Event-ID header must never crash the run-events handler.
+// handleRunEvents parses the sequence number out of Last-Event-ID and slices
+// the in-memory history with it (history[seq+1:]); a huge, overflow-prone, or
+// out-of-range sequence must fall back to a safe replay instead of panicking
+// (remote DoS via a single header).
+//
+// The handler is invoked directly via ServeHTTP (no real network listener) so
+// that a panic inside the handler surfaces as a Go panic in this test's own
+// goroutine — recovered below into a clear test failure — rather than being
+// silently absorbed by net/http's per-connection panic recovery, which would
+// mask the bug behind an ordinary connection reset.
+func TestLastEventID_AdversarialValuesDoNotPanic(t *testing.T) {
+	t.Parallel()
+
+	runner := harness.NewRunner(&staticProvider{result: harness.CompletionResult{Content: "done"}}, harness.NewRegistry(), harness.RunnerConfig{
+		DefaultModel: "gpt-4.1-mini",
+		MaxSteps:     2,
+	})
+	handler := New(runner)
+
+	// Create a run.
+	createRec := httptest.NewRecorder()
+	createReq := httptest.NewRequest(http.MethodPost, "/v1/runs", bytes.NewBufferString(`{"prompt":"hello"}`))
+	handler.ServeHTTP(createRec, createReq)
+	if createRec.Code != http.StatusAccepted {
+		t.Fatalf("create run: expected 202, got %d: %s", createRec.Code, createRec.Body.String())
+	}
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.NewDecoder(createRec.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	// Drain the full event stream once (blocks until the run reaches a
+	// terminal event) so the in-memory history is populated and stable
+	// before we probe it with adversarial Last-Event-ID values.
+	drainRec := httptest.NewRecorder()
+	drainReq := httptest.NewRequest(http.MethodGet, "/v1/runs/"+created.RunID+"/events", nil)
+	handler.ServeHTTP(drainRec, drainReq)
+	if drainRec.Code != http.StatusOK {
+		t.Fatalf("drain events: expected 200, got %d: %s", drainRec.Code, drainRec.Body.String())
+	}
+
+	cases := []struct {
+		name      string
+		lastEvent string
+	}{
+		// int64-overflow boundary: seq+1 as uint64 no longer fits in int64.
+		{"overflow_boundary_maxint64", created.RunID + ":9223372036854775807"},
+		// Largest representable uint64 (parses fine via strconv.ParseUint).
+		{"max_uint64", created.RunID + ":18446744073709551615"},
+		// Valid but far beyond the actual history length.
+		{"far_beyond_history_length", created.RunID + ":999999"},
+		{"non_numeric", created.RunID + ":not-a-number"},
+		{"missing_colon", created.RunID},
+		{"empty_sequence", created.RunID + ":"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("handler panicked for Last-Event-ID %q: %v", tc.lastEvent, r)
+				}
+			}()
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/v1/runs/"+created.RunID+"/events", nil)
+			req.Header.Set("Last-Event-ID", tc.lastEvent)
+			handler.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("expected 200 (safe fallback), got %d: %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestSpecialCharacterPromptsRoundTrip(t *testing.T) {
 	t.Parallel()
 
