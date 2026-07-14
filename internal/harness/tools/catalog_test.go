@@ -390,6 +390,41 @@ func TestFetchAndDownloadTools(t *testing.T) {
 	}
 }
 
+// TestFetchAndDownloadTools_BlockLoopbackWithoutAllowlist is a regression
+// test proving the fetch/download tools built via BuildCatalog (the MCP
+// stdio catalog path) are wired through the SSRF guard by default: without
+// an explicit NetworkAllowlist entry, requests to a loopback test server
+// must fail rather than silently succeeding as they did before BUG-2 was
+// fixed. If NewGuardedHTTPClient is ever dropped from downloadTool/fetchTool
+// (e.g. during a future refactor of catalog.go), this test starts failing.
+func TestFetchAndDownloadTools_BlockLoopbackWithoutAllowlist(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "should never reach the agent")
+	}))
+	defer server.Close()
+
+	workspace := t.TempDir()
+	list, err := BuildCatalog(BuildOptions{WorkspaceRoot: workspace, HTTPClient: server.Client()})
+	if err != nil {
+		t.Fatalf("BuildCatalog: %v", err)
+	}
+
+	fetchTool := findToolByName(t, list, "fetch")
+	if _, err := fetchTool.Handler(context.Background(), json.RawMessage(`{"url":"`+server.URL+`"}`)); err == nil {
+		t.Fatal("expected fetch of an unallowlisted loopback URL to be blocked by default")
+	}
+
+	downloadTool := findToolByName(t, list, "download")
+	if _, err := downloadTool.Handler(context.Background(), json.RawMessage(`{"url":"`+server.URL+`","file_path":"blocked.bin"}`)); err == nil {
+		t.Fatal("expected download from an unallowlisted loopback URL to be blocked by default")
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, "blocked.bin")); statErr == nil {
+		t.Fatal("expected no file to be written when the download destination is blocked")
+	}
+}
+
 func TestPermissionsModePolicy(t *testing.T) {
 	t.Parallel()
 

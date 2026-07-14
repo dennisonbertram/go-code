@@ -45,6 +45,38 @@ func TestReadTool_Handler_Success(t *testing.T) {
 	}
 }
 
+// TestReadTool_Handler_WorkspaceScope_BlocksAbsoluteEscape is a regression
+// test for BUG-1 exercised through the PRODUCTION tool (core.ReadTool, as
+// wired by harness.NewDefaultRegistryWithOptions), not just the shared
+// ConfineWorkspacePath helper: if the SandboxScope wiring in core/read.go is
+// ever dropped, this test starts passing again and catches it.
+func TestReadTool_Handler_WorkspaceScope_BlocksAbsoluteEscape(t *testing.T) {
+	dir := t.TempDir()
+	secret := t.TempDir()
+	secretFile := filepath.Join(secret, "id_rsa")
+	if err := os.WriteFile(secretFile, []byte("private key material"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := ReadTool(tools.BuildOptions{WorkspaceRoot: dir, SandboxScope: tools.SandboxScopeWorkspace})
+	args, _ := json.Marshal(map[string]string{"path": secretFile})
+	if _, err := tool.Handler(context.Background(), args); err == nil {
+		t.Fatal("expected read of an absolute path outside the workspace to be rejected under workspace sandbox scope")
+	}
+
+	// Legitimate in-workspace reads must still work under the same scope.
+	if err := os.WriteFile(filepath.Join(dir, "ok.txt"), []byte("fine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := tool.Handler(context.Background(), json.RawMessage(`{"path":"ok.txt"}`))
+	if err != nil {
+		t.Fatalf("expected legitimate in-workspace read to still succeed under workspace scope: %v", err)
+	}
+	if result == "" {
+		t.Fatal("expected non-empty result for in-workspace read")
+	}
+}
+
 // TestWriteTool_Definition verifies the write tool constructor.
 func TestWriteTool_Definition(t *testing.T) {
 	tool := WriteTool(tools.BuildOptions{WorkspaceRoot: t.TempDir()})
@@ -86,6 +118,36 @@ func TestWriteTool_Handler_Success(t *testing.T) {
 	}
 	if string(data) != "hello" {
 		t.Errorf("expected 'hello', got %q", string(data))
+	}
+}
+
+// TestWriteTool_Handler_WorkspaceScope_BlocksAbsoluteEscape is a regression
+// test for BUG-1's write-side coverage through the PRODUCTION tool
+// (core.WriteTool): an absolute path outside the workspace must be rejected
+// under workspace sandbox scope, so an attacker cannot overwrite arbitrary
+// host files (e.g. ~/.ssh/authorized_keys) via the write tool. Uses the same
+// scope wiring as core.ReadTool but exercises the WRITE code path
+// specifically, since read and write resolve paths independently.
+func TestWriteTool_Handler_WorkspaceScope_BlocksAbsoluteEscape(t *testing.T) {
+	dir := t.TempDir()
+	outside := t.TempDir()
+	targetFile := filepath.Join(outside, "authorized_keys")
+	if err := os.WriteFile(targetFile, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tool := WriteTool(tools.BuildOptions{WorkspaceRoot: dir, SandboxScope: tools.SandboxScopeWorkspace})
+	args, _ := json.Marshal(map[string]string{"path": targetFile, "content": "attacker-controlled-key"})
+	if _, err := tool.Handler(context.Background(), args); err == nil {
+		t.Fatal("expected write to an absolute path outside the workspace to be rejected under workspace sandbox scope")
+	}
+
+	data, err := os.ReadFile(targetFile)
+	if err != nil {
+		t.Fatalf("target file should be untouched: %v", err)
+	}
+	if string(data) != "original" {
+		t.Fatalf("expected target file to remain unmodified, got %q", string(data))
 	}
 }
 
