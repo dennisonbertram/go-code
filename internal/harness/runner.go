@@ -292,6 +292,10 @@ type Runner struct {
 	// shutdownOnce ensures close(done) happens exactly once even if Shutdown is
 	// called concurrently from multiple goroutines.
 	shutdownOnce sync.Once
+	// dispatcherWG tracks the poolDispatcher goroutine so Shutdown can wait for
+	// it to actually return (not just signal it via done). Without this, the
+	// dispatcher can linger briefly after Shutdown returns.
+	dispatcherWG sync.WaitGroup
 	// toolShutdownOnce ensures registry shutdown hooks run at most once.
 	toolShutdownOnce sync.Once
 	toolShutdownErr  error
@@ -387,6 +391,7 @@ func NewRunner(provider Provider, tools *Registry, config RunnerConfig) *Runner 
 		// 4096 slots is far larger than any reasonable burst.
 		r.workerSem = make(chan struct{}, config.WorkerPoolSize)
 		r.runQueue = make(chan queuedRun, 4096)
+		r.dispatcherWG.Add(1)
 		go r.poolDispatcher()
 	}
 	return r
@@ -537,6 +542,7 @@ func (r *Runner) toolsForRun(runID string) *Registry {
 // r.inflight.Add(1) called by dispatchRun before enqueue, so we must call
 // r.inflight.Done() once per drained item to allow Shutdown's Wait to complete.
 func (r *Runner) poolDispatcher() {
+	defer r.dispatcherWG.Done()
 	for {
 		if !r.poolDispatcherStep() {
 			return
@@ -3340,6 +3346,10 @@ func (r *Runner) Shutdown(ctx context.Context) error {
 	inflightDone := make(chan struct{})
 	go func() {
 		r.inflight.Wait()
+		// Also wait for the poolDispatcher goroutine itself to return, so it
+		// cannot linger past Shutdown (done is already closed above, which the
+		// dispatcher observes to exit its loop).
+		r.dispatcherWG.Wait()
 		close(inflightDone)
 	}()
 
