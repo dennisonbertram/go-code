@@ -159,6 +159,11 @@ exit 1
             "HARNESS_MEMORY_MODE": self._memory_mode,
             "HARNESS_PROMPTS_DIR": f"{CONTAINER_REPO_ROOT}/prompts",
             "HARNESS_PRICING_CATALOG_PATH": self._pricing_catalog_path,
+            # Widen provider retry budget inside the container against rate-limited
+            # (e.g. free-tier) endpoints. Passed through from the host env; unset
+            # leaves the harness built-in defaults (3 attempts / 60s).
+            "HARNESS_RETRY_MAX_ATTEMPTS": os.getenv("HARNESS_RETRY_MAX_ATTEMPTS", ""),
+            "HARNESS_RETRY_MAX_TOTAL_SEC": os.getenv("HARNESS_RETRY_MAX_TOTAL_SEC", ""),
         }
         lines = ["# go-code Terminal-Bench harness environment"]
         for key, value in env_map.items():

@@ -1,0 +1,5 @@
+services:
+  client:
+    image: go-agent-harness-tb-hard-nil-interface:latest
+    container_name: ${T_BENCH_TASK_DOCKER_CLIENT_CONTAINER_NAME}
+    command: ["sh", "-c", "sleep infinity"]

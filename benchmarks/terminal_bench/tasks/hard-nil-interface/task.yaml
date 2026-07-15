@@ -1,0 +1,19 @@
+instruction: |
+  `Validate` in `validate.go` always returns a non-nil `*ValidationError`, even
+  when the user is valid. Fix `Validate` so it honors the following contract:
+    - `Validate` must return a nil `error` for a valid user (non-empty `Name`,
+      `0 <= Age <= 150`).
+    - `Validate` must return a non-nil `error` for an invalid user, and that
+      error must be assertable to `*ValidationError` via `errors.As`, exposing
+      the accumulated `Problems`.
+  You may change `validate.go` only. Do not change the signature of `Validate`
+  or the `ValidationError` type's fields or `Error` method.
+  `go build ./...` must succeed.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

@@ -1,0 +1,24 @@
+instruction: |
+  `Paginate` in `page.go` has two boundary bugs. Fix it so it honors the
+  following contract:
+    - Pages are 1-indexed. `totalPages` must equal the ceiling of
+      `len(items) / pageSize` (a partial last page still counts as a page).
+    - For a valid page, return the correct sub-slice of `items` for that
+      page. The last page may be a partial page (fewer than `pageSize`
+      items); this must return only the remaining items, not panic.
+    - For `page < 1` or `page > totalPages`, return an empty slice (length
+      0) and the correct `totalPages`. Must not panic.
+    - If `pageSize <= 0`, return an empty slice and `totalPages == 0`. Must
+      not panic or divide by zero.
+    - For empty `items`, `totalPages == 0` and any page returns an empty
+      slice.
+  You may change `page.go` only. Do not change the signature of `Paginate`.
+  `go build ./...` must succeed.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

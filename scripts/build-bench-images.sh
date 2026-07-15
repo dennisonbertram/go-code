@@ -27,6 +27,20 @@ TASKS=(
   "go-rename-refactor:go-agent-harness-tb-go-rename"
   "multi-report-pipeline:go-agent-harness-tb-multi-report"
   "go-interface-migration:go-agent-harness-tb-go-interface"
+  "hard-context-cancel:go-agent-harness-tb-hard-context-cancel"
+  "hard-lock-ordering:go-agent-harness-tb-hard-lock-ordering"
+  "hard-slice-aliasing:go-agent-harness-tb-hard-slice-aliasing"
+  "hard-nil-interface:go-agent-harness-tb-hard-nil-interface"
+  "hard-json-roundtrip:go-agent-harness-tb-hard-json-roundtrip"
+  "hard-lru-eviction:go-agent-harness-tb-hard-lru-eviction"
+  "hard-errors-is:go-agent-harness-tb-hard-errors-is"
+  "hard-pagination:go-agent-harness-tb-hard-pagination"
+  "brutal-wordwrap:go-agent-harness-tb-brutal-wordwrap"
+  "brutal-csv-parser:go-agent-harness-tb-brutal-csv-parser"
+  "brutal-getorcompute:go-agent-harness-tb-brutal-getorcompute"
+  "brutal-semver:go-agent-harness-tb-brutal-semver"
+  "brutal-ledger:go-agent-harness-tb-brutal-ledger"
+  "brutal-topo-sort:go-agent-harness-tb-brutal-topo-sort"
 )
 
 for entry in "${TASKS[@]}"; do

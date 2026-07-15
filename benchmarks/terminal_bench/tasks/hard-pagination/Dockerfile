@@ -1,0 +1,9 @@
+FROM go-agent-harness-tb-base:latest
+
+COPY go.mod /app/go.mod
+COPY main.go /app/main.go
+COPY page.go /app/page.go
+COPY page_test.go /app/page_test.go
+COPY run-tests.sh /app/run-tests.sh
+
+RUN chmod +x /app/run-tests.sh

@@ -1,0 +1,20 @@
+instruction: |
+  `Get` in `store.go` returns a `*NotFoundError` on a missing key, but that
+  error does not participate in the `errors.Is` / `errors.As` chain the way
+  callers expect. Fix `store.go` so it honors the following contract:
+    - For a missing key, the error returned by `Get` must satisfy
+      `errors.Is(err, ErrNotFound) == true`.
+    - That same error must still be assertable to `*NotFoundError` via
+      `errors.As`, exposing the `Key` that was missing.
+    - On a hit, `Get` returns the stored value and a nil error.
+  You may change `store.go` only. Do not change the signatures of
+  `NewStore`, `Put`, or `Get`, or the exported names `ErrNotFound` /
+  `NotFoundError`. `go build ./...` must succeed.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

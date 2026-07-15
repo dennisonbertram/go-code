@@ -1,0 +1,21 @@
+instruction: |
+  The cache in `cache.go` is not safely shareable across goroutines. Fix
+  `GetOrCompute` so it honors the following contract:
+    - It returns the cached value for `key` if already present.
+    - Otherwise it calls `compute()` to produce the value, stores it, and
+      returns it.
+    - Under concurrent callers using the SAME key, `compute()` must be
+      called AT MOST ONCE for that key, and every caller must observe the
+      same resulting value.
+    - The cache must be free of data races.
+  You may change `cache.go` only. Do not change the signatures of
+  `NewCache` or `GetOrCompute`.
+  `go build ./...` must succeed and the code must be free of data races.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

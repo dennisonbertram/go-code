@@ -1,0 +1,37 @@
+instruction: |
+  `Wrap` in `wrap.go` is supposed to greedily word-wrap `text` into lines of
+  at most `width` characters, but the current implementation violates the
+  contract in more than one independent way. Fix `Wrap` (and any helpers in
+  `wrap.go`) so it honors the following contract exactly:
+    - Words are separated by runs of spaces and/or tabs. Runs of separators
+      collapse to a single break, and leading/trailing separators produce no
+      empty words.
+    - Words are packed greedily: as many words as fit are placed on each
+      line, joined by a single space, and each line's length must be
+      `<= width` — EXCEPT a single word whose own length exceeds `width`,
+      which occupies a line by itself, unbroken. Such a word must never be
+      dropped, truncated, or cause a panic.
+    - A `'\n'` byte in `text` always forces a hard line break: it starts a
+      new output line, even if the words on either side of it would
+      otherwise fit together on one line.
+    - `Wrap("", width)` returns an empty `[]string` (length 0), for any
+      `width`.
+    - If `width <= 0`, wrapping is disabled: each hard line (the text
+      between consecutive `'\n'`s, or between the start/end of `text` and
+      the nearest `'\n'`) becomes exactly one output line, with its words
+      collapsed and joined by single spaces, left unwrapped regardless of
+      length.
+    - A hard line that contains no words (e.g. two consecutive `'\n'`s, or a
+      `'\n'` at the very start or end of `text`, or a hard line made up
+      entirely of spaces/tabs) becomes an empty string (`""`) output line,
+      regardless of whether `width` is positive or not.
+  You may change `wrap.go` only. Do not change the signature of
+  `Wrap(text string, width int) []string`. `go build ./...` must succeed.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

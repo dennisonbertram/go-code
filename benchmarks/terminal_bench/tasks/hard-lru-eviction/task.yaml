@@ -1,0 +1,20 @@
+instruction: |
+  The LRU cache in `lru.go` evicts the wrong entry because `Get` does not
+  update recency. Fix it so it honors the following contract:
+    - Both `Get` (on a hit) and `Put` must mark the key as most-recently-used.
+    - When `Put` would exceed capacity, evict exactly the least-recently-used
+      key.
+    - `Get` returns `(value, true)` on a hit and `(0, false)` on a miss;
+      `Put` updates the value if the key already exists (no duplicate entry,
+      no spurious eviction).
+  You may change `lru.go` only. Do not change the signatures of
+  `NewLRU`, `Put`, `Get`, or `Len`.
+  `go build ./...` must succeed and the code must be free of data races.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh
