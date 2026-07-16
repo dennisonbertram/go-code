@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<defs>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1c1c1c"/><stop offset="1" stop-color="#111111"/></linearGradient>
+  <radialGradient id="glow" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#ffffff" stop-opacity="0.16"/><stop offset="55%" stop-color="#ffffff" stop-opacity="0.04"/><stop offset="100%" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+  <linearGradient id="fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#e4e4e4"/></linearGradient>
+  <mask id="cut">
+    <path d="M512,264 C525.7,427.7 589.5,497.1 740,512 C589.5,526.9 525.7,596.3 512,760 C498.3,596.3 434.5,526.9 284,512 C434.5,497.1 498.3,427.7 512,264 Z" fill="white"/>
+    <g transform="rotate(45 512 512) translate(512 512) scale(0.5) translate(-512 -512)"><path d="M512,264 C525.7,427.7 589.5,497.1 740,512 C589.5,526.9 525.7,596.3 512,760 C498.3,596.3 434.5,526.9 284,512 C434.5,497.1 498.3,427.7 512,264 Z" fill="black"/></g>
+  </mask>
+</defs>
+<rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#bg)"/>
+<circle cx="512" cy="512" r="300" fill="url(#glow)"/>
+<rect width="1024" height="1024" fill="url(#fill)" mask="url(#cut)"/>
+</svg>

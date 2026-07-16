@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+<rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="#161616"/>
+<defs><mask id="cres">
+  <rect width="1024" height="1024" fill="black"/>
+  <circle cx="512" cy="512" r="228" fill="white"/>
+  <circle cx="592" cy="452" r="222" fill="black"/>
+</mask></defs>
+<rect width="1024" height="1024" fill="#ededed" mask="url(#cres)"/>
+</svg>
