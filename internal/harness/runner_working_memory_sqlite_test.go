@@ -110,7 +110,7 @@ func TestRunnerWorkingMemoryCrossRunRecallAndScopeIsolation(t *testing.T) {
 	}
 
 	// --- Turn 2 (recall): a NEW run on the SAME axes recalls the entry. ---
-	recallSnippet := firstSystemMessageForRun(t, store, RunRequest{
+	recallSnippet := injectedMemorySnippetForRun(t, store, RunRequest{
 		Prompt:         "what is the deploy target?",
 		TenantID:       tenantA,
 		ConversationID: convC,
@@ -124,7 +124,7 @@ func TestRunnerWorkingMemoryCrossRunRecallAndScopeIsolation(t *testing.T) {
 	}
 
 	// --- Isolation: a DIFFERENT conversation does NOT see the entry. ---
-	otherConvSnippet := firstSystemMessageForRun(t, store, RunRequest{
+	otherConvSnippet := injectedMemorySnippetForRun(t, store, RunRequest{
 		Prompt:         "what is the deploy target?",
 		TenantID:       tenantA,
 		ConversationID: "conversation-OTHER",
@@ -135,7 +135,7 @@ func TestRunnerWorkingMemoryCrossRunRecallAndScopeIsolation(t *testing.T) {
 	}
 
 	// --- Isolation: a DIFFERENT tenant does NOT see the entry. ---
-	otherTenantSnippet := firstSystemMessageForRun(t, store, RunRequest{
+	otherTenantSnippet := injectedMemorySnippetForRun(t, store, RunRequest{
 		Prompt:         "what is the deploy target?",
 		TenantID:       "tenant-B",
 		ConversationID: convC,
@@ -146,11 +146,12 @@ func TestRunnerWorkingMemoryCrossRunRecallAndScopeIsolation(t *testing.T) {
 	}
 }
 
-// firstSystemMessageForRun starts a single-turn run (no tool calls) on the
-// given axes against the shared store and returns the content of the first
-// message the runner sent to the provider — i.e. the working-memory injection
-// point at turn start. Empty string when no system message was injected.
-func firstSystemMessageForRun(t *testing.T, store workingmemory.Store, req RunRequest) string {
+// injectedMemorySnippetForRun starts a single-turn run (no tool calls) on the
+// given axes against the shared store and returns the content of the last
+// system message the runner sent to the provider — i.e. the working-memory
+// injection, which is placed at the tail (after history) for cache friendliness.
+// Empty string when no system message was injected.
+func injectedMemorySnippetForRun(t *testing.T, store workingmemory.Store, req RunRequest) string {
 	t.Helper()
 	provider := &capturingProvider{turns: []CompletionResult{{Content: "done"}}}
 	runner := NewRunner(provider, NewRegistry(), RunnerConfig{
@@ -169,10 +170,14 @@ func firstSystemMessageForRun(t *testing.T, store workingmemory.Store, req RunRe
 		t.Fatal("probe: expected at least one provider call")
 	}
 	msgs := provider.calls[0].Messages
-	if len(msgs) == 0 {
-		return ""
+	// Working/observational memory is injected as a system message at the tail
+	// (after the history) for cache friendliness; return the last system message.
+	for i := len(msgs) - 1; i >= 0; i-- {
+		if msgs[i].Role == "system" {
+			return msgs[i].Content
+		}
 	}
-	return msgs[0].Content
+	return ""
 }
 
 // scopeKeyFor mirrors Runner.scopeKey for direct store assertions in tests.
