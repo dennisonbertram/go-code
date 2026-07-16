@@ -103,10 +103,12 @@ func TestRunnerInjectsWorkingMemoryBeforeObservationalMemory(t *testing.T) {
 	if len(messages) < 3 {
 		t.Fatalf("message count = %d, want at least 3", len(messages))
 	}
-	if !strings.Contains(messages[0].Content, "<working-memory>") {
-		t.Fatalf("first message = %q, want working-memory snippet", messages[0].Content)
+	// Volatile blocks are injected at the tail (after history) for cache
+	// friendliness, with working memory still ordered before observational memory.
+	if !strings.Contains(messages[len(messages)-2].Content, "<working-memory>") {
+		t.Fatalf("second-to-last message = %q, want working-memory snippet", messages[len(messages)-2].Content)
 	}
-	if !strings.Contains(messages[1].Content, "<observational-memory>") {
-		t.Fatalf("second message = %q, want observational-memory snippet", messages[1].Content)
+	if !strings.Contains(messages[len(messages)-1].Content, "<observational-memory>") {
+		t.Fatalf("last message = %q, want observational-memory snippet", messages[len(messages)-1].Content)
 	}
 }

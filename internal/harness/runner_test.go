@@ -206,8 +206,11 @@ func TestRunnerInjectsMemorySnippetAndEmitsMemoryEvents(t *testing.T) {
 	if len(provider.calls) == 0 {
 		t.Fatalf("expected provider call")
 	}
-	if len(provider.calls[0].Messages) < 1 || provider.calls[0].Messages[0].Content != "<observational-memory>test</observational-memory>" {
-		t.Fatalf("expected injected memory snippet in first request: %+v", provider.calls[0].Messages)
+	// Volatile blocks (including observational memory) are injected at the tail,
+	// after the conversation history, so the cached prefix is not invalidated.
+	msgs0 := provider.calls[0].Messages
+	if len(msgs0) < 1 || msgs0[len(msgs0)-1].Content != "<observational-memory>test</observational-memory>" {
+		t.Fatalf("expected injected memory snippet at the tail of the first request: %+v", msgs0)
 	}
 	requireEventOrder(t, events, "memory.observe.started", "memory.observe.completed", "run.completed")
 }
