@@ -56,15 +56,27 @@ func TestComputeJitter_Disabled(t *testing.T) {
 	}
 }
 
-func TestComputeJitter_ZeroRange(t *testing.T) {
+func TestComputeJitter_EqualBounds(t *testing.T) {
 	cfg := DefaultJitterConfig()
 	cfg.MinSec = 300
 	cfg.MaxSec = 300
 
-	// When MinSec >= MaxSec, should return 0 (sanity check).
+	// When MinSec == MaxSec, should return exactly MinSec seconds.
+	jitter := computeJitter(cfg, "job-1", "*/5 * * * *")
+	if jitter != time.Duration(300)*time.Second {
+		t.Fatalf("expected jitter of 300s when MinSec == MaxSec, got %v", jitter)
+	}
+}
+
+func TestComputeJitter_MinGreaterThanMax(t *testing.T) {
+	cfg := DefaultJitterConfig()
+	cfg.MinSec = 400
+	cfg.MaxSec = 300
+
+	// When MinSec > MaxSec, should return 0.
 	jitter := computeJitter(cfg, "job-1", "*/5 * * * *")
 	if jitter != 0 {
-		t.Fatalf("expected zero jitter when MinSec >= MaxSec, got %v", jitter)
+		t.Fatalf("expected zero jitter when MinSec > MaxSec, got %v", jitter)
 	}
 }
 

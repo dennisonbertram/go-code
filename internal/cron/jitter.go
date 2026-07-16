@@ -46,8 +46,8 @@ func DefaultJitterConfig() JitterConfig {
 // The returned duration is in [cfg.MinSec, cfg.MaxSec]. Minute-mark avoidance
 // is applied separately at fire time via avoidMinuteMarks.
 func computeJitter(cfg JitterConfig, jobID, schedule string) time.Duration {
-	// Sanity: if disabled or range is zero, return zero.
-	if !cfg.Enabled || cfg.MinSec >= cfg.MaxSec {
+	// Sanity: if disabled or the range is invalid (min greater than max, or negative min), return zero.
+	if !cfg.Enabled || cfg.MinSec > cfg.MaxSec || cfg.MinSec < 0 {
 		return 0
 	}
 
