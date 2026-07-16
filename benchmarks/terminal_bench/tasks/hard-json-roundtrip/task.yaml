@@ -1,0 +1,29 @@
+instruction: |
+  `Money` in `money.go` has custom `MarshalJSON`/`UnmarshalJSON` methods that
+  round-trip a `Money` value through a floating-point dollar amount. This loses
+  precision for some cent values, so `json.Unmarshal(json.Marshal(m))` does not
+  always reproduce the original `m`.
+
+  Fix `money.go` so it honors the following contract:
+    - For every `Money` value, `json.Unmarshal(json.Marshal(m))` must reproduce
+      `m` exactly (identical `Cents` and `Currency`), including values like 1
+      cent, 29 cents, negative amounts, and large amounts. The exact integer
+      number of cents must never be routed through a `float64`.
+    - The JSON must remain human-meaningful (you may change the on-wire
+      representation — e.g. integer cents, or a string amount — as long as
+      the round trip is exact and `MarshalJSON`/`UnmarshalJSON` stay
+      symmetric with each other).
+    - `Currency` must continue to round-trip unchanged.
+
+  You may change `money.go` only. Keep the `Money` struct's fields
+  (`Cents int64`, `Currency string`) and the existing method receivers
+  (`MarshalJSON` on `Money`, `UnmarshalJSON` on `*Money`). `go build ./...`
+  must succeed.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

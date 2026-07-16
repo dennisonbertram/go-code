@@ -1,0 +1,30 @@
+instruction: |
+  `ParseCSV` in `csv.go` parses RFC-4180-style CSV text into rows of string
+  fields, but the current implementation has multiple independent bugs. Fix
+  `csv.go` so `ParseCSV` honors the following contract:
+    - Fields within a record are separated by commas; records are separated
+      by a single '\n'.
+    - A trailing '\n' at the very end of the input does not produce a
+      spurious empty final record. (`"a,b\n"` parses to exactly one record.)
+    - A field may be wrapped in double quotes ("like this"). A quoted field
+      may contain commas and embedded literal newlines without those
+      characters ending the field or the record.
+    - Inside a quoted field, a doubled double-quote ("") is an escaped quote
+      and collapses to a single literal `"` character in the field's value.
+    - Unquoted fields are taken completely literally: no interior or
+      surrounding whitespace is trimmed.
+    - An empty input string ("") parses to zero rows.
+    - An empty line (a record with no characters before the next '\n' or the
+      end of input) parses to a single row containing one empty field: [""].
+  You may change `csv.go` only. Do not use the `encoding/csv` package (or any
+  other CSV library) — implement the parser by hand. Do not change the
+  signature of `ParseCSV`. `go build ./...` must succeed and the code must be
+  free of data races.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

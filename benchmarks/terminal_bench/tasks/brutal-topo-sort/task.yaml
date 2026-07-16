@@ -1,0 +1,35 @@
+instruction: |
+  `TopoSort` in `topo.go` computes a topological order of a directed graph
+  but has multiple bugs. Fix it so it honors the following contract:
+
+    func TopoSort(nodes []string, edges [][2]string) ([]string, error)
+
+  Each edge {u, v} means u must come before v in the returned order.
+
+    - Return a topological order: for every edge {u, v}, u appears before v
+      in the output.
+    - Deterministic tie-break: whenever more than one node is ready
+      (in-degree 0) at the same time, emit the lexicographically SMALLEST
+      ready node name next (Kahn's algorithm with a sorted/priority ready
+      set). This makes the output unique for a given input, and it must be
+      identical across repeated calls with the same input.
+    - Every node in `nodes` must appear in the output, including nodes with
+      no incident edges at all (disconnected nodes). Disconnected nodes are
+      ready immediately and participate in the same lexicographic tie-break
+      as any other ready node.
+    - If the graph has a cycle, `TopoSort` must return a nil slice and a
+      non-nil error. It must not return a partial or incorrect order with a
+      nil error.
+    - You may assume every endpoint that appears in `edges` also appears in
+      `nodes`.
+
+  You may change `topo.go` only. Do not change the signature of `TopoSort`.
+  `go build ./...` must succeed and the code must be free of data races.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

@@ -1,0 +1,29 @@
+instruction: |
+  `ledger.go` implements an in-memory account ledger, but it does not fully
+  honor its contract. Fix `ledger.go` so the following holds:
+    - `Post(account, amount)` accumulates: multiple posts to the same account
+      add up to a net balance.
+    - `Balance(account)` returns the net balance for that account, or 0 if the
+      account has never been posted to.
+    - `Total()` returns the sum of every account's balance.
+    - `TopN(n)` returns up to n account names ordered by balance DESCENDING,
+      with ties broken by account name ASCENDING. If n is greater than or
+      equal to the number of accounts, it returns all of them (in the same
+      order). If n <= 0, it returns an empty slice. TopN must never panic,
+      regardless of n.
+    - The Ledger must be safe for concurrent use: concurrent calls to
+      Post/Balance/Total from multiple goroutines must be free of data races.
+  The current implementation has more than one independent defect relative to
+  this contract — fixing the first thing you notice is not enough. Verify
+  every part of the contract above, including behavior under `-race`.
+  You may change `ledger.go` only. Do not change the signatures of `Ledger`,
+  `NewLedger`, `Post`, `Balance`, `Total`, or `TopN`. `go build ./...` must
+  succeed and the code must be free of data races.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

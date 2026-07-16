@@ -1,0 +1,38 @@
+instruction: |
+  `Compare` in `semver.go` is supposed to implement Semantic Versioning 2.0.0
+  precedence (see https://semver.org/#spec-item-11) but the current
+  implementation violates the contract in more than one independent way.
+  Fix `semver.go` so `Compare(a, b string) int` honors the following
+  contract exactly for well-formed
+  `MAJOR.MINOR.PATCH[-prerelease][+build]` version strings:
+    - Returns -1 if a has lower precedence than b, 0 if a and b have equal
+      precedence, and +1 if a has higher precedence than b.
+    - MAJOR, MINOR, and PATCH are compared numerically, in that order.
+    - A version WITH a pre-release has LOWER precedence than the same
+      version WITHOUT one (e.g. `1.0.0-alpha` < `1.0.0`).
+    - When both versions have a pre-release and the same MAJOR.MINOR.PATCH,
+      compare their dot-separated pre-release identifiers left to right:
+        - Numeric identifiers (containing only digits) are compared
+          numerically, not lexically (e.g. `2` < `11`).
+        - Identifiers containing any letter or hyphen are compared lexically
+          in ASCII sort order.
+        - A numeric identifier always has LOWER precedence than a
+          non-numeric identifier.
+        - If all preceding identifiers are equal, the pre-release with MORE
+          identifiers has higher precedence.
+    - Build metadata (everything from the first `+` onward) is ignored
+      entirely for precedence purposes — two versions that differ only in
+      build metadata (including one with build metadata and one without)
+      have equal precedence.
+  You do not need to validate or return errors for malformed input; you may
+  assume every version string is well-formed. You may change `semver.go`
+  only. Do not change the signature of `Compare`. `go build ./...` must
+  succeed and the code must be free of data races.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

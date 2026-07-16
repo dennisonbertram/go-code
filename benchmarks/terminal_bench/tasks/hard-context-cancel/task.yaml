@@ -1,0 +1,18 @@
+instruction: |
+  The worker pool in `pool.go` ignores context cancellation. Fix `Process` so it
+  honors the following contract:
+    - If `ctx` is cancelled while work is in flight, `Process` must stop promptly
+      and return a nil results slice together with `ctx.Err()`.
+    - `Process` must not leave any worker goroutines running after it returns.
+    - When the context is not cancelled, it must still return correct results for
+      every job, in job order.
+  You may change `pool.go` only. Do not change the signature of `Process`.
+  `go build ./...` must succeed and the code must be free of data races.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

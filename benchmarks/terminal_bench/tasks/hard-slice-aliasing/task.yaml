@@ -1,0 +1,21 @@
+instruction: |
+  `Windows` in `window.go` returns all consecutive windows of length `size` over
+  `data`, but the returned windows are sub-slices of `data`'s own backing array,
+  so they are not independent of it or of each other. Fix `Windows` so it honors
+  the following contract:
+    - Each returned window has length `size` and contains the values
+      `data[i], data[i+1], ..., data[i+size-1]` for `i` in `0..len(data)-size`.
+    - The returned windows must be independent: mutating or appending to any
+      returned window must not change `data` or any other returned window.
+    - If `size <= 0` or `size > len(data)`, `Windows` must return an empty
+      `[][]int`.
+  You may change `window.go` only. Do not change the signature of `Windows`.
+  `go build ./...` must succeed.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

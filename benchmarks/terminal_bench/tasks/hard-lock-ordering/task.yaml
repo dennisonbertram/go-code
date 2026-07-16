@@ -1,0 +1,23 @@
+instruction: |
+  `Transfer` in `account.go` always locks `from` before `to`. Fix `Transfer` so it
+  honors the following contract:
+    - `Transfer` must be deadlock-free under concurrent transfers that run in both
+      directions (e.g. `Transfer(a, b, amount)` and `Transfer(b, a, amount)` firing
+      concurrently from many goroutines).
+    - `Transfer` must move `amount` from `from` to `to` atomically and be free of
+      data races.
+    - `Transfer` must return a non-nil error and make NO change to either balance if
+      `from` has insufficient funds (balance < amount).
+    - The total balance across all accounts must be conserved under concurrent
+      transfers.
+  You may change `account.go` only. Do not change the signatures of `Transfer`,
+  `NewAccount`, or `Balance`. `go build ./...` must succeed and the code must be
+  free of data races.
+difficulty: hard
+category: bugfix
+parser_name: pytest
+max_agent_timeout_sec: 900
+max_test_timeout_sec: 180
+run_tests_in_same_shell: false
+test_scripts:
+  - run-tests.sh

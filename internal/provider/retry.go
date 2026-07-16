@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"syscall"
@@ -24,15 +25,30 @@ type RetryConfig struct {
 	Jitter      bool
 }
 
-// DefaultRetryConfig returns the production retry settings.
+// DefaultRetryConfig returns the production retry settings. The attempt count
+// and total time budget can be widened via the HARNESS_RETRY_MAX_ATTEMPTS and
+// HARNESS_RETRY_MAX_TOTAL_SEC environment variables (useful against providers
+// with aggressive rate limiting, e.g. free tiers); unset or invalid values
+// leave the built-in defaults unchanged.
 func DefaultRetryConfig() RetryConfig {
-	return RetryConfig{
+	cfg := RetryConfig{
 		MaxAttempts: 3,
 		BaseDelay:   500 * time.Millisecond,
 		MaxDelay:    30 * time.Second,
 		MaxTotal:    60 * time.Second,
 		Jitter:      true,
 	}
+	if v := strings.TrimSpace(os.Getenv("HARNESS_RETRY_MAX_ATTEMPTS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.MaxAttempts = n
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv("HARNESS_RETRY_MAX_TOTAL_SEC")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.MaxTotal = time.Duration(n) * time.Second
+		}
+	}
+	return cfg
 }
 
 func mergeRetryConfig(cfg *RetryConfig) RetryConfig {
