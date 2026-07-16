@@ -104,20 +104,11 @@ func TestJobManagerRunForegroundStreamingOverlongLineReturnsPromptly(t *testing.
 	}
 	ctx := context.WithValue(context.Background(), ContextKeyOutputStreamer, streamer)
 
-	start := time.Now()
 	// 2 MiB single line — comfortably over defaultMaxStreamLineBytes (1 MiB) so the
 	// stream truncation path fires, but far less shell work than a 4 MiB payload.
 	result, err := mgr.runForeground(ctx, "head -c 2097152 /dev/zero | tr '\\000' A; printf '\\nEOF\\n'", 5, "")
 	if err != nil {
 		t.Fatalf("runForeground: %v", err)
-	}
-	// The real "prompt return" guarantee is proven by stream_truncated==true and
-	// timed_out==false below — truncation makes the read return once the line
-	// exceeds the cap instead of buffering the whole payload. This wall-clock check
-	// is only a coarse guard against a cleanup-path hang, so keep it generous: it
-	// must stay well under the 5s command timeout while tolerating a loaded machine.
-	if elapsed := time.Since(start); elapsed > 4*time.Second {
-		t.Fatalf("streaming overlong line took %s, want prompt return", elapsed)
 	}
 	if timedOut, _ := result["timed_out"].(bool); timedOut {
 		t.Fatalf("overlong streaming line timed out: %#v", result)
@@ -128,8 +119,18 @@ func TestJobManagerRunForegroundStreamingOverlongLineReturnsPromptly(t *testing.
 	if _, ok := result["stream_error"].(string); !ok {
 		t.Fatalf("expected stream_error metadata, got %#v", result)
 	}
+	// Prompt return is proven deterministically instead of with a wall-clock bound
+	// (a timing assertion here was flaky under load and proved nothing the metadata
+	// above doesn't already guarantee). Truncation caps how much of the 2 MiB line
+	// reaches the streamer at defaultMaxStreamLineBytes (1 MiB), so it observes ~the
+	// cap plus the short trailing "EOF" line — never the whole 2 MiB payload. If the
+	// overlong line were buffered/streamed in full instead of short-circuited at the
+	// cap, streamed would be ~2 MiB and this bound would fail.
 	if streamed == 0 {
 		t.Fatal("expected streamer to receive truncated output")
+	}
+	if maxStreamed := defaultMaxStreamLineBytes + 1024; streamed > maxStreamed {
+		t.Fatalf("streamer received %d bytes, want <= %d (truncation should cap the overlong line, not stream all 2 MiB)", streamed, maxStreamed)
 	}
 }
 
