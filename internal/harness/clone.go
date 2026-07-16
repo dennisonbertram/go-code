@@ -1,6 +1,9 @@
 package harness
 
-import "reflect"
+import (
+	"reflect"
+	"strings"
+)
 
 // deepClonePayload returns a fully isolated deep copy of a map[string]any.
 // It clones nested maps and slices while preserving nil-valued keys.
@@ -72,4 +75,27 @@ func copyMessages(msgs []Message) []Message {
 		result[i] = msgs[i].Clone()
 	}
 	return result
+}
+
+// buildTurnMessages assembles the per-step message list with cache-friendly
+// ordering. Stable content (the system prompt) goes first, then the growing
+// conversation history — so the provider-visible prefix (tools + system +
+// history) only ever grows by appending and stays a valid cached prefix across
+// steps. All volatile per-step content (working memory, observational memory,
+// dynamic rules, and the runtime context, which carries the step number, token
+// and cost totals, and a timestamp) is placed at the tail, after the history,
+// where it can change every step without invalidating the cached prefix.
+// Empty snippets are skipped.
+func (r *Runner) buildTurnMessages(systemPrompt string, messages []Message, workingMemory, observationalMemory, ruleContent, runtimeContext string) []Message {
+	tm := make([]Message, 0, len(messages)+5)
+	if systemPrompt != "" {
+		tm = append(tm, Message{Role: "system", Content: systemPrompt})
+	}
+	tm = append(tm, copyMessages(messages)...)
+	for _, tail := range []string{workingMemory, observationalMemory, ruleContent, runtimeContext} {
+		if strings.TrimSpace(tail) != "" {
+			tm = append(tm, Message{Role: "system", Content: tail})
+		}
+	}
+	return tm
 }

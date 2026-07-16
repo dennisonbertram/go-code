@@ -814,8 +814,12 @@ func processStreamEvent(data string, state *streamState, streamFn func(harness.C
 
 // --- Message conversion ---
 
-// extractSystem splits the first system message from harness messages.
-// Anthropic uses a top-level "system" field rather than a message role.
+// extractSystem pulls every system-role message (in order, wherever it appears
+// in the slice) into a single newline-joined string, returning the remaining
+// non-system messages. Anthropic uses a top-level "system" field rather than a
+// message role. Collecting all system messages — not just a leading one — is
+// required because the runner places volatile system content (memory, rules,
+// runtime context) at the tail, after the conversation history.
 func extractSystem(messages []harness.Message) (string, []harness.Message) {
 	var system string
 	remaining := make([]harness.Message, 0, len(messages))

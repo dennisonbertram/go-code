@@ -219,11 +219,11 @@ func (se *stepEngine) run() {
 		r.evaluateDynamicRules(runID, step, messages, &injectedRuleContent)
 
 		var memorySnippetForSnapshot string
-		turnMessages := make([]Message, 0, len(messages)+4)
+		var workingMemorySnippet string
 		if r.config.WorkingMemoryStore != nil {
 			snippet, err := r.config.WorkingMemoryStore.Snippet(context.Background(), r.scopeKey(runID))
 			if err == nil && strings.TrimSpace(snippet) != "" {
-				turnMessages = append(turnMessages, Message{Role: "system", Content: snippet})
+				workingMemorySnippet = snippet
 			}
 		}
 		if r.config.MemoryManager != nil && r.config.MemoryManager.Mode() != om.ModeOff {
@@ -231,15 +231,8 @@ func (se *stepEngine) run() {
 			if err != nil {
 				r.emit(runID, EventMemoryObserveFailed, map[string]any{"step": step, "error": err.Error()})
 			} else if strings.TrimSpace(snippet) != "" {
-				turnMessages = append(turnMessages, Message{Role: "system", Content: snippet})
 				memorySnippetForSnapshot = snippet
 			}
-		}
-		if systemPrompt != "" {
-			turnMessages = append(turnMessages, Message{Role: "system", Content: systemPrompt})
-		}
-		if injected := injectedRuleContent.String(); injected != "" {
-			turnMessages = append(turnMessages, Message{Role: "system", Content: injected})
 		}
 		var runtimeContext string
 		if resolvedPrompt != nil && r.config.PromptEngine != nil {
@@ -282,11 +275,8 @@ func (se *stepEngine) run() {
 				MessageCount:           len(messages),
 				Environment:            envInfo,
 			}))
-			if runtimeContext != "" {
-				turnMessages = append(turnMessages, Message{Role: "system", Content: runtimeContext})
-			}
 		}
-		turnMessages = append(turnMessages, copyMessages(messages)...)
+		turnMessages := r.buildTurnMessages(systemPrompt, messages, workingMemorySnippet, memorySnippetForSnapshot, injectedRuleContent.String(), runtimeContext)
 
 		if r.config.AutoCompactEnabled && r.config.ModelContextWindow > 0 {
 			estimated := 0
@@ -316,29 +306,7 @@ func (se *stepEngine) run() {
 					}
 					messages = compactedMsgs
 					r.stepSetMessages(runID, messages)
-					turnMessages = turnMessages[:0]
-					if r.config.WorkingMemoryStore != nil {
-						snippet, err := r.config.WorkingMemoryStore.Snippet(context.Background(), r.scopeKey(runID))
-						if err == nil && strings.TrimSpace(snippet) != "" {
-							turnMessages = append(turnMessages, Message{Role: "system", Content: snippet})
-						}
-					}
-					if r.config.MemoryManager != nil && r.config.MemoryManager.Mode() != om.ModeOff {
-						snippet, _, err := r.config.MemoryManager.Snippet(context.Background(), r.scopeKey(runID))
-						if err == nil && strings.TrimSpace(snippet) != "" {
-							turnMessages = append(turnMessages, Message{Role: "system", Content: snippet})
-						}
-					}
-					if systemPrompt != "" {
-						turnMessages = append(turnMessages, Message{Role: "system", Content: systemPrompt})
-					}
-					if injected := injectedRuleContent.String(); injected != "" {
-						turnMessages = append(turnMessages, Message{Role: "system", Content: injected})
-					}
-					if runtimeContext != "" {
-						turnMessages = append(turnMessages, Message{Role: "system", Content: runtimeContext})
-					}
-					turnMessages = append(turnMessages, copyMessages(messages)...)
+					turnMessages = r.buildTurnMessages(systemPrompt, messages, workingMemorySnippet, memorySnippetForSnapshot, injectedRuleContent.String(), runtimeContext)
 					r.emit(runID, EventAutoCompactCompleted, map[string]any{
 						"before_tokens": estimated,
 						"after_tokens":  afterTokens,
