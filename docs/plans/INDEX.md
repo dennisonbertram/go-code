@@ -3,6 +3,7 @@
 - `PLAN_TEMPLATE.md`: Required template for pre-implementation planning with checklist.
 - `IMPACT_MAP_TEMPLATE.md`: One-page cross-surface impact map template for provider/model flow changes.
 - `active-plan.md`: Current active plan tracker.
+- `2026-06-28-config-driven-hooks-epic-737-plan.md`: Active epic plan for config-driven lifecycle hooks (shell/HTTP) covering child issues #741, #744, #750, #755, #759, #763 with per-slice TDD and trust-model guardrails.
 - `2026-06-26-adapter-first-eval-harness-plan.md`: Implemented adapter-first Terminal-Bench eval harness hardening plan; full regression and real-provider smoke baseline acceptance are green.
 - `2026-06-24-harness-reliability-plan.md`: Active 15-slice TDD plan (T01–T15) hardening `harnessd` against long-session reliability failures from the 2026-06-24 audit; tracked via `.context/harness-reliability/tracker.md`.
 - `2026-06-27-go-source-workflows-plan.md`: Completed implementation plan for Go-authored custom workflow bundles, child-process execution, feedback events, and skill-bundled transfer.

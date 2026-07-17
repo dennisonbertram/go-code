@@ -359,3 +359,52 @@ A plugin must **not** import:
 **Hook ordering.** Hooks run in slice order. A plugin that needs to run before another plugin must be registered first. Document ordering dependencies in the plugin's package comment.
 
 **Nil returns from tool hooks.** `PreToolUseHook.PreToolUse` and `PostToolUseHook.PostToolUse` return `(*PreToolUseResult, error)` and `(*PostToolUseResult, error)` respectively. Returning `nil, nil` is explicitly documented as "allow with no modification" — use this as the no-op path.
+
+## Config-driven hooks
+
+Config-driven hooks let end users attach shell commands or HTTP calls to the
+four lifecycle events — `pre_message`, `post_message`, `pre_tool_use`,
+`post_tool_use` — by dropping JSON hook files into a discovery directory, with
+zero Go code. They are an additive layer on top of the hook model above: each
+hook file becomes an adapter that implements the existing hook interfaces and
+is appended to the same `RunnerConfig` hook slices compiled-in plugins use.
+
+### Hook files
+
+Hook files are `*.json` files discovered from:
+
+- **User-global**: `~/.harness/hooks/` — trusted implicitly (the user wrote
+  them into their own config directory).
+- **Project**: `<workspace>/.harness/hooks/` — requires explicit trust before
+  loading (a cloned repository must not execute commands on your machine).
+
+Extra discovery directories can be added with the `[hooks]` config section:
+
+```toml
+[hooks]
+enabled = true                 # default true
+dirs = ["/opt/team-hooks"]     # extra dirs; classify as project (trust required)
+```
+
+### Hook-file schema
+
+```json
+{
+  "name": "deny-rm",                   // optional; defaults to the file base name
+  "event": "pre_tool_use",             // required: pre_message | post_message | pre_tool_use | post_tool_use
+  "kind": "command",                   // required: command | http
+  "command": ["/path/to/script.sh"],   // required for kind=command (argv)
+  "url": "https://example.com/hook",   // required for kind=http (http/https only)
+  "matcher": "bash",                   // optional: exact or glob tool-name matcher (tool-use events only)
+  "timeout_seconds": 5,                // optional: per-hook timeout (default 10s)
+  "include_messages": false            // optional: include full messages in message-event payloads
+}
+```
+
+Unknown fields are rejected. One invalid file never aborts loading — it is
+recorded as a structured skip (file + reason) and surfaced in startup logs and
+the `/hooks` listing.
+
+The command/HTTP wire protocol, trust model, and runtime semantics are
+documented in the sections below as those layers land.
+

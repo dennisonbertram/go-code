@@ -919,3 +919,84 @@ func TestCronConfig_EnvVarOverrides(t *testing.T) {
 		t.Errorf("Cron.JitterMaxSec: got %d, want 120", cfg.Cron.JitterMaxSec)
 	}
 }
+
+// TestHooksConfig_Defaults verifies the [hooks] section defaults: enabled,
+// no extra directories.
+func TestHooksConfig_Defaults(t *testing.T) {
+	cfg := config.Defaults()
+
+	if !cfg.Hooks.Enabled {
+		t.Error("Hooks.Enabled: got false, want true (hooks on by default)")
+	}
+	if len(cfg.Hooks.Dirs) != 0 {
+		t.Errorf("Hooks.Dirs: got %v, want empty", cfg.Hooks.Dirs)
+	}
+}
+
+// TestHooksConfig_TOMLOverride verifies the [hooks] TOML section parses and
+// applies enabled + dirs.
+func TestHooksConfig_TOMLOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(`
+[hooks]
+enabled = false
+dirs = ["/opt/team-hooks", "/opt/audit-hooks"]
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := config.LoadOptions{
+		UserConfigPath: cfgPath,
+		Getenv:         func(string) string { return "" },
+	}
+	cfg, err := config.Load(opts)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Hooks.Enabled {
+		t.Error("Hooks.Enabled: got true, want false")
+	}
+	if len(cfg.Hooks.Dirs) != 2 || cfg.Hooks.Dirs[0] != "/opt/team-hooks" || cfg.Hooks.Dirs[1] != "/opt/audit-hooks" {
+		t.Errorf("Hooks.Dirs: got %v", cfg.Hooks.Dirs)
+	}
+}
+
+// TestHooksConfig_LayerMerge verifies a higher-priority layer overrides only
+// the fields it sets, mirroring raw-layer merge semantics of other sections.
+func TestHooksConfig_LayerMerge(t *testing.T) {
+	tmpDir := t.TempDir()
+	userPath := filepath.Join(tmpDir, "user.toml")
+	projectPath := filepath.Join(tmpDir, "project.toml")
+	if err := os.WriteFile(userPath, []byte(`
+[hooks]
+enabled = false
+dirs = ["/user-hooks"]
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	// Project layer sets only dirs; enabled=false from the user layer must survive.
+	if err := os.WriteFile(projectPath, []byte(`
+[hooks]
+dirs = ["/project-hooks"]
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.Load(config.LoadOptions{
+		UserConfigPath:    userPath,
+		ProjectConfigPath: projectPath,
+		Getenv:            func(string) string { return "" },
+	})
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	if cfg.Hooks.Enabled {
+		t.Error("Hooks.Enabled: got true, want false (user layer value must survive a project layer that does not set it)")
+	}
+	if len(cfg.Hooks.Dirs) != 1 || cfg.Hooks.Dirs[0] != "/project-hooks" {
+		t.Errorf("Hooks.Dirs: got %v, want project layer override", cfg.Hooks.Dirs)
+	}
+}
