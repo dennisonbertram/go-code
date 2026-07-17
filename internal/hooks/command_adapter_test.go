@@ -30,7 +30,7 @@ func commandDef(t *testing.T, script string) HookDef {
 		Name:    "test-hook",
 		Event:   EventPreToolUse,
 		Kind:    KindCommand,
-		Command: []string{script},
+		Command: []string{"/bin/sh", script},
 	}
 }
 
@@ -185,7 +185,7 @@ func TestCommandHook_StdinGoldenFields(t *testing.T) {
 	script := writeScript(t, dir, "capture.sh", "cat > \"$1\"\nexit 0")
 	hook := NewCommandHook(HookDef{
 		Name: "capture", Event: EventPreToolUse, Kind: KindCommand,
-		Command: []string{script, capture},
+		Command: []string{"/bin/sh", script, capture},
 	})
 
 	_, err := hook.PreToolUse(context.Background(), preEvent())
@@ -226,7 +226,7 @@ func TestCommandHook_PostToolUseStdinGoldenFields(t *testing.T) {
 	script := writeScript(t, dir, "capture.sh", "cat > \"$1\"\nexit 0")
 	hook := NewCommandHook(HookDef{
 		Name: "capture", Event: EventPostToolUse, Kind: KindCommand,
-		Command: []string{script, capture},
+		Command: []string{"/bin/sh", script, capture},
 	})
 
 	_, err := hook.PostToolUse(context.Background(), harness.PostToolUseEvent{
@@ -266,7 +266,7 @@ func TestCommandHook_MatcherSkipsExec(t *testing.T) {
 	sentinel := filepath.Join(dir, "execed")
 	script := writeScript(t, dir, "sentinel.sh", "touch \"$1\"\necho '{\"decision\":\"deny\"}'")
 	def := commandDef(t, script)
-	def.Command = []string{script, sentinel}
+	def.Command = []string{"/bin/sh", script, sentinel}
 	def.Matcher = "bash"
 	hook := NewCommandHook(def)
 
@@ -314,7 +314,7 @@ func TestCommandHook_TimeoutKillsProcess(t *testing.T) {
 		"echo $$ > \"$1\"\nsleep 60 & echo $! > \"$2\"\nwait")
 	def := HookDef{
 		Name: "hang", Event: EventPreToolUse, Kind: KindCommand,
-		Command:        []string{script, pidFile, childPidFile},
+		Command:        []string{"/bin/sh", script, pidFile, childPidFile},
 		TimeoutSeconds: 5,
 	}
 	hook := NewCommandHook(def)

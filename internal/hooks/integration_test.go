@@ -106,7 +106,7 @@ func TestCommandHookDenyEndToEnd(t *testing.T) {
 	script := writeScript(t, dir, "deny.sh", `echo '{"decision":"deny","reason":"rm is not allowed"}'`)
 	def := hooks.HookDef{
 		Name: "deny-rm", Event: hooks.EventPreToolUse, Kind: hooks.KindCommand,
-		Command: []string{script},
+		Command: []string{"/bin/sh", script},
 	}
 	hook := hooks.NewCommandHook(def)
 
@@ -154,7 +154,7 @@ func TestCommandHookErrorHonorsFailureMode(t *testing.T) {
 		script := writeScript(t, t.TempDir(), "fail.sh", `exit 2`)
 		return hooks.NewCommandHook(hooks.HookDef{
 			Name: "broken", Event: hooks.EventPreToolUse, Kind: hooks.KindCommand,
-			Command: []string{script},
+			Command: []string{"/bin/sh", script},
 		})
 	}
 
@@ -210,7 +210,7 @@ func TestCommandHookDenyReasonReachesLLM(t *testing.T) {
 	script := writeScript(t, dir, "deny.sh", `echo '{"decision":"deny","reason":"policy: no deletes"}'`)
 	hook := hooks.NewCommandHook(hooks.HookDef{
 		Name: "guard", Event: hooks.EventPreToolUse, Kind: hooks.KindCommand,
-		Command: []string{script},
+		Command: []string{"/bin/sh", script},
 	})
 
 	provider := toolCallProvider()

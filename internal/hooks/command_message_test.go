@@ -93,7 +93,7 @@ func TestCommandHook_MessageEvents(t *testing.T) {
 		capture := filepath.Join(dir, "stdin.json")
 		script := writeScript(t, dir, "capture-msg.sh", "cat > \"$1\"\nexit 0")
 		def := commandDef(t, script)
-		def.Command = []string{script, capture}
+		def.Command = []string{"/bin/sh", script, capture}
 		hook := NewCommandHook(def)
 		_, err := hook.BeforeMessage(context.Background(), harness.PreMessageHookInput{
 			RunID: "r9", Step: 7,

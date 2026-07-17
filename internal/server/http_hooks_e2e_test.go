@@ -40,7 +40,7 @@ func hooksE2EEnv(t *testing.T, scriptBody string) (home, workspace, hookPath str
 	hookPath = filepath.Join(hooksDir, "deny-all.json")
 	def := map[string]any{
 		"name": "deny-all", "event": "pre_tool_use", "kind": "command",
-		"command": []string{scriptPath},
+		"command": []string{"/bin/sh", scriptPath},
 	}
 	raw, _ := json.Marshal(def)
 	if err := os.WriteFile(hookPath, raw, 0o600); err != nil {
