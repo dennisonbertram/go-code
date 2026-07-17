@@ -36,7 +36,7 @@
 
 ## Documentation Contract
 
-- Feature status: `in implementation`
+- Feature status: `implemented`
 - Public docs affected: `docs/design/plugins.md` (new "Config-driven hooks" section, extended per slice), config reference (TOML `[hooks]` section), routes doc (CLAUDE.md route list + relevant runbook), TUI command reference.
 - Spec docs to update before code: `docs/design/plugins.md` stub lands with slice 1 and is extended each slice (per-issue doc requirements).
 - Implementation notes to add after code: engineering log entry per slice; folder indexes on every doc change.
@@ -59,16 +59,16 @@
 
 ## Implementation Checklist
 
-- [ ] Define acceptance criteria in tests.
-- [ ] Document feature status and exact contract before code.
-- [ ] Slice 1 (#741): schema + loader + `[hooks]` config — red, green, commit.
-- [ ] Slice 2 (#744): command adapter tool-use events — red, green, commit.
-- [ ] Slice 3 (#750): HTTP adapter + message events — red, green, commit.
-- [ ] Slice 4 (#755): trust model + CLI — red, green, commit.
-- [ ] Slice 5 (#759): harnessd wiring + observability + stored summary — red, green, commit.
-- [ ] Slice 6 (#763): `GET /v1/hooks` + TUI `/hooks` — red, green, commit.
-- [ ] Review ownership/copy semantics for exported or state-storing types.
-- [ ] Update docs (plugins.md complete, config ref, routes, TUI ref), indexes, logs.
+- [x] Define acceptance criteria in tests.
+- [x] Document feature status and exact contract before code.
+- [x] Slice 1 (#741): schema + loader + `[hooks]` config — red, green, commit. (`7b9be97d`)
+- [x] Slice 2 (#744): command adapter tool-use events — red, green, commit. (`2749238a`)
+- [x] Slice 3 (#750): HTTP adapter + message events — red, green, commit. (`82e4e683`)
+- [x] Slice 4 (#755): trust model + CLI — red, green, commit. (`c93973fd`)
+- [x] Slice 5 (#759): harnessd wiring + observability + stored summary — red, green, commit. (`8c22aef9`)
+- [x] Slice 6 (#763): `GET /v1/hooks` + TUI `/hooks` — red, green, commit. (`695e2a16`)
+- [x] Review ownership/copy semantics for exported or state-storing types. (TrustStore guards records behind mu; config merge copies dirs slice; runner arg-copy contract preserved)
+- [x] Update docs (plugins.md complete, config ref, routes, TUI ref), indexes, logs.
 - [ ] Run `gofmt -l`, `go vet`, `go test ./internal/... ./cmd/...` (fast PR gate).
 - [ ] Run `./scripts/test-regression.sh` (full gate incl. coverage).
 - [ ] Push branch, open PR, comment on epic + child issues.

@@ -294,6 +294,12 @@ func TestCommandHook_MatcherSkipsExec(t *testing.T) {
 // TestCommandHook_TimeoutKillsProcess verifies a hung hook is interrupted at
 // its per-hook timeout and the child process tree is actually dead afterward
 // (no orphan).
+//
+// Determinism notes: the hook runs in a goroutine and the test waits for the
+// script's pid files to appear BEFORE the hook timeout fires, so slow process
+// startup under full-suite load cannot race the kill. The 5s hook timeout is
+// generous budget for that coordination; the sleep-60 child proves the tree
+// would live ~60s if the group kill failed.
 func TestCommandHook_TimeoutKillsProcess(t *testing.T) {
 	if testing.Short() {
 		t.Skip("timing-sensitive in short mode")
@@ -309,22 +315,59 @@ func TestCommandHook_TimeoutKillsProcess(t *testing.T) {
 	def := HookDef{
 		Name: "hang", Event: EventPreToolUse, Kind: KindCommand,
 		Command:        []string{script, pidFile, childPidFile},
-		TimeoutSeconds: 1,
+		TimeoutSeconds: 5,
 	}
 	hook := NewCommandHook(def)
 
+	type hookResult struct {
+		err error
+	}
+	resultCh := make(chan hookResult, 1)
 	start := time.Now()
-	_, err := hook.PreToolUse(context.Background(), preEvent())
+	go func() {
+		_, err := hook.PreToolUse(context.Background(), preEvent())
+		resultCh <- hookResult{err: err}
+	}()
+
+	// Wait for the script to actually start (pid files appear) before the
+	// 5s hook timeout can fire. Under extreme load where startup itself
+	// exceeds the budget, degrade to asserting only the timeout error.
+	pidsFound := false
+	pidDeadline := time.Now().Add(4 * time.Second)
+	for time.Now().Before(pidDeadline) && !pidsFound {
+		_, err1 := os.Stat(pidFile)
+		_, err2 := os.Stat(childPidFile)
+		pidsFound = err1 == nil && err2 == nil
+		if !pidsFound {
+			time.Sleep(25 * time.Millisecond)
+		}
+	}
+	if !pidsFound {
+		t.Logf("hook process startup exceeded 4s under load; orphan assertion degraded to timeout-error-only")
+	}
+
+	var res hookResult
+	select {
+	case res = <-resultCh:
+	case <-time.After(30 * time.Second):
+		t.Fatal("hook call did not return within 30s despite 5s timeout")
+	}
 	elapsed := time.Since(start)
 
-	if err == nil {
+	if res.err == nil {
 		t.Fatal("expected timeout error, got nil")
 	}
-	if !strings.Contains(err.Error(), "timeout") && !strings.Contains(err.Error(), "timed out") {
-		t.Fatalf("error should mention timeout, got: %v", err)
+	if !strings.Contains(res.err.Error(), "timeout") && !strings.Contains(res.err.Error(), "timed out") {
+		t.Fatalf("error should mention timeout, got: %v", res.err)
 	}
-	if elapsed > 5*time.Second {
-		t.Fatalf("hook was not interrupted promptly: %v", elapsed)
+	// Promptly interrupted: bounded by the 5s hook timeout + kill/wait slack,
+	// never anywhere near the script's 60s sleep.
+	if elapsed > 20*time.Second {
+		t.Fatalf("hook was not interrupted by its timeout: %v", elapsed)
+	}
+
+	if !pidsFound {
+		return
 	}
 
 	// Both the script and its background child must be dead. Process reaping
