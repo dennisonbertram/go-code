@@ -463,7 +463,38 @@ case "$payload" in
 esac
 ```
 
-The trust model is documented in the section below as that layer lands.
+The trust model is documented in the section below.
+
+### Trust model
+
+A cloned repository must never execute commands on your machine just because
+it contains a hooks directory. The trust rules:
+
+- **User-global hooks** (`~/.harness/hooks/`) run without any trust step —
+  you wrote them into your own config directory.
+- **Project hooks** (`<workspace>/.harness/hooks/`, plus any extra `[hooks]
+  dirs`) are skipped at load time until you explicitly trust them. Extra
+  dirs classify as project-level on purpose: a malicious project config
+  must not bypass trust by naming a directory.
+
+Trust is keyed by **(file path, SHA-256 of file content)** and recorded in
+`~/.harness/hooks-trust.json` — inside the user-global directory, never the
+project tree, so a project cannot trust itself. Editing a trusted file
+changes its hash, which automatically un-trusts it: a skipped hook shows
+reason `untrusted` (no record) or `modified_since_trusted` (content changed)
+in startup logs and the `/hooks` listing.
+
+Manage trust with the CLI:
+
+```sh
+harnesscli hooks trust .harness/hooks/deny-rm.json   # record content hash
+harnesscli hooks list                                # show trusted files
+harnesscli hooks revoke .harness/hooks/deny-rm.json  # remove record
+```
+
+**Explicit non-goals**: trusting a hook runs it with your full user
+privileges — there is no sandboxing, no command allowlist, and no signature
+scheme. Only trust hook files you have read.
 
 ### Wire protocol (HTTP hooks)
 

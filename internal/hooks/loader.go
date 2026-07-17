@@ -16,13 +16,19 @@ type LoadOptions struct {
 	// skip trust checks. Defs from every other directory classify as
 	// SourceProject. When empty, every def classifies as SourceProject.
 	UserDir string
+
+	// TrustStore gates project-level defs when non-nil: a project def with no
+	// trust record, or whose content hash no longer matches the record, is
+	// skipped with reason "untrusted" / "modified_since_trusted". A nil
+	// TrustStore disables trust checks entirely (parsing-only mode) —
+	// production startup must always pass one.
+	TrustStore *TrustStore
 }
 
 // Load reads and validates every *.json hook file in the given directories.
-// It performs no trust checks and no user/project classification beyond
-// recording each def's SourceDir — production startup must use the
-// trust-aware loading path so project-level files cannot execute without
-// explicit trust.
+// It performs NO trust checks — production startup must use LoadWithOptions
+// with a TrustStore so project-level files cannot execute without explicit
+// trust.
 //
 // One invalid file never aborts the load: it produces a SkipRecord naming
 // the file and the reason, and remaining files still load. Directories that
@@ -87,6 +93,13 @@ func LoadWithOptions(opts LoadOptions, dirs ...string) ([]HookDef, []SkipRecord)
 			def.Source = source
 			def.SourceDir = dir
 			def.FilePath = path
+
+			if source == SourceProject && opts.TrustStore != nil {
+				if reason := opts.TrustStore.CheckFile(path); reason != "" {
+					skips = append(skips, SkipRecord{File: path, Reason: reason})
+					continue
+				}
+			}
 			defs = append(defs, def)
 		}
 	}

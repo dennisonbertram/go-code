@@ -105,6 +105,8 @@ func dispatch(args []string) int {
 	switch args[0] {
 	case "auth":
 		return runAuth(args[1:])
+	case "hooks":
+		return runHooks(args[1:])
 	case "list":
 		return runList(args[1:])
 	case "runs":
