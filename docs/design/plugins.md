@@ -405,6 +405,64 @@ Unknown fields are rejected. One invalid file never aborts loading — it is
 recorded as a structured skip (file + reason) and surfaced in startup logs and
 the `/hooks` listing.
 
-The command/HTTP wire protocol, trust model, and runtime semantics are
-documented in the sections below as those layers land.
+### Wire protocol (command hooks)
+
+A `command` hook executes its argv once per matching lifecycle event. The
+event arrives as one JSON object on **stdin**; the decision is read as one
+JSON object from **stdout**.
+
+`pre_tool_use` stdin payload:
+
+```json
+{
+  "event": "pre_tool_use",
+  "run_id": "run_...",
+  "hook_name": "deny-rm",
+  "tool_name": "bash",
+  "call_id": "call_...",
+  "args": { "command": "rm -rf /" }
+}
+```
+
+`post_tool_use` adds `"result"` (string), `"duration_ms"` (int), and
+`"error"` (string, empty when the tool succeeded).
+
+The hook replies on **stdout**:
+
+- `pre_tool_use`: `{"decision":"allow"}` (default),
+  `{"decision":"deny","reason":"..."}` blocks the tool and the reason is
+  returned to the LLM as the tool result, or
+  `{"decision":"allow","modified_args":{...}}` replaces the call arguments.
+- `post_tool_use`: `{"modified_result":"..."}` replaces the tool output
+  shown to the LLM.
+
+Semantics:
+
+- Exit 0 with **empty stdout** = allow / no modification.
+- **Non-zero exit, timeout, or unparseable stdout = hook error**, never a
+  deny. The runner's `HookFailureMode` decides: `fail_closed` (default)
+  blocks the tool call, `fail_open` ignores the hook and continues.
+- Every exec is bounded by the hook's timeout (`timeout_seconds`, default
+  10s); on expiry the whole process tree is killed — a hung hook cannot hang
+  a run.
+- Hooks whose `matcher` does not match the event's tool name are not
+  executed at all.
+- Each execution emits runner events (`tool_hook.started/completed/failed`)
+  carrying the hook name, decision, and `duration_ms`; failures additionally
+  log `hook_name`, `event`, `tool_name`, `duration_ms`, `exit_code`, `error`.
+
+Example deny script (`~/.harness/hooks/deny-rm.json` points at it):
+
+```sh
+#!/bin/sh
+# deny destructive rm commands
+payload=$(cat)
+case "$payload" in
+  *"rm -rf"*) echo '{"decision":"deny","reason":"rm -rf is not allowed"}' ;;
+  *)          echo '{"decision":"allow"}' ;;
+esac
+```
+
+The trust model and HTTP transport are documented in the sections below as
+those layers land.
 
