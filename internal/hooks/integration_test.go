@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -300,4 +301,56 @@ func lastRunError(_ *harness.Runner, events []harness.Event) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no run.failed event collected")
+}
+
+// TestHTTPHookErrorHonorsFailureMode covers the runner's failure policy for
+// HTTP adapter errors (non-2xx endpoint), both modes — the transport differs
+// from the command adapter but the policy path must be identical.
+func TestHTTPHookErrorHonorsFailureMode(t *testing.T) {
+	t.Parallel()
+
+	newFailingHTTPHook := func(t *testing.T) *hooks.HTTPHook {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.WriteHeader(http.StatusBadGateway)
+		}))
+		t.Cleanup(srv.Close)
+		return hooks.NewHTTPHook(hooks.HookDef{
+			Name: "broken-http", Event: hooks.EventPreToolUse, Kind: hooks.KindHTTP, URL: srv.URL,
+		})
+	}
+
+	t.Run("fail_closed denies the tool", func(t *testing.T) {
+		t.Parallel()
+		reg, calls := echoRegistry(t)
+		runner := harness.NewRunner(toolCallProvider(), reg, harness.RunnerConfig{
+			DefaultModel:    "m",
+			PreToolUseHooks: []harness.PreToolUseHook{newFailingHTTPHook(t)},
+			HookFailureMode: harness.HookFailureModeFailClosed,
+		})
+		_, status := runWithHook(t, runner)
+		if status != harness.RunStatusCompleted {
+			t.Fatalf("status: got %q, want completed", status)
+		}
+		if calls.Load() != 0 {
+			t.Fatal("fail_closed: tool executed despite HTTP hook error")
+		}
+	})
+
+	t.Run("fail_open lets the tool execute", func(t *testing.T) {
+		t.Parallel()
+		reg, calls := echoRegistry(t)
+		runner := harness.NewRunner(toolCallProvider(), reg, harness.RunnerConfig{
+			DefaultModel:    "m",
+			PreToolUseHooks: []harness.PreToolUseHook{newFailingHTTPHook(t)},
+			HookFailureMode: harness.HookFailureModeFailOpen,
+		})
+		_, status := runWithHook(t, runner)
+		if status != harness.RunStatusCompleted {
+			t.Fatalf("status: got %q, want completed", status)
+		}
+		if calls.Load() != 1 {
+			t.Fatalf("fail_open: tool executed %d times, want 1", calls.Load())
+		}
+	})
 }
