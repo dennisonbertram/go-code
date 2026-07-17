@@ -396,7 +396,7 @@ func TestTUI041_BuiltinCommandsRegistered(t *testing.T) {
 func TestTUI364_RegistryCompleteness(t *testing.T) {
 	// These are the exact built-in slash commands the TUI exposes.
 	knownCommands := []string{
-		"attach", "cancel", "clear", "config", "context", "cost", "doctor", "export", "help", "history", "keys",
+		"attach", "cancel", "clear", "config", "context", "cost", "doctor", "export", "help", "history", "hooks", "keys",
 		"model", "new", "permissions", "profiles", "quit", "replay", "resume", "runs", "search",
 		"sessions", "stats", "subagents",
 	}

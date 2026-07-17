@@ -10,6 +10,7 @@ Command Registry - 80x24
 /export — Export conversation to markdown
 /help — Show help dialog
 /history — Search across stored session metadata
+/hooks — List loaded and skipped lifecycle hooks
 /keys — Manage provider API keys
 /model — Select AI model
 /new — Start a new session (resets conversation)

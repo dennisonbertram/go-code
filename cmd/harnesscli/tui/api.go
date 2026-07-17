@@ -394,6 +394,31 @@ func loadSubagentsCmd(baseURL, apiKey string) tea.Cmd {
 	}
 }
 
+// loadHooksCmd fetches GET /v1/hooks for the /hooks command. The TUI renders
+// server truth only — it never reads hook files from disk.
+func loadHooksCmd(baseURL, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		url := strings.TrimRight(baseURL, "/") + "/v1/hooks"
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, url, nil, apiKey)
+		if err != nil {
+			return HooksLoadFailedMsg{Err: err.Error()}
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return HooksLoadFailedMsg{Err: err.Error()}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return HooksLoadFailedMsg{Err: fmt.Sprintf("server returned %d", resp.StatusCode)}
+		}
+		var payload HooksLoadedMsg
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			return HooksLoadFailedMsg{Err: err.Error()}
+		}
+		return payload
+	}
+}
+
 // providersResponse matches the JSON body returned by GET /v1/providers.
 type providersResponse struct {
 	Providers []struct {

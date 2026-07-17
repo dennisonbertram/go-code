@@ -332,6 +332,7 @@ Registry (`cmd_parser.go:79-194`): clear, context, export, help, keys, model, qu
 | `/quit` | tea.Quit | OK (thin) | `cmd_parser.go:129-136`; `TestBuildCommandRegistry_AllCommandsDispatchable` |
 | `/stats` | stats overlay | OK | `model.go:964-968`; model_init_test.go |
 | `/subagents` | list remote subagents | OK | `model.go:1019-1024`; `TestLoadSubagentsCmdReturnsDecodedSubagents` |
+| `/hooks` | list loaded/skipped lifecycle hooks | OK | `model.go` (executeHooksCommand); `TestLoadHooksCmdDecodes`, `TestFormatHooksLines` |
 | `/profiles` | profile picker | OK | `model.go:1026-1033`; model_init_test.go |
 | `/sessions` | session picker | OK | `model.go:1035-1042`; `TestSS006_SessionsCommandOpensOverlay` |
 | `/new` | reset conversationID | OK | `model.go:1044-1053`; `TestSS005_NewCommandResetsConversationID` |

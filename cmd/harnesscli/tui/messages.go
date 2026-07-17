@@ -161,6 +161,31 @@ type SubagentsLoadedMsg struct{ Subagents []RemoteSubagent }
 
 type SubagentsLoadFailedMsg struct{ Err string }
 
+// HooksLoadedMsg carries the GET /v1/hooks listing for the /hooks command.
+type HooksLoadedMsg struct {
+	Hooks   []hookEntry     `json:"hooks"`
+	Skipped []hookSkipEntry `json:"skipped"`
+}
+
+// HooksLoadFailedMsg reports a failed GET /v1/hooks fetch.
+type HooksLoadFailedMsg struct{ Err string }
+
+// hookEntry is one loaded hook in the /v1/hooks response.
+type hookEntry struct {
+	Name    string `json:"name"`
+	Event   string `json:"event"`
+	Kind    string `json:"kind"`
+	Source  string `json:"source"`
+	Matcher string `json:"matcher"`
+	File    string `json:"file"`
+}
+
+// hookSkipEntry is one skipped hook file in the /v1/hooks response.
+type hookSkipEntry struct {
+	File   string `json:"file"`
+	Reason string `json:"reason"`
+}
+
 // RunsFetchedMsg carries recent run metadata fetched by /runs.
 type RunsFetchedMsg struct {
 	Runs []tuiRunRecord

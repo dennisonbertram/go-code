@@ -167,6 +167,14 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeSubagentsCommand,
 		},
 		{
+			Name:        "hooks",
+			Description: "List loaded and skipped lifecycle hooks",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeHooksCommand,
+		},
+		{
 			Name:        "profiles",
 			Description: "View and select a profile for next run",
 			Handler: func(cmd Command) CommandResult {

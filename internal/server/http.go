@@ -354,6 +354,9 @@ func (s *Server) buildMux() http.Handler {
 	// /v1/tools — enumerate the registered tool catalog (runs:read).
 	mux.Handle("/v1/tools", auth(http.HandlerFunc(s.handleTools)))
 
+	// GET /v1/hooks — config-driven hook listing (epic #737); read scope.
+	mux.Handle("/v1/hooks", auth(read(http.HandlerFunc(s.handleHooks))))
+
 	return s.hardenHandler(mux)
 }
 
