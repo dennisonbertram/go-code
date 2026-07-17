@@ -43,6 +43,8 @@ type CommandHook struct {
 var (
 	_ harness.PreToolUseHook  = (*CommandHook)(nil)
 	_ harness.PostToolUseHook = (*CommandHook)(nil)
+	_ harness.PreMessageHook  = (*CommandHook)(nil)
+	_ harness.PostMessageHook = (*CommandHook)(nil)
 )
 
 // NewCommandHook returns a CommandHook for def. The def must be kind
@@ -72,27 +74,11 @@ func (h *CommandHook) PreToolUse(ctx context.Context, ev harness.PreToolUseEvent
 	if err != nil {
 		return nil, err
 	}
-	if len(stdout) == 0 {
-		return nil, nil // empty stdout: allow, no modification
+	result, err := parsePreToolUseBody(stdout)
+	if err != nil {
+		return nil, h.logError(EventPreToolUse, ev.ToolName, -1, 0, err)
 	}
-
-	var resp preToolUseResponse
-	if err := json.Unmarshal(stdout, &resp); err != nil {
-		return nil, h.logError(EventPreToolUse, ev.ToolName, -1, 0,
-			fmt.Errorf("parse hook stdout as JSON: %w", err))
-	}
-	switch resp.Decision {
-	case "", decisionAllow:
-		if len(resp.ModifiedArgs) > 0 {
-			return &harness.PreToolUseResult{ModifiedArgs: resp.ModifiedArgs}, nil
-		}
-		return nil, nil
-	case decisionDeny:
-		return &harness.PreToolUseResult{Decision: harness.ToolHookDeny, Reason: resp.Reason}, nil
-	default:
-		return nil, h.logError(EventPreToolUse, ev.ToolName, -1, 0,
-			fmt.Errorf("unknown decision %q: must be %q or %q", resp.Decision, decisionAllow, decisionDeny))
-	}
+	return result, nil
 }
 
 // PostToolUse implements harness.PostToolUseHook. A non-matching tool name
@@ -120,19 +106,44 @@ func (h *CommandHook) PostToolUse(ctx context.Context, ev harness.PostToolUseEve
 	if err != nil {
 		return nil, err
 	}
-	if len(stdout) == 0 {
-		return nil, nil
+	result, err := parsePostToolUseBody(stdout)
+	if err != nil {
+		return nil, h.logError(EventPostToolUse, ev.ToolName, -1, 0, err)
 	}
+	return result, nil
+}
 
-	var resp postToolUseResponse
-	if err := json.Unmarshal(stdout, &resp); err != nil {
-		return nil, h.logError(EventPostToolUse, ev.ToolName, -1, 0,
-			fmt.Errorf("parse hook stdout as JSON: %w", err))
+// BeforeMessage implements harness.PreMessageHook.
+func (h *CommandHook) BeforeMessage(ctx context.Context, in harness.PreMessageHookInput) (harness.PreMessageHookResult, error) {
+	payload := buildMessagePayload(EventPreMessage, h.def.Name, messageInput{
+		RunID: in.RunID, Step: in.Step, Request: in.Request,
+	}, h.def.IncludeMessages)
+	stdout, err := h.exec(ctx, EventPreMessage, "", payload)
+	if err != nil {
+		return harness.PreMessageHookResult{}, err
 	}
-	if resp.ModifiedResult == "" {
-		return nil, nil
+	action, reason, err := parseMessageBody(stdout)
+	if err != nil {
+		return harness.PreMessageHookResult{}, h.logError(EventPreMessage, "", -1, 0, err)
 	}
-	return &harness.PostToolUseResult{ModifiedResult: resp.ModifiedResult}, nil
+	return harness.PreMessageHookResult{Action: action, Reason: reason}, nil
+}
+
+// AfterMessage implements harness.PostMessageHook.
+func (h *CommandHook) AfterMessage(ctx context.Context, in harness.PostMessageHookInput) (harness.PostMessageHookResult, error) {
+	payload := buildMessagePayload(EventPostMessage, h.def.Name, messageInput{
+		RunID: in.RunID, Step: in.Step, Request: in.Request,
+		ResponseText: in.Response.Content, ToolCallCount: len(in.ToolCalls),
+	}, h.def.IncludeMessages)
+	stdout, err := h.exec(ctx, EventPostMessage, "", payload)
+	if err != nil {
+		return harness.PostMessageHookResult{}, err
+	}
+	action, reason, err := parseMessageBody(stdout)
+	if err != nil {
+		return harness.PostMessageHookResult{}, h.logError(EventPostMessage, "", -1, 0, err)
+	}
+	return harness.PostMessageHookResult{Action: action, Reason: reason}, nil
 }
 
 // exec runs the hook command with payload JSON on stdin and returns trimmed

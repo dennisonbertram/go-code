@@ -3,6 +3,9 @@ package hooks_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,4 +239,65 @@ func TestCommandHookDenyReasonReachesLLM(t *testing.T) {
 	if !strings.Contains(toolMsg.Content, "policy: no deletes") {
 		t.Fatalf("deny reason not visible to LLM; tool message: %q", toolMsg.Content)
 	}
+}
+
+// TestHTTPHookPreMessageBlocksRun is the harness-level integration test for
+// message events: an HTTP pre_message hook that blocks stops the run with
+// the hook reason (regression coverage for applyPreHooks).
+func TestHTTPHookPreMessageBlocksRun(t *testing.T) {
+	t.Parallel()
+	srv := newBlockServer(t, `{"action":"block","reason":"content policy"}`)
+	hook := hooks.NewHTTPHook(hooks.HookDef{
+		Name: "content-guard", Event: hooks.EventPreMessage, Kind: hooks.KindHTTP, URL: srv,
+	})
+
+	reg, calls := echoRegistry(t)
+	runner := harness.NewRunner(toolCallProvider(), reg, harness.RunnerConfig{
+		DefaultModel:    "m",
+		PreMessageHooks: []harness.PreMessageHook{hook},
+	})
+
+	events, status := runWithHook(t, runner)
+	if status != harness.RunStatusFailed {
+		t.Fatalf("status: got %q, want failed (blocked run)", status)
+	}
+	if calls.Load() != 0 {
+		t.Fatal("tool executed despite pre_message block")
+	}
+
+	run, err := lastRunError(runner, events)
+	if err != nil {
+		t.Fatalf("could not read run error: %v", err)
+	}
+	if !strings.Contains(run, "content policy") {
+		t.Fatalf("run error missing hook reason: %q", run)
+	}
+}
+
+// newBlockServer starts an httptest server that always responds 200 with the
+// given body and returns its URL.
+func newBlockServer(t *testing.T, body string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// lastRunError extracts the run error message from the run.failed event.
+func lastRunError(_ *harness.Runner, events []harness.Event) (string, error) {
+	for _, ev := range events {
+		if ev.Type == harness.EventRunFailed {
+			if msg, ok := ev.Payload["error"].(string); ok {
+				return msg, nil
+			}
+			if msg, ok := ev.Payload["reason"].(string); ok {
+				return msg, nil
+			}
+			return "", fmt.Errorf("run.failed event has no error field: %v", ev.Payload)
+		}
+	}
+	return "", fmt.Errorf("no run.failed event collected")
 }

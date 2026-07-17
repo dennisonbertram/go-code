@@ -463,6 +463,37 @@ case "$payload" in
 esac
 ```
 
-The trust model and HTTP transport are documented in the sections below as
-those layers land.
+The trust model is documented in the section below as that layer lands.
+
+### Wire protocol (HTTP hooks)
+
+An `http` hook POSTs the same JSON event payload to its `url` with
+`Content-Type: application/json` and reads the same decision JSON from the
+response body:
+
+- **2xx with a decision body** = the decision.
+- **2xx with an empty body** = allow / no-op.
+- **Non-2xx, network error, timeout, or unparseable body = hook error** —
+  the runner's `HookFailureMode` decides the outcome, exactly like command
+  hook failures. A hook-endpoint outage is therefore distinguishable from an
+  explicit deny (error vs decision) in both logs and run events.
+- Requests are bounded by the hook's `timeout_seconds` (default 10s) and
+  response bodies are capped at 1 MiB.
+- Retries, custom auth headers, and mTLS are **not supported** in this
+  iteration — put a local relay in front of endpoints that need them.
+
+### Message events (pre_message / post_message)
+
+Both transports also serve the two message events. The payload carries
+`event`, `run_id`, `hook_name`, `step`, `model`, and `message_count`;
+`post_message` adds `response_text` and `tool_call_count`. Full `messages`
+are included **only** when the hook file sets `"include_messages": true`
+(payload-size guard — hooks that only need counts never see prompt content).
+
+The reply is `{"action":"continue"}` (default) or
+`{"action":"block","reason":"..."}` — a block on `pre_message` stops the
+run before the provider call; a block on `post_message` stops it before the
+tool calls execute. **Mutation of message requests/responses via config
+hooks is not supported** — action + reason only (use a compiled-in plugin
+for mutation).
 

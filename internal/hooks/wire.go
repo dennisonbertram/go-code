@@ -1,6 +1,12 @@
 package hooks
 
-import "encoding/json"
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+
+	"go-agent-harness/internal/harness"
+)
 
 // Wire types for the JSON protocol between the harness and config-driven
 // hooks. They are defined exactly once here and shared verbatim by the
@@ -86,4 +92,101 @@ func normalizeArgs(args json.RawMessage) json.RawMessage {
 		return json.RawMessage(`{}`)
 	}
 	return args
+}
+
+// buildMessagePayload constructs the wire payload for pre_message and
+// post_message events. Full messages are included only when includeMessages
+// is set on the def (payload-size guard); response fields are populated only
+// for post_message.
+func buildMessagePayload(event, hookName string, in messageInput, includeMessages bool) messagePayload {
+	payload := messagePayload{
+		Event:         event,
+		RunID:         in.RunID,
+		HookName:      hookName,
+		Step:          in.Step,
+		Model:         in.Request.Model,
+		MessageCount:  len(in.Request.Messages),
+		ResponseText:  in.ResponseText,
+		ToolCallCount: in.ToolCallCount,
+	}
+	if includeMessages {
+		payload.Messages = make([]json.RawMessage, 0, len(in.Request.Messages))
+		for _, m := range in.Request.Messages {
+			if raw, err := json.Marshal(m); err == nil {
+				payload.Messages = append(payload.Messages, raw)
+			}
+		}
+	}
+	return payload
+}
+
+// messageInput is the adapter-internal union of PreMessageHookInput and
+// PostMessageHookInput fields needed for the wire payload.
+type messageInput struct {
+	RunID         string
+	Step          int
+	Request       harness.CompletionRequest
+	ResponseText  string
+	ToolCallCount int
+}
+
+// parsePreToolUseBody parses a pre_tool_use hook response body shared by the
+// command and HTTP adapters. Empty body means allow with no modification.
+func parsePreToolUseBody(body []byte) (*harness.PreToolUseResult, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, nil
+	}
+	var resp preToolUseResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parse hook response as JSON: %w", err)
+	}
+	switch resp.Decision {
+	case "", decisionAllow:
+		if len(resp.ModifiedArgs) > 0 {
+			return &harness.PreToolUseResult{ModifiedArgs: resp.ModifiedArgs}, nil
+		}
+		return nil, nil
+	case decisionDeny:
+		return &harness.PreToolUseResult{Decision: harness.ToolHookDeny, Reason: resp.Reason}, nil
+	default:
+		return nil, fmt.Errorf("unknown decision %q: must be %q or %q", resp.Decision, decisionAllow, decisionDeny)
+	}
+}
+
+// parsePostToolUseBody parses a post_tool_use hook response body shared by
+// the command and HTTP adapters.
+func parsePostToolUseBody(body []byte) (*harness.PostToolUseResult, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return nil, nil
+	}
+	var resp postToolUseResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("parse hook response as JSON: %w", err)
+	}
+	if resp.ModifiedResult == "" {
+		return nil, nil
+	}
+	return &harness.PostToolUseResult{ModifiedResult: resp.ModifiedResult}, nil
+}
+
+// parseMessageBody parses a pre_message/post_message hook response body
+// shared by the command and HTTP adapters. Empty body means continue.
+// Mutation of message requests/responses via config hooks is not supported —
+// action + reason only.
+func parseMessageBody(body []byte) (harness.HookAction, string, error) {
+	if len(bytes.TrimSpace(body)) == 0 {
+		return harness.HookActionContinue, "", nil
+	}
+	var resp messageResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return "", "", fmt.Errorf("parse hook response as JSON: %w", err)
+	}
+	switch resp.Action {
+	case "", actionContinue:
+		return harness.HookActionContinue, "", nil
+	case actionBlock:
+		return harness.HookActionBlock, resp.Reason, nil
+	default:
+		return "", "", fmt.Errorf("unknown action %q: must be %q or %q", resp.Action, actionContinue, actionBlock)
+	}
 }
