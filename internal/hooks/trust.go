@@ -42,6 +42,14 @@ type trustStoreFile struct {
 	Trusted map[string]trustRecord `json:"trusted"`
 }
 
+// EmptyTrustStore returns an in-memory store with no records and no backing
+// file: every project hook reports untrusted (fail closed). Trust/Revoke on
+// it fail — there is nowhere to persist. Used when the real store cannot be
+// read and startup must continue with project hooks disabled.
+func EmptyTrustStore() *TrustStore {
+	return &TrustStore{records: map[string]trustRecord{}}
+}
+
 // LoadTrustStore reads the store at path. A missing or corrupt file yields
 // an empty store (never fatal) — a lost trust store fails closed: every
 // project hook simply requires re-trusting.
@@ -133,6 +141,9 @@ type TrustedFile struct {
 
 // saveLocked persists the store via write-temp-then-rename. Caller holds mu.
 func (s *TrustStore) saveLocked() error {
+	if s.path == "" {
+		return fmt.Errorf("trust store has no backing file (empty in-memory store)")
+	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
 		return fmt.Errorf("create trust store dir: %w", err)
 	}

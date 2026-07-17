@@ -528,3 +528,65 @@ tool calls execute. **Mutation of message requests/responses via config
 hooks is not supported** — action + reason only (use a compiled-in plugin
 for mutation).
 
+
+### Runtime semantics (startup wiring)
+
+At `harnessd` startup, when `[hooks] enabled` is true (the default), the
+daemon loads hook files trust-aware from `~/.harness/hooks/`,
+`<workspace>/.harness/hooks/`, and any `[hooks] dirs`, builds one adapter per
+definition, and appends them to the same `RunnerConfig` hook slices used by
+compiled-in plugins. **Compiled-in plugins register first** (e.g.
+conclusion-watcher), config-driven hooks after — hook execution order is
+slice order.
+
+Startup logs name every loaded hook (`hook_name`, `event`, `kind`, `source`,
+`file`) and every skipped file (`hook_file`, `skip_reason`), so "why didn't
+my hook fire?" is answerable from startup logs alone. The same summary backs
+`GET /v1/hooks` and the TUI `/hooks` command.
+
+Hook errors during a run honor the runner's existing `HookFailureMode`
+(fail-closed by default): adapters only return errors and decisions; the
+runner applies policy once, at its existing hook call sites. A config-hook
+deny is attributable in the SSE stream via the existing
+`tool_hook.completed` event (hook name, decision, reason, `duration_ms`) —
+no new event types were needed.
+
+**Reload limitation**: hook files are read once at startup. Restart
+`harnessd` after adding, editing, or trusting hook files.
+
+### End-to-end example
+
+```sh
+# 1. Write the hook script (deny destructive rm via bash tool)
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/deny-rm.sh <<'SH'
+#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *"rm -rf"*) echo '{"decision":"deny","reason":"rm -rf is not allowed"}' ;;
+  *)          echo '{"decision":"allow"}' ;;
+esac
+SH
+chmod +x ~/.local/bin/deny-rm.sh
+
+# 2. Register it as a project hook for pre_tool_use on the bash tool.
+#    Hook argv is exec'd directly — no shell expansion — so use absolute paths.
+mkdir -p .harness/hooks
+cat > .harness/hooks/deny-rm.json <<JSON
+{
+  "name": "deny-rm",
+  "event": "pre_tool_use",
+  "kind": "command",
+  "command": ["$HOME/.local/bin/deny-rm.sh"],
+  "matcher": "bash"
+}
+JSON
+
+# 3. Trust it (project hooks never run untrusted)
+harnesscli hooks trust .harness/hooks/deny-rm.json
+
+# 4. Restart harnessd, then run — a `rm -rf` bash call is denied and the LLM
+#    sees "rm -rf is not allowed" as the tool result.
+
+# 5. Inspect what loaded: GET /v1/hooks, or /hooks in the TUI.
+```

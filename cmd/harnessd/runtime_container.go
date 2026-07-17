@@ -11,6 +11,7 @@ import (
 	"go-agent-harness/internal/harness"
 	htools "go-agent-harness/internal/harness/tools"
 	"go-agent-harness/internal/harness/tools/deferred"
+	"go-agent-harness/internal/hooks"
 	"go-agent-harness/internal/mcpserver"
 	"go-agent-harness/internal/networks"
 	"go-agent-harness/internal/provider/catalog"
@@ -83,6 +84,7 @@ type httpRuntimeOptions struct {
 	callbackBridge       *harness.CallbackEventBridge
 	msgSummarizer        *lazySummarizer
 	skillManager         server.SkillManager
+	hooksSummary         hooks.Summary
 	subagentBaseRef      string
 	subagentWorktreeRoot string
 	subagentConfigTOML   string
@@ -188,6 +190,7 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		todos:            opts.todos,
 		triggers:         opts.triggers,
 		rolloutDir:       opts.runnerCfg.RolloutDir,
+		hooksSummary:     opts.hooksSummary,
 	}))
 
 	// Mount the MCP server at /mcp so external MCP clients can drive the harness.
