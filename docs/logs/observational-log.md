@@ -2,6 +2,13 @@
 
 Use this file for observations about system behavior without immediately prescribing code changes.
 
+## 2026-06-28 (Config-Driven Hooks Epic #737)
+
+- Security observation: the trust boundary that matters is directory ownership, not file content. Any directory a project can influence (its own `.harness/hooks/`, plus extra `[hooks] dirs` that could be named by a project-level config) must classify as trust-required; only the user-global dir can be implicit-trust. Classifying extra dirs as project-level closed an injection path where a malicious repo config names its own "trusted" directory.
+- Testing observation: process-timeline tests (exec a script, wait for timeout, assert kill) have two independent flake axes — reaping lag (fix: poll for death) and startup lag under suite contention (fix: coordinate pid discovery before the timeout budget). Tests that assert on real PIDs need both handled explicitly.
+- Testing observation: Go's `net/http` server only propagates client disconnect into `r.Context().Done()` after the handler consumes the request body; a timeout-test handler that blocks without reading the body hangs until its backstop, which looked like a 30s "slow suite" but was actually a protocol-semantics bug in the test.
+- API-shape observation: computing the `/v1/hooks` listing once at startup (rather than re-discovering per request) guarantees the listing can never disagree with what the runner actually registered — the summary is the registration record, not a second query of the filesystem.
+
 ## 2026-06-26
 
 - Eval observation: the useful boundary is adapter facts versus oracle facts. The harness can report run status, tokens, cost, tools, and logs, but Terminal-Bench must remain the only source for task pass/fail.

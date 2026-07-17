@@ -252,3 +252,32 @@ func TestLoad_TrustIntegration(t *testing.T) {
 		t.Fatalf("skips: %+v", skips)
 	}
 }
+
+// TestEmptyTrustStore_FailsClosed covers the in-memory fail-closed store used
+// when the on-disk store is unreadable: everything reports untrusted, and
+// mutation attempts fail because there is no backing file.
+func TestEmptyTrustStore_FailsClosed(t *testing.T) {
+	t.Parallel()
+	store := EmptyTrustStore()
+
+	projectDir := t.TempDir()
+	hookPath := writeHookFile(t, projectDir, "hook.json", validHookJSON)
+
+	if reason := store.CheckFile(hookPath); reason != SkipReasonUntrusted {
+		t.Fatalf("empty store: got %q, want %q", reason, SkipReasonUntrusted)
+	}
+	defs, skips := LoadWithOptions(LoadOptions{TrustStore: store}, projectDir)
+	if len(defs) != 0 || len(skips) != 1 || skips[0].Reason != SkipReasonUntrusted {
+		t.Fatalf("defs=%+v skips=%+v, want load blocked", defs, skips)
+	}
+
+	if err := store.Trust(hookPath); err == nil {
+		t.Fatal("Trust on a backing-file-less store must fail")
+	}
+	if err := store.Revoke(hookPath); err == nil {
+		t.Fatal("Revoke on a backing-file-less store must fail")
+	}
+	if got := store.List(); len(got) != 0 {
+		t.Fatalf("List: got %+v, want empty", got)
+	}
+}
