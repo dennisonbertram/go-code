@@ -16,6 +16,7 @@ func runCommandOnce(ctx context.Context, timeout time.Duration, command string, 
 	defer cancel()
 
 	cmd := exec.CommandContext(ctxTimeout, command, args...)
+	configureGroupKill(cmd)
 	stdout := newHeadTailBuffer(defaultMaxCommandOutputBytes)
 	stderr := newHeadTailBuffer(defaultMaxCommandOutputBytes)
 	cmd.Stdout = stdout
@@ -27,6 +28,10 @@ func runCommandOnce(ctx context.Context, timeout time.Duration, command string, 
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
+		} else if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+			// The process exited normally but a descendant kept the pipes
+			// open past WaitDelay; preserve the real exit code (#786).
+			exitCode = cmd.ProcessState.ExitCode()
 		} else {
 			exitCode = -1
 		}

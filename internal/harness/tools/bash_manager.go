@@ -109,6 +109,7 @@ func (m *JobManager) runForeground(ctx context.Context, command string, timeoutS
 		return nil, err
 	}
 	defer sandboxCleanup()
+	configureGroupKill(cmd)
 	cmd.Dir = workDir
 
 	streamer, hasStreamer := OutputStreamerFromContext(ctx)
@@ -163,6 +164,10 @@ func (m *JobManager) runForeground(ctx context.Context, command string, timeoutS
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
 			exitCode = exitErr.ExitCode()
+		} else if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+			// The process exited normally but a descendant kept the pipes
+			// open past WaitDelay; preserve the real exit code (#786).
+			exitCode = cmd.ProcessState.ExitCode()
 		} else {
 			exitCode = -1
 		}
@@ -251,6 +256,7 @@ func (m *JobManager) runBackground(ctx context.Context, command string, timeoutS
 		m.wg.Done()
 		return nil, err
 	}
+	configureGroupKill(cmd)
 	cmd.Dir = workDir
 	cmd.Stdout = job.stdout
 	cmd.Stderr = job.stderr
@@ -274,6 +280,10 @@ func (m *JobManager) runBackground(ctx context.Context, command string, timeoutS
 			var exitErr *exec.ExitError
 			if errors.As(err, &exitErr) {
 				job.exitCode = exitErr.ExitCode()
+			} else if errors.Is(err, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Exited() {
+				// The process exited normally but a descendant kept the
+				// pipes open past WaitDelay; preserve the real exit code (#786).
+				job.exitCode = cmd.ProcessState.ExitCode()
 			} else {
 				job.exitCode = -1
 			}
