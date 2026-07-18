@@ -12,8 +12,12 @@ import (
 )
 
 // StartSubagentTool returns a deferred tool that starts a profile-based subagent
-// and returns immediately with the subagent identifier.
-func StartSubagentTool(manager tools.SubagentManager, profilesDir string) tools.Tool {
+// and returns immediately with the subagent identifier. tracker may be nil;
+// when set, it is used to co-activate the rest of the subagent-lifecycle tool
+// family (get_subagent, wait_subagent, cancel_subagent, message_subagent) for
+// the calling run the moment a subagent is actually spawned — see the handler
+// below for why.
+func StartSubagentTool(manager tools.SubagentManager, profilesDir string, tracker tools.ActivationTrackerInterface) tools.Tool {
 	def := tools.Definition{
 		Name:         "start_subagent",
 		Description:  descriptions.Load("start_subagent"),
@@ -41,6 +45,11 @@ func StartSubagentTool(manager tools.SubagentManager, profilesDir string) tools.
 					"type":        "integer",
 					"description": "Optional step override for this call. Defaults to the profile's max_steps.",
 				},
+				"allowed_tools": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Optional list of tool names to restrict the subagent to (e.g. [\"notify_parent\", \"bash\"]). Defaults to the profile's own tool set (the \"full\" profile grants every tool) — set this to give the subagent only what it needs for its task.",
+				},
 			},
 			"required": []string{"task"},
 		},
@@ -58,6 +67,18 @@ func StartSubagentTool(manager tools.SubagentManager, profilesDir string) tools.
 		item, err := manager.Start(ctx, req)
 		if err != nil {
 			return "", fmt.Errorf("start_subagent: subagent failed to start: %w", err)
+		}
+
+		// A caller that can spawn a subagent needs the rest of the lifecycle
+		// family immediately, not whatever find_tool's keyword ranking
+		// happened to surface — observed live: a parent that found only
+		// start_subagent (missing wait_subagent/get_subagent) had no way to
+		// check on what it spawned, and just kept spawning duplicates until
+		// it ran out of steps.
+		if tracker != nil {
+			if runID := tools.RunIDFromContext(ctx); runID != "" {
+				tracker.Activate(runID, "get_subagent", "wait_subagent", "cancel_subagent", "message_subagent")
+			}
 		}
 
 		return tools.MarshalToolResult(map[string]any{

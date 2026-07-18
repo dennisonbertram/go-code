@@ -767,6 +767,21 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 		}
 	}
 
+	// Subagents (runs with a recorded parent) default to the "subagent" agent
+	// intent — a headless-worker framing (no human present, execute the
+	// parent's instructions literally, call tools directly rather than
+	// improvising an alternative) — unless the caller already chose an
+	// explicit AgentIntent, or a full SystemPrompt override applies instead
+	// (e.g. a profile's own system_prompt, which always wins in
+	// resolveSystemPrompt regardless of AgentIntent). This targets the
+	// failure mode observed in live testing: subagents on the unrestricted
+	// "full" profile (empty SystemPrompt) inventing fake HTTP calls or
+	// writing source files instead of calling an available tool directly.
+	if req.ParentContextHandoff != nil && strings.TrimSpace(req.ParentContextHandoff.ParentRunID) != "" &&
+		strings.TrimSpace(req.AgentIntent) == "" && strings.TrimSpace(req.SystemPrompt) == "" {
+		req.AgentIntent = "subagent"
+	}
+
 	model := req.Model
 	if model == "" {
 		model = r.config.DefaultModel
@@ -805,6 +820,17 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 	run.ConversationID = strings.TrimSpace(req.ConversationID)
 	if run.ConversationID == "" {
 		run.ConversationID = run.ID
+	}
+
+	// notify_parent is a key subagent-to-parent communication primitive, not
+	// a rarely-used capability — requiring find_tool discovery for it meant
+	// models often never found it and hallucinated alternatives instead
+	// (observed in live testing). Any run with a recorded parent (i.e. it was
+	// spawned as a subagent, per ParentContextHandoff) gets it pre-activated
+	// so it's visible from turn one, without becoming visible to top-level
+	// runs that have no parent to notify.
+	if req.ParentContextHandoff != nil && strings.TrimSpace(req.ParentContextHandoff.ParentRunID) != "" {
+		r.activations.Activate(run.ID, "notify_parent")
 	}
 
 	// Validate caller-supplied ConversationID against tenant/agent ownership.

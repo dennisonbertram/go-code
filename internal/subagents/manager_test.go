@@ -252,3 +252,87 @@ func TestManagerCancelActiveSubagent(t *testing.T) {
 		t.Fatalf("Status after Cancel = %q, want %q", updated.Status, harness.RunStatusCancelled)
 	}
 }
+
+// TestManagerGetResolvesByRunIDToo covers a real, repeatedly-observed model
+// confusion: start_subagent's response carries both `subagent_id` and
+// `run_id` (two similar-looking UUIDs), and models frequently pass the run_id
+// to get_subagent/wait_subagent/cancel_subagent/message_subagent instead of
+// the subagent_id. Before this fix, that returned ErrNotFound outright — live
+// testing showed a parent repeatedly re-spawning a new subagent instead of
+// realizing it just used the wrong id, looping until it ran out of steps.
+func TestManagerGetResolvesByRunIDToo(t *testing.T) {
+	t.Parallel()
+
+	inlineRunner := newTestRunner(t.TempDir(), "inline done")
+	mgr, err := NewManager(Options{InlineRunner: inlineRunner})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	item, err := mgr.Create(context.Background(), Request{Prompt: "hello"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if item.RunID == "" || item.RunID == item.ID {
+		t.Fatalf("expected a distinct, non-empty RunID, got %q (ID=%q)", item.RunID, item.ID)
+	}
+
+	byRunID, err := mgr.Get(context.Background(), item.RunID)
+	if err != nil {
+		t.Fatalf("Get(RunID): %v", err)
+	}
+	if byRunID.ID != item.ID {
+		t.Fatalf("Get(RunID).ID = %q, want %q", byRunID.ID, item.ID)
+	}
+}
+
+func TestManagerCancelResolvesByRunIDToo(t *testing.T) {
+	t.Parallel()
+
+	engine := &statefulRunEngine{status: harness.RunStatusRunning}
+	mgr, err := NewManager(Options{InlineRunner: engine})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	item, err := mgr.Create(context.Background(), Request{Prompt: "cancel me"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	if err := mgr.Cancel(context.Background(), item.RunID); err != nil {
+		t.Fatalf("Cancel(RunID): %v", err)
+	}
+	if engine.cancelCallCount != 1 {
+		t.Fatalf("CancelRun call count = %d, want 1", engine.cancelCallCount)
+	}
+}
+
+func TestManagerDeleteResolvesByRunIDTooAndFullyRemovesTheEntry(t *testing.T) {
+	t.Parallel()
+
+	inlineRunner := newTestRunner(t.TempDir(), "inline done")
+	mgr, err := NewManager(Options{InlineRunner: inlineRunner})
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	item, err := mgr.Create(context.Background(), Request{Prompt: "hello"})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	waitForTerminal(t, mgr, item.ID)
+
+	if err := mgr.Delete(context.Background(), item.RunID); err != nil {
+		t.Fatalf("Delete(RunID): %v", err)
+	}
+	// The entry must be gone under BOTH keys — a delete keyed on the raw
+	// input (the run ID) rather than the resolved canonical subagent ID would
+	// silently no-op and leave it reachable by ID.
+	if _, err := mgr.Get(context.Background(), item.ID); err != ErrNotFound {
+		t.Fatalf("Get(ID) after Delete(RunID) error = %v, want ErrNotFound", err)
+	}
+	if _, err := mgr.Get(context.Background(), item.RunID); err != ErrNotFound {
+		t.Fatalf("Get(RunID) after Delete(RunID) error = %v, want ErrNotFound", err)
+	}
+}

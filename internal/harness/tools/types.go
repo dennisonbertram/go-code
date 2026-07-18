@@ -471,6 +471,23 @@ type SubagentManager interface {
 	Cancel(ctx context.Context, id string) error
 }
 
+// RunSteerer lets a tool inject a follow-up message into another live run's
+// conversation, or look up the parent run recorded (via ParentContextHandoff)
+// for a given run ID. It is implemented by an object that forwards to the
+// *harness.Runner owning both runs; it lives here (rather than importing
+// harness directly) to avoid the same import cycle SubagentManager avoids.
+type RunSteerer interface {
+	// SteerRun injects message into the conversation of the run identified by
+	// runID. The target run must be running or waiting for user input; the
+	// returned error surfaces the underlying reason otherwise (not found, not
+	// active, or steering buffer full).
+	SteerRun(runID, message string) error
+	// ParentRunID returns the parent run ID recorded for runID (populated
+	// from BuildParentContextHandoffFromContext when the run was spawned as a
+	// subagent), and whether one was recorded at all.
+	ParentRunID(runID string) (string, bool)
+}
+
 // SkillInfo holds read-only skill metadata for the tool layer.
 type SkillInfo struct {
 	Name         string   `json:"name"`

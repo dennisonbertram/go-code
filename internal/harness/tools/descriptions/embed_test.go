@@ -226,6 +226,8 @@ func TestEmbeddedFSAndKnownListAreInSync(t *testing.T) {
 		"lsp_references":          true,
 		"lsp_restart":             true,
 		"manage_skill_packs":      true,
+		"message_subagent":        true,
+		"notify_parent":           true,
 		"observational_memory":    true,
 		"read":                    true,
 		"read_mcp_resource":       true,

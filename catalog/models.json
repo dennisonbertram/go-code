@@ -404,6 +404,32 @@
         "llama-70b": "llama-3.3-70b-versatile"
       }
     },
+    "cerebras": {
+      "display_name": "Cerebras",
+      "base_url": "https://api.cerebras.ai/v1",
+      "api_key_env": "CEREBRAS_API_KEY",
+      "protocol": "openai_compat",
+      "quirks": [
+        "speed_optimized"
+      ],
+      "models": {
+        "gpt-oss-120b": {
+          "display_name": "GPT-OSS 120B (Cerebras)",
+          "description": "OpenAI's open-weight gpt-oss-120b model served on Cerebras wafer-scale inference. Verified reachable via GET /v1/models on the Cerebras API.",
+          "context_window": 131072,
+          "modalities": [
+            "text"
+          ],
+          "tool_calling": true,
+          "streaming": true,
+          "strengths": [
+            "speed",
+            "open-source"
+          ],
+          "speed_tier": "ultra-fast"
+        }
+      }
+    },
     "xai": {
       "display_name": "xAI (Grok)",
       "base_url": "https://api.x.ai/v1",
