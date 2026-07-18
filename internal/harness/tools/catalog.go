@@ -109,21 +109,26 @@ func BuildCatalog(opts BuildOptions) ([]Tool, error) {
 		)
 	}
 
+	for i := range tools {
+		tools[i].Handler = applyPolicy(tools[i].Definition, opts.ApprovalMode, opts.Policy, tools[i].Handler)
+	}
+
 	if opts.EnableRecipes {
 		recipes, err := recipe.LoadRecipes(opts.RecipesDir)
 		if err != nil {
 			return nil, err
 		}
 		if len(recipes) > 0 {
-			// Build a HandlerMap from the current tool catalog so recipe steps
-			// can dispatch to any already-registered tool.
+			// Build a HandlerMap from the policy-wrapped tool catalog so every
+			// recipe step is subject to the same approval-mode and policy
+			// checks as a direct tool invocation (issue #788).
 			handlers := buildHandlerMap(tools)
-			tools = append(tools, runRecipeTool(handlers, recipes))
+			recipeTool := runRecipeTool(handlers, recipes)
+			// The recipe tool is appended after the wrap loop above, so wrap
+			// it individually.
+			recipeTool.Handler = applyPolicy(recipeTool.Definition, opts.ApprovalMode, opts.Policy, recipeTool.Handler)
+			tools = append(tools, recipeTool)
 		}
-	}
-
-	for i := range tools {
-		tools[i].Handler = applyPolicy(tools[i].Definition, opts.ApprovalMode, opts.Policy, tools[i].Handler)
 	}
 
 	sort.SliceStable(tools, func(i, j int) bool {

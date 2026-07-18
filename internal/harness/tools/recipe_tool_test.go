@@ -3,6 +3,7 @@ package tools_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -297,5 +298,136 @@ func TestBuildCatalog_RecipeLoadError(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected BuildCatalog to return error for malformed recipe, got nil")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// run_recipe policy enforcement (issue #788)
+// ---------------------------------------------------------------------------
+
+// denyBashPolicy denies the bash tool and allows everything else.
+type denyBashPolicy struct{}
+
+func (denyBashPolicy) Allow(_ context.Context, in tools.PolicyInput) (tools.PolicyDecision, error) {
+	if in.ToolName == "bash" {
+		return tools.PolicyDecision{Allow: false, Reason: "bash denied by test policy"}, nil
+	}
+	return tools.PolicyDecision{Allow: true, Reason: "ok"}, nil
+}
+
+// allowAllPolicy allows every tool call.
+type allowAllPolicy struct{}
+
+func (allowAllPolicy) Allow(_ context.Context, _ tools.PolicyInput) (tools.PolicyDecision, error) {
+	return tools.PolicyDecision{Allow: true, Reason: "ok"}, nil
+}
+
+// TestRunRecipeTool_PolicyAppliesToSteps is the regression test for issue
+// #788: the recipe HandlerMap must snapshot policy-wrapped handlers so a
+// recipe step is subject to the same policy checks as a direct invocation.
+// applyPolicy reports a denial as a marshaled JSON result (not a Go error),
+// so the assertions are on output content and absent side effects.
+func TestRunRecipeTool_PolicyAppliesToSteps(t *testing.T) {
+	ws := t.TempDir()
+	dir := t.TempDir()
+	pwned := filepath.Join(ws, "pwned")
+	writeRecipeFile(t, dir, "pwn.yaml", fmt.Sprintf(`
+name: pwn
+description: "Attempt to create a file via a bash step"
+steps:
+  - name: s1
+    tool: bash
+    args:
+      command: "touch '%s'"
+`, pwned))
+
+	cat, err := tools.BuildCatalog(tools.BuildOptions{
+		WorkspaceRoot: ws,
+		ApprovalMode:  tools.ApprovalModePermissions,
+		Policy:        denyBashPolicy{},
+		EnableRecipes: true,
+		RecipesDir:    dir,
+	})
+	if err != nil {
+		t.Fatalf("BuildCatalog: %v", err)
+	}
+
+	ctx := context.WithValue(context.Background(), tools.ContextKeyRunID, "test-run")
+
+	// Sanity: a direct bash invocation through the same catalog is denied.
+	// This proves the policy machinery itself is wired correctly, so a
+	// failure below can only mean the recipe path bypasses it.
+	bashTool, ok := findToolInCatalog(cat, "bash")
+	if !ok {
+		t.Fatal("bash not found in catalog")
+	}
+	directPwned := filepath.Join(ws, "pwned_direct")
+	directArgs, _ := json.Marshal(map[string]any{"command": "touch '" + directPwned + "'"})
+	directOut, err := bashTool.Handler(ctx, directArgs)
+	if err != nil {
+		t.Fatalf("direct bash: unexpected Go error (denial is a marshaled result): %v", err)
+	}
+	if !strings.Contains(directOut, "permission_denied") {
+		t.Fatalf("expected direct bash denial to contain permission_denied, got %q", directOut)
+	}
+	if _, statErr := os.Stat(directPwned); !os.IsNotExist(statErr) {
+		t.Fatalf("expected %s to not exist after denied direct bash call", directPwned)
+	}
+
+	tool, ok := findToolInCatalog(cat, "run_recipe")
+	if !ok {
+		t.Fatal("run_recipe not found in catalog")
+	}
+	args, _ := json.Marshal(map[string]any{"name": "pwn"})
+	out, err := tool.Handler(ctx, args)
+	if err != nil {
+		t.Fatalf("run_recipe: unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "permission_denied") {
+		t.Errorf("expected recipe step denial to contain permission_denied, got %q", out)
+	}
+	if _, statErr := os.Stat(pwned); !os.IsNotExist(statErr) {
+		t.Errorf("expected %s to not exist (policy-denied recipe step must not execute)", pwned)
+	}
+}
+
+// TestRunRecipeTool_PolicyAllowsSteps is the positive control: under an
+// allow-all policy the same recipe step executes normally.
+func TestRunRecipeTool_PolicyAllowsSteps(t *testing.T) {
+	ws := t.TempDir()
+	dir := t.TempDir()
+	created := filepath.Join(ws, "created")
+	writeRecipeFile(t, dir, "mk.yaml", fmt.Sprintf(`
+name: mk
+description: "Create a file via a bash step"
+steps:
+  - name: s1
+    tool: bash
+    args:
+      command: "touch '%s'"
+`, created))
+
+	cat, err := tools.BuildCatalog(tools.BuildOptions{
+		WorkspaceRoot: ws,
+		ApprovalMode:  tools.ApprovalModePermissions,
+		Policy:        allowAllPolicy{},
+		EnableRecipes: true,
+		RecipesDir:    dir,
+	})
+	if err != nil {
+		t.Fatalf("BuildCatalog: %v", err)
+	}
+
+	tool, ok := findToolInCatalog(cat, "run_recipe")
+	if !ok {
+		t.Fatal("run_recipe not found in catalog")
+	}
+	args, _ := json.Marshal(map[string]any{"name": "mk"})
+	ctx := context.WithValue(context.Background(), tools.ContextKeyRunID, "test-run")
+	if _, err := tool.Handler(ctx, args); err != nil {
+		t.Fatalf("run_recipe: unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(created); statErr != nil {
+		t.Errorf("expected %s to exist (policy-allowed recipe step should execute): %v", created, statErr)
 	}
 }

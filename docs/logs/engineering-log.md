@@ -1457,3 +1457,16 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
   - `go test ./cmd/harnessd -count=1 -run 'TestSubagentRunnerHandoff' -v` (5 tests green)
   - `go test ./cmd/harnessd -count=1 -race -run 'TestSubagentRunnerHandoff'` (green)
   - `go test ./cmd/harnessd -coverprofile=/tmp/hd-cover.out -count=1 && go tool cover -func=/tmp/hd-cover.out | grep runtime_container.go` — all 8 wrappers (and `setRunner`) at 100.0%, package total 84.5%.
+
+## 2026-07-18 (Issue #788 Recipe Steps Bypass Approval/Policy)
+
+- Symptom: under `ApprovalModePermissions`/`ApprovalModeAll`, one approval of `run_recipe` silently expanded into N unapproved steps — a recipe whose `bash` step was denied by policy executed it anyway (observed: `touch <ws>/pwned` ran with `exit_code:0`).
+- Cause: the recipe `HandlerMap` was built by copying raw `Handler` values BEFORE the `ApplyPolicy` wrap loops in both registration paths: `internal/harness/tools_default.go` (recipe block ahead of the wrap loops) and `internal/harness/tools/catalog.go` (`buildHandlerMap(tools)` before the `applyPolicy` loop). `recipe.Executor` then invoked the captured pre-policy handlers. `applyPolicy` reports a denial as marshaled JSON (`permission_denied`) with a nil Go error, so a denied step does not abort the recipe — the fix had to prevent execution, not just surface the denial.
+- Fix: moved the recipe registration block after the policy wrap loops in both files so the handler map snapshots post-wrap handlers; wrapped the recipe tool itself individually (`ApplyPolicy(recipeTool.Definition, ..., recipeTool.Handler)` before appending — same pattern as `connect_mcp`/`find_tool`). Side effect: recipe-addressable membership expands to tools registered after the old block position (script/workflow/deploy/deep-git/subagent/goals) — additive only, and all are policy-wrapped.
+- Regression tests: `TestRunRecipeTool_PolicyAppliesToSteps` + `TestRunRecipeTool_PolicyAllowsSteps` (`internal/harness/tools/recipe_tool_test.go`; deny-bash policy, allow-all control, direct-bash sanity assertion proving the machinery) and `TestDefaultRegistry_RecipeStepsRespectPolicy` + `TestDefaultRegistry_RecipeStepsAllowedByPolicy` (`internal/harness/tools_default_test.go`; same shape via `NewDefaultRegistryWithOptions`).
+- Docs: `internal/harness/tools/descriptions/run_recipe.md` now states each recipe step is subject to the same approval-mode and policy checks as a direct tool invocation, and that a denied step does not execute.
+- Validation:
+  - Red phase: pre-fix, both deny-policy tests failed — recipe output lacked `permission_denied` (step output showed `exit_code:0`) and the `pwned` marker file existed on disk.
+  - `go test ./internal/harness/tools/ -run 'TestRunRecipeTool' -count=1` (green)
+  - `go test ./internal/harness/ -run 'TestDefaultRegistry' -count=1` (green)
+  - `go test ./internal/harness/... -count=1` (green)

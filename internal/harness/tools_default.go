@@ -336,29 +336,6 @@ func NewDefaultRegistryWithOptions(workspaceRoot string, opts DefaultRegistryOpt
 		deferredTools = append(deferredTools, deferred.ManageSkillPacksTool(opts.PackRegistry))
 	}
 
-	// -- Load and register recipes as a deferred tool --
-	if opts.RecipesDir != "" {
-		recipes, err := recipe.LoadRecipes(opts.RecipesDir)
-		if err != nil {
-			// Log but don't panic — a bad recipe file is not fatal.
-			// The tool simply won't be registered.
-			_ = err
-		} else if len(recipes) > 0 {
-			// Build a handler map from all core and deferred tools registered so far.
-			handlers := make(recipe.HandlerMap)
-			for _, t := range coreTools {
-				t := t
-				handlers[t.Definition.Name] = t.Handler
-			}
-			for _, t := range deferredTools {
-				t := t
-				handlers[t.Definition.Name] = t.Handler
-			}
-			recipeTool := deferred.RunRecipeTool(handlers, recipes)
-			deferredTools = append(deferredTools, recipeTool)
-		}
-	}
-
 	// -- Load script tools from configured directory --
 	if opts.ScriptToolsDir != "" {
 		scriptTools, err := script.LoadScriptTools(opts.ScriptToolsDir)
@@ -481,6 +458,38 @@ func NewDefaultRegistryWithOptions(workspaceRoot string, opts DefaultRegistryOpt
 	}
 	for i := range deferredTools {
 		deferredTools[i].Handler = htools.ApplyPolicy(deferredTools[i].Definition, approvalMode, policyAdapter, deferredTools[i].Handler)
+	}
+
+	// -- Load and register recipes as a deferred tool --
+	// This must run after the policy wrapping above: the handler map
+	// snapshots the policy-wrapped handlers so every recipe step is subject
+	// to the same approval-mode and policy checks as a direct tool
+	// invocation (issue #788).
+	if opts.RecipesDir != "" {
+		recipes, err := recipe.LoadRecipes(opts.RecipesDir)
+		if err != nil {
+			// Log but don't panic — a bad recipe file is not fatal.
+			// The tool simply won't be registered.
+			_ = err
+		} else if len(recipes) > 0 {
+			// Build a handler map covering all core and deferred tools,
+			// captured after policy wrapping so recipe steps are
+			// policy-enforced.
+			handlers := make(recipe.HandlerMap)
+			for _, t := range coreTools {
+				t := t
+				handlers[t.Definition.Name] = t.Handler
+			}
+			for _, t := range deferredTools {
+				t := t
+				handlers[t.Definition.Name] = t.Handler
+			}
+			recipeTool := deferred.RunRecipeTool(handlers, recipes)
+			// The recipe tool is appended after the wrap loops above, so wrap
+			// it individually (same pattern as connect_mcp/find_tool below).
+			recipeTool.Handler = htools.ApplyPolicy(recipeTool.Definition, approvalMode, policyAdapter, recipeTool.Handler)
+			deferredTools = append(deferredTools, recipeTool)
+		}
 	}
 
 	// -- Register all tools in the registry --

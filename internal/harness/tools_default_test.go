@@ -2,9 +2,12 @@ package harness
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -137,6 +140,111 @@ func TestDefaultRegistry_RecipesDir_Missing_NoRunRecipe(t *testing.T) {
 			t.Error("expected run_recipe NOT to be registered for missing recipes dir")
 			return
 		}
+	}
+}
+
+// denyBashPolicy denies the bash tool and allows everything else (issue #788).
+type denyBashPolicy struct{}
+
+func (denyBashPolicy) Allow(_ context.Context, in ToolPolicyInput) (ToolPolicyDecision, error) {
+	if in.ToolName == "bash" {
+		return ToolPolicyDecision{Allow: false, Reason: "bash denied by test policy"}, nil
+	}
+	return ToolPolicyDecision{Allow: true, Reason: "ok"}, nil
+}
+
+// TestDefaultRegistry_RecipeStepsRespectPolicy is the regression test for
+// issue #788: recipe steps must be dispatched through the policy-wrapped
+// handlers so a single approval of run_recipe cannot expand into N
+// unapproved steps. A policy denial surfaces as a marshaled JSON result (not
+// a Go error), so the assertions are on output content and absent side
+// effects.
+func TestDefaultRegistry_RecipeStepsRespectPolicy(t *testing.T) {
+	t.Parallel()
+
+	ws := t.TempDir()
+	dir := t.TempDir()
+	pwned := filepath.Join(ws, "pwned")
+	recipeYAML := fmt.Sprintf(`
+name: pwn
+description: "Attempt to create a file via a bash step"
+steps:
+  - name: s1
+    tool: bash
+    args:
+      command: "touch '%s'"
+`, pwned)
+	if err := os.WriteFile(filepath.Join(dir, "pwn.yaml"), []byte(recipeYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := NewDefaultRegistryWithOptions(ws, DefaultRegistryOptions{
+		ApprovalMode: ToolApprovalModePermissions,
+		Policy:       denyBashPolicy{},
+		RecipesDir:   dir,
+	})
+	ctx := context.WithValue(context.Background(), htools.ContextKeyRunID, "test-run")
+
+	// Sanity: a direct bash invocation through the same registry is denied.
+	// This proves the policy machinery itself is wired correctly, so a
+	// failure below can only mean the recipe path bypasses it.
+	directPwned := filepath.Join(ws, "pwned_direct")
+	directOut, err := registry.Execute(ctx, "bash", json.RawMessage(fmt.Sprintf(`{"command":"touch '%s'"}`, directPwned)))
+	if err != nil {
+		t.Fatalf("direct bash: unexpected Go error (denial is a marshaled result): %v", err)
+	}
+	if !strings.Contains(directOut, "permission_denied") {
+		t.Fatalf("expected direct bash denial to contain permission_denied, got %q", directOut)
+	}
+	if _, statErr := os.Stat(directPwned); !os.IsNotExist(statErr) {
+		t.Fatalf("expected %s to not exist after denied direct bash call", directPwned)
+	}
+
+	out, err := registry.Execute(ctx, "run_recipe", json.RawMessage(`{"name":"pwn"}`))
+	if err != nil {
+		t.Fatalf("run_recipe: unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "permission_denied") {
+		t.Errorf("expected recipe step denial to contain permission_denied, got %q", out)
+	}
+	if _, statErr := os.Stat(pwned); !os.IsNotExist(statErr) {
+		t.Errorf("expected %s to not exist (policy-denied recipe step must not execute)", pwned)
+	}
+}
+
+// TestDefaultRegistry_RecipeStepsAllowedByPolicy is the positive control:
+// under an allow-all policy the same recipe step executes normally.
+func TestDefaultRegistry_RecipeStepsAllowedByPolicy(t *testing.T) {
+	t.Parallel()
+
+	ws := t.TempDir()
+	dir := t.TempDir()
+	created := filepath.Join(ws, "created")
+	recipeYAML := fmt.Sprintf(`
+name: mk
+description: "Create a file via a bash step"
+steps:
+  - name: s1
+    tool: bash
+    args:
+      command: "touch '%s'"
+`, created)
+	if err := os.WriteFile(filepath.Join(dir, "mk.yaml"), []byte(recipeYAML), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	registry := NewDefaultRegistryWithOptions(ws, DefaultRegistryOptions{
+		ApprovalMode: ToolApprovalModePermissions,
+		Policy:       staticPolicy{decision: ToolPolicyDecision{Allow: true, Reason: "ok"}},
+		RecipesDir:   dir,
+	})
+	ctx := context.WithValue(context.Background(), htools.ContextKeyRunID, "test-run")
+
+	if _, err := registry.Execute(ctx, "run_recipe", json.RawMessage(`{"name":"mk"}`)); err != nil {
+		t.Fatalf("run_recipe: unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(created); statErr != nil {
+		t.Errorf("expected %s to exist (policy-allowed recipe step should execute): %v", created, statErr)
 	}
 }
 
