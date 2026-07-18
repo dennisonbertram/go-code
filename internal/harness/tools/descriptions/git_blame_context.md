@@ -4,7 +4,7 @@ Parameters:
 - path (required): File path relative to workspace root.
 - start_line (optional, integer >= 1): First line to blame (1-indexed). When omitted, blames the entire file.
 - end_line (optional, integer >= 1): Last line to blame (inclusive). Required when start_line is provided.
-- rev (optional): Git revision to blame at (commit hash, branch, tag). Default is HEAD.
+- rev (optional): Git revision to blame at (commit hash, branch, tag). Default is HEAD. Revisions beginning with `-` are rejected.
 
 Returns a JSON object with:
 - file: the file path

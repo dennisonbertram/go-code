@@ -520,6 +520,122 @@ func TestGitDiffRangeTool_InvalidJSON(t *testing.T) {
 	}
 }
 
+// --- git ref option-injection regression tests (issue #789) ---
+//
+// git parses a leading "-..." argv element as an option even where a revision
+// is expected — e.g. --output=/abs/path yields an arbitrary file write from
+// these read-classified tools. The refs must be rejected before git runs.
+
+func TestGitBlameContextTool_RejectsOptionLikeRev(t *testing.T) {
+	dir := initTestRepo(t)
+	pwn := filepath.Join(dir, "pwn")
+	tool := GitBlameContextTool(tools.BuildOptions{WorkspaceRoot: dir})
+
+	_, err := tool.Handler(context.Background(), json.RawMessage(`{"path":"alpha.go","rev":"--output=`+pwn+`"}`))
+	if err == nil {
+		t.Fatal("expected error for option-like rev, got nil")
+	}
+	if !strings.Contains(err.Error(), "must not begin with '-'") {
+		t.Errorf("expected error to contain %q, got %q", "must not begin with '-'", err.Error())
+	}
+	if _, statErr := os.Stat(pwn); !os.IsNotExist(statErr) {
+		t.Errorf("expected %s to not exist (git must not run with an injected option)", pwn)
+	}
+}
+
+func TestGitDiffRangeTool_RejectsOptionLikeFrom(t *testing.T) {
+	dir := initTestRepo(t)
+	pwn := filepath.Join(dir, "pwn")
+	tool := GitDiffRangeTool(tools.BuildOptions{WorkspaceRoot: dir})
+
+	_, err := tool.Handler(context.Background(), json.RawMessage(`{"from":"--output=`+pwn+`"}`))
+	if err == nil {
+		t.Fatal("expected error for option-like from, got nil")
+	}
+	if !strings.Contains(err.Error(), "must not begin with '-'") {
+		t.Errorf("expected error to contain %q, got %q", "must not begin with '-'", err.Error())
+	}
+	// Pre-fix, git parses the range spec "--output=<pwn>..HEAD" as the
+	// --output option and creates the file "<pwn>..HEAD".
+	if _, statErr := os.Stat(pwn + "..HEAD"); !os.IsNotExist(statErr) {
+		t.Errorf("expected %s to not exist (git must not run with an injected option)", pwn+"..HEAD")
+	}
+}
+
+func TestGitDiffRangeTool_RejectsOptionLikeTo(t *testing.T) {
+	dir := initTestRepo(t)
+	pwn := filepath.Join(dir, "pwn")
+	tool := GitDiffRangeTool(tools.BuildOptions{WorkspaceRoot: dir})
+
+	_, err := tool.Handler(context.Background(), json.RawMessage(`{"from":"HEAD~1","to":"--output=`+pwn+`"}`))
+	if err == nil {
+		t.Fatal("expected error for option-like to, got nil")
+	}
+	if !strings.Contains(err.Error(), "must not begin with '-'") {
+		t.Errorf("expected error to contain %q, got %q", "must not begin with '-'", err.Error())
+	}
+	if _, statErr := os.Stat(pwn); !os.IsNotExist(statErr) {
+		t.Errorf("expected %s to not exist (git must not run with an injected option)", pwn)
+	}
+}
+
+func TestGitBlameContextTool_AcceptsLegitRev(t *testing.T) {
+	dir := initTestRepo(t)
+	tool := GitBlameContextTool(tools.BuildOptions{WorkspaceRoot: dir})
+
+	result, err := tool.Handler(context.Background(), json.RawMessage(`{"path":"alpha.go","rev":"HEAD~1"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out["rev"] != "HEAD~1" {
+		t.Errorf("expected rev=HEAD~1, got %v", out["rev"])
+	}
+	lines, ok := out["lines"].([]any)
+	if !ok || len(lines) == 0 {
+		t.Fatalf("expected lines array with entries, got %v", out["lines"])
+	}
+}
+
+func TestGitDiffRangeTool_AcceptsSHARange(t *testing.T) {
+	dir := initTestRepo(t)
+	tool := GitDiffRangeTool(tools.BuildOptions{WorkspaceRoot: dir})
+
+	sha1 := gitRevParse(t, dir, "HEAD~2")
+	sha2 := gitRevParse(t, dir, "HEAD")
+
+	result, err := tool.Handler(context.Background(), json.RawMessage(`{"from":"`+sha1+`","to":"`+sha2+`"}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if out["from"] != sha1 || out["to"] != sha2 {
+		t.Errorf("expected from=%s to=%s, got from=%v to=%v", sha1, sha2, out["from"], out["to"])
+	}
+	diff, ok := out["diff"].(string)
+	if !ok || diff == "" {
+		t.Error("expected non-empty diff for SHA range")
+	}
+}
+
+func gitRevParse(t *testing.T, dir, rev string) string {
+	t.Helper()
+
+	cmd := exec.Command("git", "rev-parse", rev)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git rev-parse %s: %v\n%s", rev, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // --- git_contributor_context ---
 
 func TestGitContributorContextTool_Definition(t *testing.T) {

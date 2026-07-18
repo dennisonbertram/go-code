@@ -119,6 +119,9 @@ func GitDiffTool(opts tools.BuildOptions) tools.Tool {
 			cmdArgs = append(cmdArgs, "--staged")
 		}
 		if strings.TrimSpace(args.Target) != "" {
+			if err := tools.ValidateGitRef(args.Target); err != nil {
+				return "", err
+			}
 			cmdArgs = append(cmdArgs, args.Target)
 		}
 		if strings.TrimSpace(args.Path) != "" {

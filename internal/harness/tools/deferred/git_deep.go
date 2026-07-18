@@ -301,11 +301,11 @@ func GitFileHistoryTool(opts tools.BuildOptions) tools.Tool {
 		truncated := totalCommits >= args.MaxCommits
 
 		return tools.MarshalToolResult(map[string]any{
-			"file":         rel,
-			"follow":       follow,
-			"commits":      commits,
+			"file":          rel,
+			"follow":        follow,
+			"commits":       commits,
 			"total_commits": totalCommits,
-			"truncated":    truncated,
+			"truncated":     truncated,
 		})
 	}
 
@@ -427,6 +427,9 @@ func GitBlameContextTool(opts tools.BuildOptions) tools.Tool {
 		}
 		if args.Rev == "" {
 			args.Rev = "HEAD"
+		}
+		if err := tools.ValidateGitRef(args.Rev); err != nil {
+			return "", err
 		}
 
 		absRoot, err := filepath.Abs(workspaceRoot)
@@ -575,10 +578,10 @@ func parsePorcelainBlame(output string) ([]blameLineRecord, map[string]bool) {
 			content := text[1:] // strip leading tab
 			meta := knownCommits[currentHash]
 			rec := blameLineRecord{
-				LineNumber:  currentFinalLine,
-				Content:     content,
-				CommitHash:  currentHash,
-				ShortHash:   currentHash[:7],
+				LineNumber: currentFinalLine,
+				Content:    content,
+				CommitHash: currentHash,
+				ShortHash:  currentHash[:7],
 			}
 			if meta != nil {
 				rec.AuthorName = meta.authorName
@@ -639,6 +642,12 @@ func GitDiffRangeTool(opts tools.BuildOptions) tools.Tool {
 		}
 		if args.To == "" {
 			args.To = "HEAD"
+		}
+		if err := tools.ValidateGitRef(args.From); err != nil {
+			return "", err
+		}
+		if err := tools.ValidateGitRef(args.To); err != nil {
+			return "", err
 		}
 		if args.MaxBytes <= 0 {
 			args.MaxBytes = 256 * 1024
