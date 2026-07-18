@@ -1180,3 +1180,24 @@ Decision rule: when uncertain, default to `command intent` and `user intent` bel
 - Open questions:
   - None outstanding for this branch; see the worker's final report for the full acceptance-question answer and file list.
 - Next verification step: review the diff against `fix/tool-sandbox-ssrf`, then promote through the repo's normal PR/CI/squash-merge flow.
+
+## 2026-07-18 (Tier-1 Critical Harness Fixes: #785 #786 #787)
+
+- Command intent: Land three critical tool-layer fixes on `codex/fix-harness-tier1-critical` with strict TDD and per-bug commits — hybrid-compaction tool_call pairing (#787), bash process-group kill on timeout/job_kill (#786), and linux bwrap PID/IPC namespace isolation (#785).
+- User intent: Stop providers from rejecting compacted transcripts (400s on orphan tool messages), stop orphaned grandchildren from hanging `cmd.Wait()` and surviving kills, and close the Linux sandbox parity gap that let sandboxed processes signal host processes and read host secrets from `/proc`.
+- Success definition:
+  - #787: after hybrid compaction, every surviving tool result's `tool_call_id` appears in a preceding assistant message's `tool_calls`, and every assistant `tool_calls` id has a following tool result; proven by `TestCompactHistoryTool_HybridModePreservesToolCallPairing` and `TestCompactHistoryTool_Core_HybridModePreservesToolCallPairing` (red pre-fix, green post-fix), with both `compactHybrid` copies logic-identical modulo package prefixes and all pre-existing compact tests green.
+  - #786: a timeout or `job_kill` of `bash -lc 'sleep N & ...; wait'` returns in ~timeout time (not ~N) and the grandchild pid reaches ESRCH; proven by `TestRunForegroundTimeoutKillsProcessGroup`, `TestJobKillKillsBackgroundJobGroup`, `TestRunCommandOnceTimeoutKillsProcessGroup` (red pre-fix: ~10s hangs + live canary; green post-fix); `TestRunCommand_TimeoutReturnsNilError`, `TestRunCommand_ExternalSignalKillRetriesThenErrors`, and the full `internal/harness/tools` suite stay green, including under `-race`.
+  - #785: bwrap argv for both Workspace and Local scopes contains `--unshare-pid`, `--unshare-ipc`, `--new-session` (plus pre-existing `--unshare-net`, `--die-with-parent`); on a Linux host a sandboxed command cannot signal a host canary nor read its `/proc/<pid>/environ`. `GOOS=linux go build/vet ./internal/harness/tools/` pass; runtime red/green deferred to a Linux host with bwrap (authored on macOS).
+  - Three commits total, one per bug, each carrying its engineering-log entry; clean `git status`; no merge/push (merge gate handled by the parent agent).
+- Non-goals:
+  - Deduping the two `compact_history.go` copies (scheduled for a later tier).
+  - Changing `kill()` semantics beyond the `Cancel` override, sandbox profile content on darwin, or `--die-with-parent`/`--as-pid-1` behavior.
+  - Fixing the pre-existing, unrelated `go build ./...` failures in `benchmarks/terminal_bench/reference_solutions/*` (main-less `package main` benchmark fixtures, red since #732).
+- Guardrails/constraints:
+  - Strict TDD per bug: failing regression tests first, confirmed red for the expected reason, minimal fix, confirmed green.
+  - Changes confined to `internal/harness/tools` (+ per-bug engineering-log entries and this ledger); `gofmt` on all edited files; commit messages reference their issue.
+  - Pre-existing failures unrelated to the change are reported, not fixed.
+- Open questions:
+  - None for this tier; Linux runtime verification of #785 is the only deferred evidence (environment constraint, not a design question).
+- Next verification step: on a Linux host with bubblewrap, run `go test ./internal/harness/tools/ -run 'TestBuildSandboxedCommandLinuxIsolatesPIDAndIPC|TestSandboxLinuxPIDNamespaceHidesHostProcesses' -count=1 -v`, then promote the branch through the repo's normal verify-and-merge flow.

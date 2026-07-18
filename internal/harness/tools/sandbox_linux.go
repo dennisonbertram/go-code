@@ -43,6 +43,15 @@ func buildSandboxedCommand(ctx context.Context, scope SandboxScope, workspaceRoo
 		args := []string{
 			"--die-with-parent",
 			"--unshare-net",
+			// Isolate PID and IPC namespaces so sandboxed processes can
+			// neither signal same-UID host processes nor read host
+			// /proc/<pid>/environ (API keys) — parity with darwin seatbelt's
+			// (allow signal (target self)). --new-session detaches the
+			// controlling terminal; bwrap's own minimal PID 1 reaps zombies,
+			// so --as-pid-1 is intentionally not used (#785).
+			"--unshare-pid",
+			"--unshare-ipc",
+			"--new-session",
 			"--proc", "/proc",
 			"--dev", "/dev",
 		}

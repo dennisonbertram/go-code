@@ -1437,3 +1437,13 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
   - `go test ./internal/harness/tools/ -run 'TestRunForegroundTimeoutKillsProcessGroup|TestJobKillKillsBackgroundJobGroup|TestRunCommandOnceTimeoutKillsProcessGroup' -count=1` (green, ~1s each)
   - `go test ./internal/harness/tools/... -count=1` (incl. `TestRunCommand_TimeoutReturnsNilError`, `TestRunCommand_ExternalSignalKillRetriesThenErrors`, streaming tests — all stay green)
   - `go test ./internal/harness/tools/ -race -count=1` (green)
+
+## 2026-07-18 (Issue #785 Linux bwrap Sandbox Shared Host PID/IPC Namespaces)
+
+- Symptom: on Linux, commands run under `SandboxScopeWorkspace`/`SandboxScopeLocal` (bubblewrap) could signal every same-UID host process and read host `/proc/<pid>/environ` (including API keys); darwin's seatbelt profile already restricts signals to self, so this was a cross-platform parity gap.
+- Cause: `buildSandboxedCommand` in `internal/harness/tools/sandbox_linux.go` passed only `--unshare-net`; no `--unshare-pid`/`--unshare-ipc`/`--new-session`.
+- Fix: insert `--unshare-pid`, `--unshare-ipc`, `--new-session` into the bwrap args right after `--unshare-net`, before the scope branch, so both Workspace and Local scopes get them. `--as-pid-1` intentionally not added (bwrap runs its own minimal PID 1 that reaps zombies); `--die-with-parent` unchanged.
+- Regression tests (`internal/harness/tools/sandbox_linux_test.go`, `//go:build linux`): `TestBuildSandboxedCommandLinuxIsolatesPIDAndIPC` (fake `bwrap` on PATH; asserts the argv for both scopes) and `TestSandboxLinuxPIDNamespaceHidesHostProcesses` (OS-level: host canary must be unsignalable and its `/proc/<pid>/environ` unreadable from inside the sandbox; skips when bwrap/user namespaces are unusable).
+- Validation:
+  - Runtime RED/GREEN requires Linux; this change was authored on macOS, so the linux-tagged files were verified with `GOOS=linux go build ./internal/harness/tools/` and `GOOS=linux go vet ./internal/harness/tools/` (both pass). Pre-fix, the argv assertions fail (flags absent) and the OS-level probe prints `CAN_SIGNAL_HOST`/`ENVIRON_READABLE`; run `go test ./internal/harness/tools/ -run 'TestBuildSandboxedCommandLinuxIsolatesPIDAndIPC|TestSandboxLinuxPIDNamespaceHidesHostProcesses' -count=1 -v` on a Linux host with bwrap for the full red/green cycle.
+  - `go test ./internal/harness/tools/... -count=1` (darwin host, green)
