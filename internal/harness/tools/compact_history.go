@@ -375,26 +375,47 @@ func compactHybrid(ctx context.Context, turns []turn, prefixEnd, compactEnd int,
 		t := turns[i]
 		switch t.Kind {
 		case "assistant_tool":
-			// Keep assistant text if present
-			if len(t.Messages) > 0 && strings.TrimSpace(t.Messages[0].Content) != "" {
-				result = append(result, TranscriptMessage{
-					Index:   t.Messages[0].Index,
-					Role:    "assistant",
-					Content: t.Messages[0].Content,
-				})
-			}
-			// Process tool results
+			// Partition the turn's tool results into kept (small) and removed
+			// (large) so the assistant message can be rebuilt with exactly the
+			// tool_calls whose results survive. Providers reject a tool result
+			// that has no matching assistant tool_calls entry, so emitting the
+			// assistant message without tool_calls while keeping small results
+			// produces an invalid transcript (#787).
+			var keptResults []TranscriptMessage
 			for _, m := range t.Messages {
 				if m.Role != "tool" {
 					continue
 				}
-				tokens := estimateTextTokens(m.Content)
-				if tokens > largeTokenThreshold {
+				if estimateTextTokens(m.Content) > largeTokenThreshold {
 					removedContent = append(removedContent, m.Content)
 					stripped++
 				} else {
-					// Keep small tool results
-					result = append(result, m)
+					keptResults = append(keptResults, m)
+				}
+			}
+			if len(t.Messages) > 0 && t.Messages[0].Role == "assistant" {
+				a := t.Messages[0]
+				keptIDs := make(map[string]bool, len(keptResults))
+				for _, m := range keptResults {
+					keptIDs[m.ToolCallID] = true
+				}
+				var filtered []ToolCall
+				for _, tc := range a.ToolCalls {
+					if keptIDs[tc.ID] {
+						filtered = append(filtered, tc)
+					}
+				}
+				if strings.TrimSpace(a.Content) != "" || len(filtered) > 0 {
+					result = append(result, TranscriptMessage{Index: a.Index, Role: "assistant", Content: a.Content, ToolCalls: filtered})
+				}
+				result = append(result, keptResults...)
+			} else {
+				// Orphan tool turn (no assistant parent): the kept results
+				// have no tool_calls entry to pair with, so fold them into
+				// the removed set instead of emitting unpairable messages.
+				for _, m := range keptResults {
+					removedContent = append(removedContent, m.Content)
+					stripped++
 				}
 			}
 		case "user", "assistant_text":

@@ -1414,3 +1414,14 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
   - `go test ./internal/relay -count=1`
   - `go test ./internal/server -count=1`
   - `go test ./cmd/harnessd -count=1`
+
+## 2026-07-18 (Issue #787 Hybrid Compaction Orphan Tool Messages)
+
+- Symptom: after `compact_history` in `hybrid` mode dropped a large tool result but kept a small one from the same assistant turn, the resulting transcript had `tool` messages with a `tool_call_id` whose parent assistant message carried no `tool_calls` — rejected by OpenAI/Anthropic with a 400 on the next request.
+- Cause: `compactHybrid` (both duplicated copies: `internal/harness/tools/compact_history.go`, `internal/harness/tools/core/compact_history.go`) rebuilt an `assistant_tool` turn's assistant message with only `Index/Role/Content`, dropping `ToolCalls`, while keeping small tool results verbatim. Both existing test suites used fixtures without `ToolCalls`, so they encoded the bug.
+- Fix: partition each turn's tool results into kept (<=500 estimated tokens) and removed (>500); rebuild the assistant message with `ToolCalls` filtered to exactly the ids whose results survived, emitting it when it has non-empty trimmed content or at least one surviving tool call, followed by the kept results. Orphan tool turns (no assistant parent) fold kept results into the removed set instead of emitting unpairable tool messages. Applied identically in both copies (verified logic-identical modulo `tools.` package prefixes); a later tier dedups these files.
+- Regression tests: `TestCompactHistoryTool_HybridModePreservesToolCallPairing` (`internal/harness/tools/compact_history_test.go`) and `TestCompactHistoryTool_Core_HybridModePreservesToolCallPairing` (`internal/harness/tools/core/compact_history_test.go`), enforcing the two-way pairing invariant (every assistant `tool_calls` id has a following tool result; every tool result id appears in a preceding assistant `tool_calls`).
+- Validation:
+  - Red phase: `go test ./internal/harness/tools/ ./internal/harness/tools/core/ -run 'HybridModePreservesToolCallPairing' -count=1` failed pre-fix (`parent assistant tool_calls ids exactly [call_small], got []`; `orphan tool result: tool_call_id "call_small" has no preceding assistant tool_calls entry`).
+  - `go test ./internal/harness/tools/ ./internal/harness/tools/core/ -run 'HybridModePreservesToolCallPairing' -count=1` (green)
+  - `go test ./internal/harness/tools/ ./internal/harness/tools/core/ -run 'Compact|ParseTurns|FindCompactionBounds|EstimateTextTokens|EstimateTranscriptTokens|TranscriptMsgsToMaps' -count=1` (all pre-existing compact tests stay green; no-ToolCalls fixtures produce identical output)

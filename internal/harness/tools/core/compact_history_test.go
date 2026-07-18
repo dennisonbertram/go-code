@@ -928,6 +928,125 @@ func TestCompactHistoryTool_Core_HybridModeAllSmall(t *testing.T) {
 	}
 }
 
+// toolCallIDsOf extracts the tool_call ids from a replacer message map.
+func toolCallIDsOf(m map[string]any) []string {
+	var ids []string
+	if tcs, ok := m["tool_calls"].([]map[string]any); ok {
+		for _, tc := range tcs {
+			id, _ := tc["id"].(string)
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// assertToolCallPairing enforces the provider-side two-way invariant: every
+// assistant tool_calls id must have a following tool result with that id, and
+// every tool result's tool_call_id must appear in some preceding assistant
+// message's tool_calls. OpenAI/Anthropic reject transcripts that violate it.
+func assertToolCallPairing(t *testing.T, msgs []map[string]any) {
+	t.Helper()
+	seenCallIDs := map[string]bool{}
+	answeredCallIDs := map[string]bool{}
+	for _, m := range msgs {
+		switch m["role"] {
+		case "assistant":
+			for _, id := range toolCallIDsOf(m) {
+				seenCallIDs[id] = true
+			}
+		case "tool":
+			id, _ := m["tool_call_id"].(string)
+			if !seenCallIDs[id] {
+				t.Errorf("orphan tool result: tool_call_id %q has no preceding assistant tool_calls entry", id)
+			}
+			answeredCallIDs[id] = true
+		}
+	}
+	for id := range seenCallIDs {
+		if !answeredCallIDs[id] {
+			t.Errorf("unanswered tool call: id %q has no following tool result", id)
+		}
+	}
+}
+
+// TestCompactHistoryTool_Core_HybridModePreservesToolCallPairing guards #787:
+// when hybrid compaction drops a large tool result but keeps a small one from
+// the same assistant_tool turn, the rebuilt assistant message must keep
+// exactly the tool_calls whose results survived. Rebuilding it with no
+// tool_calls at all produces an orphan tool message that providers reject
+// with a 400.
+func TestCompactHistoryTool_Core_HybridModePreservesToolCallPairing(t *testing.T) {
+	t.Parallel()
+	largeContent := strings.Repeat("x", 3000) // >500 estimated tokens
+
+	msgs := []tools.TranscriptMessage{
+		{Index: 0, Role: "system", Content: "You are helpful."},
+		{Index: 1, Role: "user", Content: "Read both files"},
+		{Index: 2, Role: "assistant", Content: "Reading both.", ToolCalls: []tools.ToolCall{
+			{ID: "call_big", Name: "read", Arguments: `{"path":"big.txt"}`},
+			{ID: "call_small", Name: "read", Arguments: `{"path":"small.txt"}`},
+		}},
+		{Index: 3, Role: "tool", ToolCallID: "call_big", Content: largeContent},
+		{Index: 4, Role: "tool", ToolCallID: "call_small", Content: "tiny"},
+		// keep_last=2 window:
+		{Index: 5, Role: "user", Content: "Done?"},
+		{Index: 6, Role: "assistant", Content: "Yes!"},
+	}
+
+	summarizer := &testSummarizer{result: "Big file contents."}
+	replacer := &testReplacer{}
+	reader := testTranscriptReader{messages: msgs}
+	ctx := makeCtx(reader, replacer)
+
+	tool := CompactHistoryTool(summarizer)
+	out, err := tool.Handler(ctx, json.RawMessage(`{"mode":"hybrid","keep_last":2}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	result := parseResult(t, out)
+	if _, hasErr := result["error"]; hasErr {
+		t.Fatalf("unexpected tool error: %v", result["error"])
+	}
+	if !replacer.called {
+		t.Fatal("replacer was not called")
+	}
+
+	// Exactly one tool result survives: the small one (call_big was >500 tokens).
+	var toolIdx []int
+	for i, m := range replacer.messages {
+		if m["role"] == "tool" {
+			toolIdx = append(toolIdx, i)
+		}
+	}
+	if len(toolIdx) != 1 {
+		t.Fatalf("expected exactly 1 surviving tool message, got %d", len(toolIdx))
+	}
+	survivor := replacer.messages[toolIdx[0]]
+	if survivor["tool_call_id"] != "call_small" {
+		t.Errorf("expected surviving tool message tool_call_id=call_small, got %v", survivor["tool_call_id"])
+	}
+
+	// The nearest preceding assistant message must carry exactly the surviving
+	// tool_call id — not both, and not none.
+	var parent map[string]any
+	for i := toolIdx[0] - 1; i >= 0; i-- {
+		if replacer.messages[i]["role"] == "assistant" {
+			parent = replacer.messages[i]
+			break
+		}
+	}
+	if parent == nil {
+		t.Fatal("no assistant message precedes the surviving tool result")
+	}
+	ids := toolCallIDsOf(parent)
+	if len(ids) != 1 || ids[0] != "call_small" {
+		t.Errorf("expected parent assistant tool_calls ids exactly [call_small], got %v", ids)
+	}
+
+	// Whole-transcript two-way pairing invariant.
+	assertToolCallPairing(t, replacer.messages)
+}
+
 func TestCompactHistoryTool_Core_KeepLastDefaults(t *testing.T) {
 	t.Parallel()
 	// When keep_last=0 or keep_last=1 (< 2), it should default to 4.
