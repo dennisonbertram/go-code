@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"go-agent-harness/internal/checkpoints"
@@ -59,7 +60,6 @@ type httpRuntimeOptions struct {
 	addr                 string
 	workspace            string
 	provider             harness.Provider
-	tools                *harness.Registry
 	runnerCfg            harness.RunnerConfig
 	checkpointService    *checkpoints.Service
 	workflowDefinitions  []workflows.Definition
@@ -92,30 +92,89 @@ type httpRuntimeOptions struct {
 
 type httpRuntime struct {
 	runner          *harness.Runner
+	tools           *harness.Registry
 	subagentManager subagents.Manager
 	mcpServer       *mcpserver.Server
 	handler         http.Handler
 	httpServer      *http.Server
 }
 
-func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
-	runner := harness.NewRunner(opts.provider, opts.tools, opts.runnerCfg)
+// subagentRunnerHandoff implements subagents.RunEngine AND
+// htools.ConstrainedAgentRunner by forwarding to a *harness.Runner that is not
+// available yet at construction time. It exists to break an initialization
+// cycle in buildHTTPRuntime: the SubagentManager (and the plain "agent" tool)
+// must be resolvable before the tool registry is built, so that
+// internal/harness/tools_default.go's `if opts.SubagentManager != nil` and
+// `if opts.AgentRunner != nil` gates register the subagent-lifecycle tools
+// (start_subagent, get_subagent, wait_subagent, cancel_subagent, run_agent)
+// and the agent/spawn_agent tools onto the registry the top-level runner
+// uses — but both need a *harness.Runner, which in turn needs that same
+// registry. setRunner is called once, before buildHTTPRuntime returns and the
+// server starts accepting requests; the atomic pointer makes that handoff
+// race-safe under `go test -race`.
+type subagentRunnerHandoff struct {
+	runner atomic.Pointer[harness.Runner]
+}
 
-	workflowEngine := workflows.NewEngine(workflows.Options{
-		Definitions: opts.workflowDefinitions,
-		Runner:      runner,
-		Tools:       opts.tools,
-		Checkpoints: opts.checkpointService,
-		Store:       opts.workflowStore,
-		Now:         time.Now,
-	})
-	networkEngine := networks.NewEngine(networks.Options{
-		Definitions: opts.networkDefinitions,
-		Workflows:   workflowEngine,
-	})
+func (h *subagentRunnerHandoff) setRunner(r *harness.Runner) { h.runner.Store(r) }
+
+func (h *subagentRunnerHandoff) StartRun(req harness.RunRequest) (harness.Run, error) {
+	return h.runner.Load().StartRun(req)
+}
+
+func (h *subagentRunnerHandoff) GetRun(runID string) (harness.Run, bool) {
+	return h.runner.Load().GetRun(runID)
+}
+
+func (h *subagentRunnerHandoff) Subscribe(runID string) ([]harness.Event, <-chan harness.Event, func(), error) {
+	return h.runner.Load().Subscribe(runID)
+}
+
+func (h *subagentRunnerHandoff) CancelRun(runID string) error {
+	return h.runner.Load().CancelRun(runID)
+}
+
+func (h *subagentRunnerHandoff) RunPrompt(ctx context.Context, prompt string) (string, error) {
+	return h.runner.Load().RunPrompt(ctx, prompt)
+}
+
+func (h *subagentRunnerHandoff) RunPromptWithAllowedTools(ctx context.Context, prompt string, allowedTools []string) (string, error) {
+	return h.runner.Load().RunPromptWithAllowedTools(ctx, prompt, allowedTools)
+}
+
+// SteerRun implements htools.RunSteerer, backing message_subagent and
+// notify_parent (in each direction — the target run ID differs, the
+// mechanism is identical: *harness.Runner.SteerRun).
+func (h *subagentRunnerHandoff) SteerRun(runID, message string) error {
+	return h.runner.Load().SteerRun(runID, message)
+}
+
+// ParentRunID implements the other half of htools.RunSteerer, backing
+// notify_parent: it looks up runID's own Run record and reads the parent run
+// ID that BuildParentContextHandoffFromContext recorded on it at spawn time.
+func (h *subagentRunnerHandoff) ParentRunID(runID string) (string, bool) {
+	run, ok := h.runner.Load().GetRun(runID)
+	if !ok || run.ParentContextHandoff == nil {
+		return "", false
+	}
+	parentID := strings.TrimSpace(run.ParentContextHandoff.ParentRunID)
+	return parentID, parentID != ""
+}
+
+func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
+	handoff := &subagentRunnerHandoff{}
+
+	// registryOpts carries the subagent manager so the TOP-LEVEL registry
+	// (built below) registers start_subagent/get_subagent/wait_subagent/
+	// cancel_subagent/run_agent. The WorktreeRunnerFactory closure below
+	// deliberately keeps using the original opts.baseRegistryOptions (manager
+	// unset) so a worktree-isolated subagent cannot itself spawn subagents —
+	// only this top-level (and same-registry inline-subagent) path gains the
+	// tools this fix adds.
+	registryOpts := opts.baseRegistryOptions
 
 	subagentMgr, err := subagents.NewManager(subagents.Options{
-		InlineRunner:  runner,
+		InlineRunner:  handoff,
 		SkillResolver: opts.skillLister,
 		WorktreeRunnerFactory: func(workspaceRoot string) (subagents.RunEngine, error) {
 			childTools := harness.NewDefaultRegistryWithOptions(workspaceRoot, opts.baseRegistryOptions)
@@ -129,6 +188,38 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 	if err != nil {
 		return httpRuntime{}, fmt.Errorf("create subagent manager: %w", err)
 	}
+	// tools_default.go's deferred subagent tools (start_subagent, etc.) want
+	// the tools.SubagentManager shape (CreateAndWait/Start/Get/Wait/Cancel),
+	// not the subagents.Manager shape (Create/Get/List/Delete/Cancel) used by
+	// the HTTP /v1/subagents/* routes below. subagents.NewInlineManager
+	// already exists to bridge exactly this gap; it was simply never wired
+	// in anywhere.
+	registryOpts.SubagentManager = subagents.NewInlineManager(subagentMgr)
+	// Same circular-dependency fix, for the plain "agent"/"spawn_agent" tools:
+	// *harness.Runner already implements htools.ConstrainedAgentRunner, but it
+	// doesn't exist until after the registry does. handoff forwards to it once
+	// setRunner is called below.
+	registryOpts.AgentRunner = handoff
+	// Same handoff object also backs message_subagent/notify_parent — it
+	// already forwards to the runner once setRunner is called below.
+	registryOpts.RunSteerer = handoff
+
+	tools := harness.NewDefaultRegistryWithOptions(opts.workspace, registryOpts)
+	runner := harness.NewRunner(opts.provider, tools, opts.runnerCfg)
+	handoff.setRunner(runner)
+
+	workflowEngine := workflows.NewEngine(workflows.Options{
+		Definitions: opts.workflowDefinitions,
+		Runner:      runner,
+		Tools:       tools,
+		Checkpoints: opts.checkpointService,
+		Store:       opts.workflowStore,
+		Now:         time.Now,
+	})
+	networkEngine := networks.NewEngine(networks.Options{
+		Definitions: opts.networkDefinitions,
+		Workflows:   workflowEngine,
+	})
 
 	scriptEngine := scriptworkflow.NewEngine(scriptworkflow.EngineOptions{
 		Subagents: scriptSubagentAdapter{manager: subagentMgr},
@@ -184,7 +275,7 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		runStore:         opts.runStore,
 		relayWorkerStore: opts.relayWorkerStore,
 		relayControl:     opts.relayControl,
-		tools:            opts.tools,
+		tools:            tools,
 		todos:            opts.todos,
 		triggers:         opts.triggers,
 		rolloutDir:       opts.runnerCfg.RolloutDir,
@@ -208,6 +299,7 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 
 	return httpRuntime{
 		runner:          runner,
+		tools:           tools,
 		subagentManager: subagentMgr,
 		mcpServer:       mcpSrv,
 		handler:         topMux,

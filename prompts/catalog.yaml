@@ -12,6 +12,10 @@ intents:
   general: intents/autonomous.md
   code_review: intents/code_review.md
   frontend_design: intents/frontend_design.md
+  # Default overlay for subagent runs (see Runner.StartRun) — headless,
+  # no-human-present framing distinct from "autonomous", which is
+  # benchmark/Docker-container-specific.
+  subagent: intents/subagent.md
 model_profiles:
   - name: deepseek
     match: deepseek-*

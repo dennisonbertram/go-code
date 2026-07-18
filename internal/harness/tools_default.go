@@ -20,9 +20,9 @@ import (
 )
 
 type DefaultRegistryOptions struct {
-	ApprovalMode        ToolApprovalMode
-	Policy              ToolPolicy
-	SandboxScope        SandboxScope // controls filesystem/network restrictions
+	ApprovalMode ToolApprovalMode
+	Policy       ToolPolicy
+	SandboxScope SandboxScope // controls filesystem/network restrictions
 	// NetworkAllowlist is the operator-configured, explicit opt-in escape
 	// hatch for the outbound network guard (GAP-3): by default the
 	// fetch/download tools and the WebFetcher-backed tools (web_fetch,
@@ -43,8 +43,8 @@ type DefaultRegistryOptions struct {
 	// agent-supplied-destination surface — is always subject to the same
 	// dial-time SSRF guard as the fetch/download tools, regardless of what
 	// this implementation would otherwise have done for Fetch itself.
-	WebFetcher    htools.WebFetcher
-	AskUserBroker htools.AskUserQuestionBroker
+	WebFetcher          htools.WebFetcher
+	AskUserBroker       htools.AskUserQuestionBroker
 	AskUserTimeout      time.Duration
 	MemoryManager       om.Manager
 	WorkingMemoryStore  workingmemory.Store
@@ -68,6 +68,10 @@ type DefaultRegistryOptions struct {
 	MessageSummarizer   htools.MessageSummarizer   // optional: enables summarize/hybrid modes in compact_history
 	// SubagentManager enables the run_agent tool for profile-based subagent delegation.
 	SubagentManager htools.SubagentManager
+	// RunSteerer enables message_subagent (parent -> running subagent) and
+	// notify_parent (subagent -> spawning agent), both built on the same
+	// steer-a-live-run primitive in each direction.
+	RunSteerer htools.RunSteerer
 	// ProfilesDir is the directory to search for user-global profiles (.toml files).
 	// Defaults to ~/.harness/profiles/ if empty.
 	ProfilesDir string
@@ -380,13 +384,33 @@ func NewDefaultRegistryWithOptions(workspaceRoot string, opts DefaultRegistryOpt
 
 	// subagent lifecycle and run_agent tools: available when a SubagentManager is configured.
 	if opts.SubagentManager != nil {
+		// Pass opts.Activations only when non-nil: a nil *ActivationTracker
+		// wrapped directly into the htools.ActivationTrackerInterface
+		// parameter would produce a non-nil interface around a nil pointer,
+		// defeating StartSubagentTool's own nil check and panicking on use.
+		var activationTracker htools.ActivationTrackerInterface
+		if opts.Activations != nil {
+			activationTracker = opts.Activations
+		}
 		deferredTools = append(deferredTools,
-			deferred.StartSubagentTool(opts.SubagentManager, opts.ProfilesDir),
+			deferred.StartSubagentTool(opts.SubagentManager, opts.ProfilesDir, activationTracker),
 			deferred.GetSubagentTool(opts.SubagentManager),
 			deferred.WaitSubagentTool(opts.SubagentManager),
 			deferred.CancelSubagentTool(opts.SubagentManager),
 		)
 		deferredTools = append(deferredTools, deferred.RunAgentTool(opts.SubagentManager, opts.ProfilesDir))
+		// message_subagent needs both the manager (to resolve a subagent ID to
+		// a run ID) and a RunSteerer (to actually inject the message).
+		if opts.RunSteerer != nil {
+			deferredTools = append(deferredTools, deferred.MessageSubagentTool(opts.SubagentManager, opts.RunSteerer))
+		}
+	}
+
+	// notify_parent: the reverse direction of message_subagent (subagent ->
+	// spawning agent). It only needs a RunSteerer — the parent run ID is read
+	// from ParentContextHandoff on the current run, not looked up by ID.
+	if opts.RunSteerer != nil {
+		deferredTools = append(deferredTools, deferred.NotifyParentTool(opts.RunSteerer))
 	}
 
 	var registry *Registry

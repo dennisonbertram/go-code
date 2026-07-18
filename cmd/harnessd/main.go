@@ -714,11 +714,22 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	}
 	goalManager := goals.NewManager(goalStore)
 
+	// skillListerAdapter (assigned to skillLister above, when skills are
+	// enabled) already implements GetSkillFilePath/UpdateSkillVerification,
+	// so it satisfies htools.SkillVerifier as well as htools.SkillLister —
+	// it was just never asserted to the wider interface, so the verify_skill
+	// tool was never registered even though nothing new is needed to run it.
+	var skillVerifier htools.SkillVerifier
+	if sv, ok := skillLister.(htools.SkillVerifier); ok {
+		skillVerifier = sv
+	}
+
 	baseRegistryOptions := harness.DefaultRegistryOptions{
 		ApprovalMode:       approvalMode,
 		Policy:             nil,
 		AskUserBroker:      askUserBroker,
 		AskUserTimeout:     time.Duration(askUserTimeoutSeconds) * time.Second,
+		SkillVerifier:      skillVerifier,
 		MemoryManager:      memoryManager,
 		WorkingMemoryStore: workingMemoryStore,
 		SkillLister:        skillLister,
@@ -746,7 +757,6 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		TodosTool:         todosToolBuilder,
 		GoalManager:       goalManager,
 	}
-	tools := harness.NewDefaultRegistryWithOptions(workspace, baseRegistryOptions)
 	if rolloutDir != "" {
 		log.Printf("rollout recording enabled: %s", rolloutDir)
 	}
@@ -872,7 +882,6 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		addr:                 addr,
 		workspace:            workspace,
 		provider:             provider,
-		tools:                tools,
 		runnerCfg:            runnerCfg,
 		checkpointService:    checkpointService,
 		workflowDefinitions:  workflowDefinitions,

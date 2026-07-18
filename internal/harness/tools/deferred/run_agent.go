@@ -40,6 +40,11 @@ func RunAgentTool(manager tools.SubagentManager, profilesDir string) tools.Tool 
 					"type":        "integer",
 					"description": "Optional step override for this call. Overrides the profile's max_steps.",
 				},
+				"allowed_tools": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Optional list of tool names to restrict the subagent to (e.g. [\"notify_parent\", \"bash\"]). Defaults to the profile's own tool set (the \"full\" profile grants every tool) — set this to give the subagent only what it needs for its task.",
+				},
 			},
 			"required": []string{"task"},
 		},

@@ -358,7 +358,10 @@ func (m *manager) Delete(ctx context.Context, id string) error {
 		return err
 	}
 	m.mu.Lock()
-	delete(m.subagents, id)
+	// Delete by the resolved canonical ID, not the raw input id — id may be
+	// the RunID (see getManaged's fallback above), which is never a key in
+	// m.subagents and would make this a silent no-op.
+	delete(m.subagents, managed.ID)
 	m.mu.Unlock()
 	return nil
 }
@@ -543,11 +546,25 @@ func (m *manager) cleanupWorkspace(ctx context.Context, managed *managedSubagent
 func (m *manager) getManaged(id string) (*managedSubagent, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	managed, ok := m.subagents[id]
-	if !ok {
-		return nil, ErrNotFound
+	if managed, ok := m.subagents[id]; ok {
+		return managed, nil
 	}
-	return managed, nil
+	// start_subagent's response carries both `subagent_id` and `run_id` side
+	// by side (two similar-looking UUIDs), and models frequently pass the
+	// run_id here instead — observed live as a parent repeatedly re-spawning
+	// a new subagent after a "not found" error, rather than realizing it just
+	// used the wrong id. Fall back to a scan by RunID so every lookup path
+	// (get_subagent, wait_subagent, cancel_subagent, message_subagent)
+	// resolves correctly either way.
+	// ponytail: O(n) fallback scan, only on primary-key miss; upgrade to a
+	// secondary runID->id index if a single process ever tracks enough
+	// concurrent subagents for this to matter.
+	for _, managed := range m.subagents {
+		if managed.RunID == id {
+			return managed, nil
+		}
+	}
+	return nil, ErrNotFound
 }
 
 func (m *manager) snapshot(id string) (Subagent, error) {

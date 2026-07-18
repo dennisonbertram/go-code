@@ -48,7 +48,6 @@ func TestBuildHTTPRuntimeAssemblesRunnerSubagentsAndHTTPServer(t *testing.T) {
 		AskUserTimeout:    time.Minute,
 		MessageSummarizer: msgSummarizer,
 	}
-	tools := harness.NewDefaultRegistryWithOptions(workspace, baseRegistryOptions)
 	relayStore, err := relay.NewSQLiteWorkerStore(filepath.Join(t.TempDir(), "relay.db"))
 	if err != nil {
 		t.Fatalf("NewSQLiteWorkerStore: %v", err)
@@ -62,7 +61,6 @@ func TestBuildHTTPRuntimeAssemblesRunnerSubagentsAndHTTPServer(t *testing.T) {
 		addr:                "127.0.0.1:0",
 		workspace:           workspace,
 		provider:            &noopProvider{},
-		tools:               tools,
 		runnerCfg:           harness.RunnerConfig{DefaultModel: "gpt-4.1-mini"},
 		skillLister:         nil,
 		baseRegistryOptions: baseRegistryOptions,
@@ -86,6 +84,34 @@ func TestBuildHTTPRuntimeAssemblesRunnerSubagentsAndHTTPServer(t *testing.T) {
 	}
 	if runtime.subagentManager == nil {
 		t.Fatal("expected subagent manager")
+	}
+	if runtime.tools == nil {
+		t.Fatal("expected tool registry")
+	}
+	// Regression: the top-level registry must expose the subagent-lifecycle
+	// tools once a SubagentManager exists, so the main conversation can call
+	// start_subagent. Before this fix, opts.SubagentManager was never set on
+	// the registry options used to build the top-level registry (it was only
+	// known after the registry — and the runner built from it — already
+	// existed), so start_subagent was silently absent from every run.
+	wantSubagentTools := map[string]bool{
+		"start_subagent":   false,
+		"get_subagent":     false,
+		"wait_subagent":    false,
+		"cancel_subagent":  false,
+		"run_agent":        false,
+		"message_subagent": false,
+		"notify_parent":    false,
+	}
+	for _, def := range runtime.tools.DeferredDefinitions() {
+		if _, ok := wantSubagentTools[def.Name]; ok {
+			wantSubagentTools[def.Name] = true
+		}
+	}
+	for name, found := range wantSubagentTools {
+		if !found {
+			t.Errorf("expected tool %q to be registered on the top-level registry", name)
+		}
 	}
 	if runtime.handler == nil {
 		t.Fatal("expected http handler")
