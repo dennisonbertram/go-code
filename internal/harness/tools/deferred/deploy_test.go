@@ -333,23 +333,75 @@ func TestDeployTool_DefaultEnvironment(t *testing.T) {
 	}
 }
 
-// TestDeployTool_WorkspaceOverride verifies custom workspace path is used.
-func TestDeployTool_WorkspaceOverride(t *testing.T) {
-	customDir := t.TempDir()
-	writeDeployFile(t, customDir, "railway.json")
-	mock := &mockPlatform{name: "railway"}
-	reg := DeployPlatformRegistry{"railway": mock}
-	tool := DeployTool(reg, t.TempDir()) // default workspace has no config
-	args, _ := json.Marshal(map[string]any{
-		"action":    "detect",
-		"workspace": customDir,
-	})
+// TestDeployTool_WorkspaceOverride_OutsideRejected is a regression test for
+// issue #790: an absolute workspace path outside the workspace root must be
+// rejected. Previously the raw override was handed to `railway up` /
+// `fly deploy`, which package and upload that directory — arbitrary
+// host-directory exfiltration under the default FullAuto mode.
+func TestDeployTool_WorkspaceOverride_OutsideRejected(t *testing.T) {
+	ws := t.TempDir()
+	outsideDir := t.TempDir() // outside the workspace root
+	writeDeployFile(t, outsideDir, "railway.json")
+	tool := DeployTool(DefaultDeployPlatformRegistry(), ws)
+
+	args, _ := json.Marshal(map[string]any{"action": "detect", "workspace": outsideDir})
+	_, err := tool.Handler(context.Background(), json.RawMessage(args))
+	if err == nil {
+		t.Fatal("expected error for workspace outside the workspace root, got nil")
+	}
+	if !strings.Contains(err.Error(), "escapes the allowed workspace root") {
+		t.Errorf("expected error to contain %q, got %q", "escapes the allowed workspace root", err.Error())
+	}
+}
+
+// TestDeployTool_WorkspaceOverride_InsideAllowed verifies an absolute path
+// inside the workspace root is accepted.
+func TestDeployTool_WorkspaceOverride_InsideAllowed(t *testing.T) {
+	ws := t.TempDir()
+	sub := filepath.Join(ws, "nested")
+	writeDeployFile(t, sub, "railway.json")
+	tool := DeployTool(DefaultDeployPlatformRegistry(), ws)
+
+	args, _ := json.Marshal(map[string]any{"action": "detect", "workspace": sub})
 	result, err := tool.Handler(context.Background(), json.RawMessage(args))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if !strings.Contains(result, "railway") {
 		t.Errorf("expected 'railway' in result, got %q", result)
+	}
+}
+
+// TestDeployTool_WorkspaceOverride_RelativeInsideAllowed verifies a relative
+// workspace path resolves against the workspace root.
+func TestDeployTool_WorkspaceOverride_RelativeInsideAllowed(t *testing.T) {
+	ws := t.TempDir()
+	writeDeployFile(t, filepath.Join(ws, "app"), "railway.json")
+	tool := DeployTool(DefaultDeployPlatformRegistry(), ws)
+
+	args, _ := json.Marshal(map[string]any{"action": "detect", "workspace": "app"})
+	result, err := tool.Handler(context.Background(), json.RawMessage(args))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "railway") {
+		t.Errorf("expected 'railway' in result, got %q", result)
+	}
+}
+
+// TestDeployTool_WorkspaceOverride_TraversalRejected is a regression test for
+// issue #790: "../" traversal out of the workspace root must be rejected.
+func TestDeployTool_WorkspaceOverride_TraversalRejected(t *testing.T) {
+	ws := t.TempDir()
+	tool := DeployTool(DefaultDeployPlatformRegistry(), ws)
+
+	args, _ := json.Marshal(map[string]any{"action": "detect", "workspace": "../sibling"})
+	_, err := tool.Handler(context.Background(), json.RawMessage(args))
+	if err == nil {
+		t.Fatal("expected error for ../ traversal workspace, got nil")
+	}
+	if !strings.Contains(err.Error(), "escapes workspace") {
+		t.Errorf("expected error to contain %q, got %q", "escapes workspace", err.Error())
 	}
 }
 

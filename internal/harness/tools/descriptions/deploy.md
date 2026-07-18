@@ -9,7 +9,7 @@ Actions:
 Parameters:
 - platform: Platform adapter to use ("railway", "flyio"). If omitted, auto-detects from workspace.
 - action: One of "deploy", "status", "logs", "detect" (required).
-- workspace: Absolute path to the project directory (defaults to current workspace root).
+- workspace: Path to the project directory, relative to the workspace root (absolute paths must lie inside it). Defaults to the workspace root; paths outside it are rejected.
 - environment: Target environment such as "staging" or "production" (default: "production").
 - dry_run: Preview the deploy command without executing (default: false).
 - force: Skip pre-deploy checks (default: false).

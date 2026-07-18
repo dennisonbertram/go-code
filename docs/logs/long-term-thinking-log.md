@@ -1201,3 +1201,24 @@ Decision rule: when uncertain, default to `command intent` and `user intent` bel
 - Open questions:
   - None for this tier; Linux runtime verification of #785 is the only deferred evidence (environment constraint, not a design question).
 - Next verification step: on a Linux host with bubblewrap, run `go test ./internal/harness/tools/ -run 'TestBuildSandboxedCommandLinuxIsolatesPIDAndIPC|TestSandboxLinuxPIDNamespaceHidesHostProcesses' -count=1 -v`, then promote the branch through the repo's normal verify-and-merge flow.
+
+## 2026-07-18 (Tier-2 Harness Security Fixes: #788 #789 #790)
+
+- Command intent: Land three security fixes on `fix-harness-tier2-security` with strict TDD and per-bug commits — recipe steps bypass approval/policy (#788), git option injection via unvalidated refs (#789), and deploy `workspace` arg accepting any absolute path (#790).
+- User intent: One approval of `run_recipe` must never expand into N unapproved steps; read-classified git tools must never become arbitrary file writes; the deploy tool must never package and upload arbitrary host directories.
+- Success definition:
+  - #788: both registration paths (`tools_default.go`, `tools/catalog.go`) build the recipe handler map AFTER `ApplyPolicy` wrapping and wrap the recipe tool individually; proven by `TestRunRecipeTool_PolicyAppliesToSteps`/`_PolicyAllowsSteps` and `TestDefaultRegistry_RecipeStepsRespectPolicy`/`_RecipeStepsAllowedByPolicy` (red pre-fix: bash step ran `exit_code:0` and the `pwned` marker file existed with no `permission_denied` in output; green post-fix). Side effect accepted: recipe-addressable membership expands to later-registered tools (script/workflow/deploy/deep-git/subagent/goals) — additive only, all policy-wrapped.
+  - #789: all four ref-to-argv sites (`git_diff` target x2, `git_blame_context` rev, `git_diff_range` from/to) reject refs beginning with `-` via `tools.ValidateGitRef` before exec; proven by the table-driven `TestValidateGitRef_*` and five reject/accept tests across `tools`, `tools/core`, `tools/deferred` (red pre-fix: no error, git created the injected `--output=` file — verified empirically for `diff`, `blame`, and the glued `from..to` range; green post-fix). Glued `--since=`/`--grep=`/`-S` sites intentionally untouched (fixed option name, safe value position).
+  - #790: deploy `workspace` override is unconditionally confined via `ResolveWorkspacePath` + `ConfineWorkspacePath(SandboxScopeWorkspace)` ahead of the detect branch so all four actions are covered; proven by `TestDeployTool_WorkspaceOverride_{OutsideRejected,InsideAllowed,RelativeInsideAllowed,TraversalRejected}` (red pre-fix — verified by stashing the fix: outside dir read succeeded with nil error, relative path used raw, traversal error lacked `escapes workspace`; green post-fix). Deliberate behavior change: relative values now resolve against the workspace root.
+  - Three commits total, one per bug, each carrying its engineering-log entry (this ledger rides the third commit, as in tier-1); `go build ./internal/... ./cmd/...`, `go vet ./internal/harness/...`, `go test ./internal/harness/... -count=1` (7 pkgs), focused `-run 'Recipe|Policy|Git|Deploy' -v` (126 subtests), and `go test ./cmd/... -count=1` (35 pkgs) all green; clean `git status`; no merge/push (merge gate handled by the parent agent).
+- Non-goals:
+  - Broader git argv hardening beyond the four bare-ref sites (`--end-of-options` migration, `check-ref-format` validation — rejected in the #789 commit message).
+  - Passing a sandbox scope into `DeployTool` so confinement could follow the caller's scope instead of being unconditional (no such plumbing exists; the unconditional default is the safe choice).
+  - Deduping the `git_diff.go`/`core/git.go` and compact-history copies (scheduled for a later tier).
+- Guardrails/constraints:
+  - Strict TDD per bug: failing regression tests first, confirmed red for the expected reason, minimal fix, confirmed green; per-bug commits referencing their issue.
+  - Anti-ghost-feature rule: `descriptions/*.md` updated to describe only implemented behavior; `TestToolDescriptionsContainBehavioralDirectives` and line-1 directive phrasing preserved.
+  - No work outside the worktree; no merge, push, or `scripts/verify-and-merge.sh`.
+- Open questions:
+  - None for this tier.
+- Next verification step: review the three-commit diff on `fix-harness-tier2-security`, then promote through the repo's normal verify-and-merge flow.

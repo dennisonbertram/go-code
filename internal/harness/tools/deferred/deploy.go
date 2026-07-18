@@ -46,7 +46,7 @@ func DeployTool(registry DeployPlatformRegistry, workspaceRoot string) tools.Too
 				},
 				"workspace": map[string]any{
 					"type":        "string",
-					"description": "Absolute path to the project directory. Defaults to the agent workspace root.",
+					"description": "Path to the project directory, relative to the workspace root (absolute paths must lie inside it). Defaults to the workspace root; paths outside it are rejected.",
 				},
 				"environment": map[string]any{
 					"type":        "string",
@@ -81,10 +81,23 @@ func DeployTool(registry DeployPlatformRegistry, workspaceRoot string) tools.Too
 			return "", fmt.Errorf("action is required")
 		}
 
-		// Resolve workspace directory.
-		wsDir := args.Workspace
-		if wsDir == "" {
-			wsDir = workspaceRoot
+		// Resolve workspace directory. The override is confined to the
+		// workspace root unconditionally (issue #790): DeployTool receives no
+		// sandbox scope, and railway up/fly deploy package and upload this
+		// directory — an unrestricted absolute path would exfiltrate
+		// arbitrary host directories under the default FullAuto mode.
+		// Relative values resolve against the workspace root.
+		wsDir := workspaceRoot
+		if strings.TrimSpace(args.Workspace) != "" {
+			abs, err := tools.ResolveWorkspacePath(workspaceRoot, args.Workspace)
+			if err != nil {
+				return "", fmt.Errorf("resolve deploy workspace: %w", err)
+			}
+			confined, err := tools.ConfineWorkspacePath(tools.SandboxScopeWorkspace, workspaceRoot, nil, abs)
+			if err != nil {
+				return "", fmt.Errorf("deploy workspace: %w", err)
+			}
+			wsDir = confined
 		}
 
 		// Handle detect action — no platform needed.
