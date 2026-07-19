@@ -192,6 +192,14 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeSessionsCommand,
 		},
 		{
+			Name:        "title",
+			Description: "Set or show the current session title (/title clear to remove)",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeTitleCommand,
+		},
+		{
 			Name:        "rewind",
 			Description: "Choose and confirm a destructive session rewind",
 			Handler:     func(cmd Command) CommandResult { return CommandResult{Status: CmdOK} },

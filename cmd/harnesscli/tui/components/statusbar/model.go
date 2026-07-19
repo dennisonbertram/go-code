@@ -11,6 +11,7 @@ import (
 type Model struct {
 	width    int
 	model    string
+	title    string // optional session title (see /title)
 	workdir  string
 	branch   string
 	permMode string // "", "plan", "accept-edits", "auto-approve"
@@ -27,6 +28,7 @@ func New(width int) Model {
 }
 
 func (m *Model) SetModel(name string)    { m.model = name }
+func (m *Model) SetTitle(title string)   { m.title = title }
 func (m *Model) SetWorkdir(path string)  { m.workdir = path }
 func (m *Model) SetBranch(branch string) { m.branch = branch }
 func (m *Model) SetPermMode(mode string) { m.permMode = mode }
@@ -65,7 +67,7 @@ func (m Model) View() string {
 	sep := dimStyle.Render(" ~ ")
 	sepLen := 3 // plain rune width of " ~ "
 
-	// Segments in priority order: model > context > running > cost > perm > branch > workdir > mcpFails
+	// Segments in priority order: model > title > context > running > cost > perm > branch > workdir > mcpFails
 	type segment struct {
 		text     string
 		priority int // lower = higher priority (kept last when trimming)
@@ -75,6 +77,9 @@ func (m Model) View() string {
 	if m.model != "" {
 		segs = append(segs, segment{boldStyle.Render(truncate(m.model, 24)), 1})
 	}
+	if m.title != "" {
+		segs = append(segs, segment{boldStyle.Render(truncate(m.title, 24)), 2})
+	}
 	if m.ctxUsed > 0 && m.ctxTotal > 0 {
 		pct := int(float64(m.ctxUsed)/float64(m.ctxTotal)*100 + 0.5)
 		text := fmt.Sprintf("◫ %d%%/%s", pct, formatCompactTokens(m.ctxTotal))
@@ -82,26 +87,26 @@ func (m Model) View() string {
 		if pct >= 80 {
 			style = warnStyle
 		}
-		segs = append(segs, segment{style.Render(text), 2})
+		segs = append(segs, segment{style.Render(text), 3})
 	}
 	if m.running {
-		segs = append(segs, segment{dimStyle.Render("..."), 3})
+		segs = append(segs, segment{dimStyle.Render("..."), 4})
 	}
 	if m.costUSD > 0 {
-		segs = append(segs, segment{dimStyle.Render(fmt.Sprintf("$%.4f", m.costUSD)), 4})
+		segs = append(segs, segment{dimStyle.Render(fmt.Sprintf("$%.4f", m.costUSD)), 5})
 	}
 	if m.permMode != "" && m.permMode != "default" {
-		segs = append(segs, segment{warnStyle.Render("[" + m.permMode + "]"), 5})
+		segs = append(segs, segment{warnStyle.Render("[" + m.permMode + "]"), 6})
 	}
 	if m.branch != "" {
-		segs = append(segs, segment{dimStyle.Render("(" + m.branch + ")"), 6})
+		segs = append(segs, segment{dimStyle.Render("(" + m.branch + ")"), 7})
 	}
 	if m.workdir != "" {
 		dir := shortenPath(m.workdir, 20)
-		segs = append(segs, segment{dimStyle.Render(dir), 7})
+		segs = append(segs, segment{dimStyle.Render(dir), 8})
 	}
 	if m.mcpFails > 0 {
-		segs = append(segs, segment{warnStyle.Render(fmt.Sprintf("%d MCP fail", m.mcpFails)), 8})
+		segs = append(segs, segment{warnStyle.Render(fmt.Sprintf("%d MCP fail", m.mcpFails)), 9})
 	}
 
 	// Build line progressively, dropping lowest-priority segments when over width.

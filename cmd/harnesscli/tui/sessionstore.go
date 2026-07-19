@@ -27,6 +27,8 @@ type StoredSessionEntry struct {
 	Model     string    `json:"model,omitempty"`
 	TurnCount int       `json:"turn_count"`
 	LastMsg   string    `json:"last_msg,omitempty"`
+	// Title is an optional user-assigned label for the session (see /title).
+	Title string `json:"title,omitempty"`
 }
 
 // SessionStore manages a list of StoredSessionEntry values persisted to a
@@ -147,6 +149,19 @@ func (s *SessionStore) Update(id string, fn func(*StoredSessionEntry)) {
 	}
 }
 
+// SetTitle sets the title of the entry with the given ID. An empty title
+// clears it. It returns false when no entry with that ID exists.
+// Call Save() to persist the change.
+func (s *SessionStore) SetTitle(id, title string) bool {
+	for i := range s.entries {
+		if s.entries[i].ID == id {
+			s.entries[i].Title = title
+			return true
+		}
+	}
+	return false
+}
+
 // List returns a copy of all entries sorted by StartedAt descending (most
 // recent first). It is safe to call on a nil *SessionStore.
 func (s *SessionStore) List() []StoredSessionEntry {
@@ -178,6 +193,7 @@ func sessionEntriesToPicker(entries []StoredSessionEntry) []sessionpicker.Sessio
 			Model:     e.Model,
 			TurnCount: e.TurnCount,
 			LastMsg:   e.LastMsg,
+			Title:     e.Title,
 		}
 	}
 	return out

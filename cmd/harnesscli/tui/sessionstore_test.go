@@ -3,6 +3,7 @@ package tui_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -272,5 +273,116 @@ func TestSS_SaveWriteFileError(t *testing.T) {
 	store.Add(tui.StoredSessionEntry{ID: "y", StartedAt: time.Now()})
 	if err := store.Save(); err == nil {
 		t.Fatal("Save must return an error when WriteFile fails on read-only dir")
+	}
+}
+
+// ─── Title: set + persisted round-trip ────────────────────────────────────────
+
+// TestSS_TitleRoundtrip verifies that a session title survives a Save/Load
+// cycle in sessions.json.
+func TestSS_TitleRoundtrip(t *testing.T) {
+	dir := t.TempDir()
+	store := tui.NewSessionStore(dir)
+	store.Add(tui.StoredSessionEntry{
+		ID:        "titled-session",
+		StartedAt: time.Now(),
+		Title:     "fix auth bug",
+	})
+
+	if err := store.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	store2 := tui.NewSessionStore(dir)
+	if err := store2.Load(); err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	got, ok := store2.Get("titled-session")
+	if !ok {
+		t.Fatal("session missing after Load")
+	}
+	if got.Title != "fix auth bug" {
+		t.Errorf("Title after round-trip: want %q, got %q", "fix auth bug", got.Title)
+	}
+}
+
+// ─── Title: backward compatibility with pre-title sessions.json ───────────────
+
+// TestSS_LoadLegacyJSONWithoutTitle verifies that a sessions.json written
+// before the Title field existed loads cleanly with an empty Title.
+func TestSS_LoadLegacyJSONWithoutTitle(t *testing.T) {
+	dir := t.TempDir()
+	legacy := `[{"id":"old-1","started_at":"2026-01-02T03:04:05Z","model":"gpt-4o","turn_count":3,"last_msg":"hi"}]`
+	if err := os.WriteFile(filepath.Join(dir, "sessions.json"), []byte(legacy), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	store := tui.NewSessionStore(dir)
+	if err := store.Load(); err != nil {
+		t.Fatalf("Load of legacy file failed: %v", err)
+	}
+	got, ok := store.Get("old-1")
+	if !ok {
+		t.Fatal("legacy entry missing after Load")
+	}
+	if got.Title != "" {
+		t.Errorf("legacy entry Title: want empty, got %q", got.Title)
+	}
+	if got.TurnCount != 3 || got.Model != "gpt-4o" || got.LastMsg != "hi" {
+		t.Errorf("legacy fields not preserved: %+v", got)
+	}
+}
+
+// TestSS_TitleOmittedFromJSONWhenEmpty verifies that an entry with no title
+// serializes without the "title" key, keeping sessions.json identical in shape
+// to what pre-title versions wrote.
+func TestSS_TitleOmittedFromJSONWhenEmpty(t *testing.T) {
+	dir := t.TempDir()
+	store := tui.NewSessionStore(dir)
+	store.Add(tui.StoredSessionEntry{ID: "no-title", StartedAt: time.Now(), TurnCount: 1})
+	if err := store.Save(); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(dir, "sessions.json"))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if strings.Contains(string(data), `"title":`) {
+		t.Errorf("sessions.json must omit the title key when empty, got: %s", data)
+	}
+}
+
+// ─── Title: SetTitle setter ───────────────────────────────────────────────────
+
+// TestSS_SetTitleUpdatesExistingEntry verifies SetTitle sets and clears the
+// title on a stored entry.
+func TestSS_SetTitleUpdatesExistingEntry(t *testing.T) {
+	store := tui.NewSessionStore(t.TempDir())
+	store.Add(tui.StoredSessionEntry{ID: "s1", StartedAt: time.Now()})
+
+	if ok := store.SetTitle("s1", "rename me"); !ok {
+		t.Fatal("SetTitle returned false for an existing entry")
+	}
+	got, _ := store.Get("s1")
+	if got.Title != "rename me" {
+		t.Errorf("Title after SetTitle: want %q, got %q", "rename me", got.Title)
+	}
+
+	if ok := store.SetTitle("s1", ""); !ok {
+		t.Fatal("SetTitle(clear) returned false for an existing entry")
+	}
+	got, _ = store.Get("s1")
+	if got.Title != "" {
+		t.Errorf("Title after clearing SetTitle: want empty, got %q", got.Title)
+	}
+}
+
+// TestSS_SetTitleUnknownIDReturnsFalse verifies SetTitle reports failure for a
+// session ID that is not in the store.
+func TestSS_SetTitleUnknownIDReturnsFalse(t *testing.T) {
+	store := tui.NewSessionStore(t.TempDir())
+	if ok := store.SetTitle("missing", "x"); ok {
+		t.Error("SetTitle must return false for an unknown session ID")
 	}
 }

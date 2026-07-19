@@ -138,6 +138,7 @@ Type `/` to open the autocomplete dropdown. `Tab` completes to the common prefix
 | `/model` | Open the model picker |
 | `/profiles` | View and select a capability profile |
 | `/sessions` | Browse and resume past sessions |
+| `/title [text]` | Set or show the current session's title (`/title clear` removes it). Shown in the status bar and the `/sessions` picker, persisted across restarts |
 | `/new` | Start a fresh conversation (resets conversation ID) |
 | `/search <query>` | Search the current session transcript |
 | `/history <query>` | Search across stored session metadata |

@@ -64,9 +64,16 @@ func (m Model) View(width int) string {
 			isSelected := i == m.selected
 
 			// Build columns.
-			shortID := e.ID
-			if len(shortID) > 8 {
-				shortID = shortID[:8]
+			// Prefer the user-assigned title over the truncated session ID.
+			label := e.Title
+			if len([]rune(label)) > titleMaxLen {
+				label = string([]rune(label)[:titleMaxLen])
+			}
+			if label == "" {
+				label = e.ID
+				if len(label) > 8 {
+					label = label[:8]
+				}
 			}
 
 			dateStr := e.StartedAt.Format("Jan 2")
@@ -78,8 +85,8 @@ func (m Model) View(width int) string {
 				lastMsg = string(runes[:lastMsgMaxLen])
 			}
 
-			// Compose the row: ID  Date  Model  Turns  LastMsg
-			metaPart := fmt.Sprintf("  %s  %s  %s  %s  ", shortID, dateStr, e.Model, turnsStr)
+			// Compose the row: Label  Date  Model  Turns  LastMsg
+			metaPart := fmt.Sprintf("  %s  %s  %s  %s  ", label, dateStr, e.Model, turnsStr)
 			rowContent := metaPart + lastMsg
 
 			// Truncate to innerWidth.

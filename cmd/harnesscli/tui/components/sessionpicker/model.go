@@ -9,6 +9,7 @@ import (
 const (
 	maxVisibleRows = 10
 	lastMsgMaxLen  = 60
+	titleMaxLen    = 20
 )
 
 // SessionEntry holds display data for a single past session.
@@ -18,6 +19,7 @@ type SessionEntry struct {
 	Model     string    // LLM model used
 	TurnCount int       // number of turns
 	LastMsg   string    // first 60 chars of last user message
+	Title     string    // optional user-assigned label; shown instead of the ID when set
 }
 
 // Model is the session picker list state machine.

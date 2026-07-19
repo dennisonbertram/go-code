@@ -27,3 +27,4 @@ Command Registry - 80x24
 /sessions — Browse and switch between past sessions
 /stats — Show cost and token statistics
 /subagents — View active subagent processes
+/title — Set or show the current session title (/title clear to remove)

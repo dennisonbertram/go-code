@@ -485,3 +485,70 @@ func TestTUI053_VisualSnapshot_200x50(t *testing.T) {
 		t.Error("View() returned empty output at width 200")
 	}
 }
+
+// ─── Title rendering ─────────────────────────────────────────────────────────
+
+// TestTUI053_ViewPrefersTitleOverID verifies that when a session has a title,
+// the picker row shows the title instead of the truncated session ID.
+func TestTUI053_ViewPrefersTitleOverID(t *testing.T) {
+	entries := []sessionpicker.SessionEntry{
+		{
+			ID:        "abc12345-0000-0000-0000-000000000000",
+			StartedAt: testTime,
+			Model:     "gpt-4.1-mini",
+			TurnCount: 5,
+			LastMsg:   "some message",
+			Title:     "fix auth bug",
+		},
+	}
+	m := sessionpicker.New(entries).Open()
+	v := m.View(80)
+
+	if !strings.Contains(v, "fix auth bug") {
+		t.Errorf("View() should contain the session title:\n%s", v)
+	}
+	if strings.Contains(v, "abc12345") {
+		t.Errorf("View() should not show the truncated ID when a title is set:\n%s", v)
+	}
+}
+
+// TestTUI053_ViewFallsBackToIDWithoutTitle verifies that entries without a
+// title still render the 8-char ID prefix.
+func TestTUI053_ViewFallsBackToIDWithoutTitle(t *testing.T) {
+	entries := []sessionpicker.SessionEntry{
+		{
+			ID:        "abc12345-0000-0000-0000-000000000000",
+			StartedAt: testTime,
+			Model:     "gpt-4.1-mini",
+			TurnCount: 5,
+			LastMsg:   "some message",
+		},
+	}
+	m := sessionpicker.New(entries).Open()
+	v := m.View(80)
+
+	if !strings.Contains(v, "abc12345") {
+		t.Errorf("View() should contain the short ID %q when no title is set:\n%s", "abc12345", v)
+	}
+}
+
+// TestTUI053_ViewTruncatesLongTitle verifies a very long title is clipped so
+// the row stays within the picker width.
+func TestTUI053_ViewTruncatesLongTitle(t *testing.T) {
+	long := "this is an extremely long session title that must be clipped to fit the row"
+	entries := []sessionpicker.SessionEntry{
+		{
+			ID:        "abc12345-0000-0000-0000-000000000000",
+			StartedAt: testTime,
+			Model:     "gpt-4.1-mini",
+			TurnCount: 5,
+			Title:     long,
+		},
+	}
+	m := sessionpicker.New(entries).Open()
+	v := m.View(80)
+
+	if strings.Contains(v, long) {
+		t.Errorf("View() should truncate a long title, got full title in:\n%s", v)
+	}
+}
