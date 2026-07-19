@@ -7,6 +7,12 @@
 //  4. Named profile: ~/.harness/profiles/<name>.toml
 //  5. CLI/env overrides: HARNESS_* environment variables
 //  6. Cloud/team constraints (future stub — not yet applied)
+//
+// Reload classification: every Config field is classified as hot-swappable
+// (takes effect on a live reload for subsequent runs) or restart-only
+// (wired once at startup; a reload reports it but never applies it). The
+// authoritative table lives in reload.go (ReloadClassification) and
+// ReloadDiff reports field changes split by class.
 package config
 
 import (

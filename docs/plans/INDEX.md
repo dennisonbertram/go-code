@@ -5,6 +5,7 @@
 - `819-plan-mode.md` — Epic #819 slice 1: pin plan-mode exit semantics across approval modes (in implementation).
 - `814-tasks-panel.md` — Epic #814 slice 1: `GET /v1/tasks` union endpoint for subagents, cron jobs, and delayed callbacks (in implementation).
 - `817-compact-cmd.md` — Epic #817 slice 1: preserve-instruction in `CompactRun` and the run compact endpoint (in implementation).
+- `815-config-reload.md` — Epic #815 Slice 1: hot-swappable vs restart-only config field classification with `ReloadDiff` (in implementation).
 
 - `2026-07-20-codex-subscription-auth-847-plan.md` — Epic #847 ChatGPT-subscription authentication for the Codex provider (in implementation).
 - `2026-07-20-codex-subscription-auth-847-impact-map.md` — Cross-surface impact map for Epic #847 Codex subscription routing.

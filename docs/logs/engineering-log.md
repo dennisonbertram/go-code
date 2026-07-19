@@ -1,6 +1,5 @@
 # Engineering Log
 
-<<<<<<< HEAD
 ## 2026-07-19 (Coverage-Gate Fix — `internal/acp` Zero-Coverage Functions)
 
 - Post-merge regression gate (`scripts/test-regression.sh`) failed after epic #806 slice 1 landed: `coveragegate` flagged `(*Conn).drainLine` (conn.go) and `(*rpcError).Error` (jsonrpc.go) at 0.0%.
@@ -42,7 +41,7 @@
   `go test ./cmd/harnesscli/... -count=1` green; acceptance
   `printf '...initialize...' | harness acp` prints a single JSON-RPC result
   with capabilities and exits 0.
-=======
+
 ## 2026-07-19 (Unified /tasks Panel — Epic #814, Slice 1)
 
 - Added `GET /v1/tasks` (`internal/server/http_tasks.go`): a read-scoped union endpoint returning subagents, cron jobs, and pending delayed callbacks as one `Task` DTO (`id`, `type`, `status`, `label`, `started_at`, `age_seconds`, `actions`). Unconfigured sources are skipped, so an empty daemon returns `{"tasks": []}`; a failing source fails the request rather than silently dropping entries.
@@ -50,7 +49,6 @@
 - Tenant scoping reuses the existing per-source helpers verbatim (`filterSubagentsByTenant`, `filterCronJobsByTenant`) and mirrors the cron exact-match shape for callbacks; auth matches `/v1/subagents` and `/v1/cron/jobs` (`runs:read`).
 - Wired the daemon's `*tools.CallbackManager` into `server.ServerOptions.CallbackLister` through `cmd/harnessd` (`main.go` → `runtime_container.go` → `bootstrap_helpers.go`).
 - Validation: failing-first tests in `internal/server/http_tasks_test.go` (7 handler tests) and `TestCallbackManagerListAll`; `go test ./internal/server/ ./cmd/harnessd/ -count=1` pass. `go test ./internal/harness/tools/ -count=1` has one pre-existing failure (`TestJobManagerRunForegroundStreamingOverlongLineReturnsPromptly`) that fails identically on main (a439dc9f) and is unrelated to this slice.
->>>>>>> 975b8d49 (feat(server): GET /v1/tasks union endpoint for subagents, cron, callbacks)
 
 ## 2026-07-19 (ACP Server Mode — Epic #746)
 
@@ -1644,3 +1642,12 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
 - Existing OpenAI-compatible request code now supports the Codex backend's no-`/v1` endpoint path and applies `chatgpt-account-id` with the dynamic bearer credential. `HARNESS_PROVIDER=codex-subscription` selects it deterministically when imported credentials are present.
 - Added `harnesscli auth codex login|status|logout`; `/keys` renders the read-only ChatGPT subscription connection state rather than offering API-key entry.
 - Coverage includes OAuth request/error sanitization, import permissions/read-only behavior, catalog mirroring, bootstrap wiring, CLI lifecycle, TUI/server status, fake HTTPS request plus forced mid-session expiry refresh, and a grep-based no-token-logging guard.
+
+## 2026-07-19 (Epic #815 Slice 1 Config Reload Field Classification)
+
+- Change: new `internal/config/reload.go` — the single authoritative classification of every `Config` field as hot-swappable (takes effect on live reload for subsequent runs) or restart-only (wired once at startup, reported but never applied), plus the pure `ReloadDiff(old, new Config) ReloadReport` function later slices (runner swap, `POST /v1/config/reload`, SIGHUP, TUI `/reload`) build on.
+- Classification rationale (grounded in `cmd/harnessd/main.go` consumption): restart-only is exactly `addr` (listen socket bound once), `memory.db_driver`/`memory.db_dsn`/`memory.sqlite_path` (persistence handles opened once), and `mcp_servers` (server processes and tool registry wired once). Everything else — model, max_steps, cost ceiling, memory toggles/thresholds/LLM knobs, auto_compact, forensics, conclusion_watcher, hooks, cron timing — flows into per-run `RunnerConfig` or runtime policy and is hot-swappable.
+- Design: table-driven (`reloadFields` slice with path/class/equality probe per field) so report order is deterministic; `ReloadClassification()` exposes a copy for docs/validation; `ReloadReport` carries `Applied` + `RestartRequired` with `Changed()`/`NeedsRestart()` helpers. No behavior change to `Load`, `Defaults`, or `Resolve`.
+- Tests (TDD, written first and verified red as compile errors): model-only change hot-swappable; `addr` restart-only; memory split (`db_driver` restart-only vs `enabled` swappable); identical configs empty report; `mcp_servers` map change restart-only; slice field (`hooks.dirs`) detection; mixed-change determinism; reflection-based exhaustiveness guard failing any future `Config` field added without classification.
+- Validation: `go test ./internal/config/... -count=1` (green, 9 new tests); `gofmt`/`go vet` clean; every `reload.go` function at 100% statement coverage.
+- Learning: the regression coverage gate rejects any zero-coverage function repo-wide — the first `test-regression.sh` run failed solely on the untested `ReloadClass.String()` helper. Fixed by adding `TestReloadClassString` (including the defensive unknown-class branch) before re-running; the gate failure was self-inflicted, not a baseline issue.
