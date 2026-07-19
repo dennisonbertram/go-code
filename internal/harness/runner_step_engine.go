@@ -964,6 +964,7 @@ func (se *stepEngine) run() {
 
 			meta := r.runMetadata(runID)
 			toolCtx := context.WithValue(ctx, htools.ContextKeyRunID, runID)
+			toolCtx = context.WithValue(toolCtx, htools.ContextKeyPlanModeGate, runPlanModeGate{runner: r, runID: runID})
 			toolCtx = context.WithValue(toolCtx, htools.ContextKeyToolCallID, call.ID)
 			toolCtx = context.WithValue(toolCtx, htools.ContextKeyRunMetadata, meta)
 			toolCtx = htools.WithSandboxScope(toolCtx, effectiveSandboxScope)

@@ -22,6 +22,12 @@ func applyPolicy(def Definition, mode ApprovalMode, policy Policy, handler Handl
 		mode = ApprovalModeFullAuto
 	}
 	return func(ctx context.Context, args json.RawMessage) (string, error) {
+		if gate, ok := PlanModeGateFromContext(ctx); ok && gate.Active() && def.Mutating && !gate.AllowMutation(def, args) {
+			return MarshalToolResult(map[string]any{"error": map[string]any{
+				"code": "plan_mode_denied", "tool": def.Name, "action": def.Action,
+				"reason": "plan mode only permits edits to the designated plan file", "allowed": false,
+			}})
+		}
 		if mode == ApprovalModeFullAuto {
 			return handler(ctx, args)
 		}
