@@ -1,5 +1,9 @@
 # System Log
 
+## 2026-07-19 (Enforced Plan Mode — Epic #740)
+
+- `RunRequest.PlanMode` initializes `Active`; the step engine places a runner-owned gate in real tool contexts, and `ApplyPolicy` returns `plan_mode_denied` before normal approval handling for non-plan mutations. A terminal plan response transitions to `ExitPending`, emits plan approval events, uses the configured `ApprovalBroker`, and returns to `Active` on deny or `Inactive` on approve. `conversation_plans` is run/conversation scoped.
+
 ## 2026-07-19 (Session Rewind — Epic #739)
 
 - `SQLiteConversationStore` owns cascade-deleted rewind snapshots; restore writes/deletes captured paths after hash safety checks, then truncates messages.
