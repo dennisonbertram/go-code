@@ -98,6 +98,24 @@
 - Live-daemon smoke: `harnessd` with `HARNESS_PROVIDER=fake` + a scripted bash turn held active via `HARNESS_TOOL_APPROVAL_MODE=all`; `harnesscli steer <id> "focus on X"` printed `Run <id> steering accepted` (exit 0); unknown run → `not found` (exit 1); finished run → `not active` (exit 1).
 - Validation: `go test ./cmd/harnesscli/... -count=1` all ok; `go test ./internal/server/ ./internal/harness/ -count=1` ok; `go vet ./cmd/harnesscli/...` clean; gofmt clean on touched files (repo-wide gofmt drift on unrelated files pre-exists on main).
 
+## 2026-07-19 (Clipboard Image Reader — Epic #818 Slice 1)
+
+- Added `ReadImageFromClipboard` in `cmd/harnesscli/tui/clipboard_image.go`:
+  reads a PNG off the system clipboard into an `os.MkdirTemp` file and returns
+  `ClipboardImage{Path, MediaType}` with typed sentinel errors
+  (`ErrClipboardHeadless`, `ErrClipboardUnsupported`, `ErrClipboardNoImage`).
+- Platform matrix: macOS via `osascript` (pbpaste cannot read image flavors —
+  its `-Prefer` accepts only txt/rtf/ps — so the `PNGf` class is read as a
+  `«data PNGf<hex>»` record and hex-decoded in-process); Linux via `wl-paste`
+  or `xclip`; anything else returns `ErrClipboardUnsupported`. Headless mode
+  (`IsHeadless()`) short-circuits before any subprocess.
+- Strict TDD: 13 failing-first tests cover the happy paths (exact PNG bytes in
+  the temp file), no-image/tool-missing/malformed-payload errors, and the
+  no-subprocess headless guarantee, using package-level exec seams
+  (`clipboardImageGOOS`/`clipboardImageLookPath`/`clipboardImageOutput`).
+- Verified on macOS against the real clipboard (image set then restored):
+  reader produced a valid PNG temp file via the unfaked code path.
+
 ## 2026-07-19 (ACP Server Mode — Epic #746)
 
 - Added `cmd/harness-acp` and `internal/harnessacp`, using pinned
