@@ -50,6 +50,33 @@
 - Wired the daemon's `*tools.CallbackManager` into `server.ServerOptions.CallbackLister` through `cmd/harnessd` (`main.go` → `runtime_container.go` → `bootstrap_helpers.go`).
 - Validation: failing-first tests in `internal/server/http_tasks_test.go` (7 handler tests) and `TestCallbackManagerListAll`; `go test ./internal/server/ ./cmd/harnessd/ -count=1` pass. `go test ./internal/harness/tools/ -count=1` has one pre-existing failure (`TestJobManagerRunForegroundStreamingOverlongLineReturnsPromptly`) that fails identically on main (a439dc9f) and is unrelated to this slice.
 
+## 2026-07-19 (Agent Swarm — Epic #808, Slice 1)
+
+- Added `internal/subagents/swarm.go`: a `Swarm` orchestrator that fans one
+  `prompt_template` (with a required `{{item}}` placeholder) over 1–128 items
+  into concurrent subagents started through the existing
+  `tools.SubagentManager` (`InlineManager`).
+- Validation rejects missing placeholders, empty/oversized item lists,
+  duplicate expanded prompts (compared trimmed, since the manager trims), and
+  `resume_agent_ids` (reserved for Slice 2).
+- Concurrency ramps kimi-code style: 5 members start immediately, then +1
+  in-flight allowance every 700ms, capped by `HARNESS_SWARM_MAX_CONCURRENCY`
+  (read once at construction; default 128, clamped to 128).
+- Caller context cancellation cancels every started member via the manager
+  (members finishing Start after the sweep self-cancel, closing the race);
+  unstarted members are reported cancelled. Member failures land in the
+  aggregated `SwarmReport` (deterministic item order) and never abort the
+  cohort.
+- TDD: behavior tests landed first (initially failing on undefined symbols),
+  covering validation, ramp timing via an injected ticker, env cap,
+  cancellation propagation, per-member failure capture, and an acceptance
+  test through a real `Manager` + `InlineManager`.
+- Validation: `go test ./internal/subagents/... -count=1` and `-race` green;
+  new tests repeated 5x without flakes.
+- Note: epic-level docs (`agent_swarm` tool description, swarm design doc)
+  land with their owning slices (3+); no pre-existing subagent design doc
+  exists to update in this slice.
+
 ## 2026-07-19 (ACP Server Mode — Epic #746)
 
 - Added `cmd/harness-acp` and `internal/harnessacp`, using pinned
