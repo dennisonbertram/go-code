@@ -108,6 +108,38 @@ func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// POST /v1/conversations/{id}/compact — context compaction (runs:write) (Issue #33)
+	if len(parts) == 2 && parts[1] == "rewind-points" {
+		if r.Method != http.MethodGet {
+			writeMethodNotAllowed(w, http.MethodGet)
+			return
+		}
+		if !hasScope(r.Context(), store.ScopeRunsRead) {
+			writeScopeError(w, store.ScopeRunsRead)
+			return
+		}
+		if s.blockConversationCrossTenant(w, r, parts[0]) {
+			return
+		}
+		s.handleListRewindPoints(w, r, parts[0])
+		return
+	}
+	if len(parts) == 2 && parts[1] == "rewind" {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		if !hasScope(r.Context(), store.ScopeRunsWrite) {
+			writeScopeError(w, store.ScopeRunsWrite)
+			return
+		}
+		if s.blockConversationCrossTenant(w, r, parts[0]) {
+			return
+		}
+		s.handleRestoreRewind(w, r, parts[0])
+		return
+	}
+
+	// POST /v1/conversations/{id}/compact — context compaction (runs:write) (Issue #33)
 	if len(parts) == 2 && parts[1] == "compact" {
 		if r.Method != http.MethodPost {
 			writeMethodNotAllowed(w, http.MethodPost)
@@ -144,6 +176,56 @@ func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
 	}
 
 	http.NotFound(w, r)
+}
+
+func (s *Server) handleListRewindPoints(w http.ResponseWriter, r *http.Request, convID string) {
+	rewind, ok := s.runner.GetConversationStore().(harness.RewindStore)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "not_implemented", "rewind persistence is not configured")
+		return
+	}
+	points, err := rewind.ListRewindPoints(r.Context(), convID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"points": points})
+}
+
+func (s *Server) handleRestoreRewind(w http.ResponseWriter, r *http.Request, convID string) {
+	var req struct {
+		PointID string `json:"point_id"`
+		Force   bool   `json:"force"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || strings.TrimSpace(req.PointID) == "" {
+		writeError(w, http.StatusBadRequest, "invalid_request", "point_id is required")
+		return
+	}
+	store := s.runner.GetConversationStore()
+	rewind, ok := store.(harness.RewindStore)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "not_implemented", "rewind persistence is not configured")
+		return
+	}
+	owner, err := store.GetConversationOwner(r.Context(), convID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	if owner == nil || owner.Workspace == "" {
+		writeError(w, http.StatusNotFound, "not_found", "conversation workspace not found")
+		return
+	}
+	result, err := rewind.RestoreRewindPoint(r.Context(), convID, req.PointID, owner.Workspace, req.Force)
+	if err != nil {
+		code := http.StatusConflict
+		if strings.Contains(err.Error(), "not found") {
+			code = http.StatusNotFound
+		}
+		writeError(w, code, "rewind_refused", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (s *Server) handleSearchConversations(w http.ResponseWriter, r *http.Request) {

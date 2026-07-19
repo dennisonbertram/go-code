@@ -484,7 +484,7 @@ func (s *SQLiteConversationStore) SaveRewindPoint(ctx context.Context, point Rew
 
 // ListRewindPoints returns newest rewind points first with their captured files.
 func (s *SQLiteConversationStore) ListRewindPoints(ctx context.Context, convID string) ([]RewindPoint, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.step, p.tool, p.created_at, f.path, f.content, f.existed, f.skipped, f.skip_reason, f.expected_hash FROM rewind_points p LEFT JOIN rewind_file_snapshots f ON f.point_id=p.id WHERE p.conversation_id=? ORDER BY p.step DESC, p.created_at DESC, f.id ASC`, convID)
+	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.step, p.tool, p.created_at, f.path, f.content, COALESCE(f.existed,0), COALESCE(f.skipped,0), COALESCE(f.skip_reason,''), COALESCE(f.expected_hash,'') FROM rewind_points p LEFT JOIN rewind_file_snapshots f ON f.point_id=p.id WHERE p.conversation_id=? ORDER BY p.step DESC, p.created_at DESC, f.id ASC`, convID)
 	if err != nil {
 		return nil, fmt.Errorf("list rewind points: %w", err)
 	}
@@ -492,7 +492,8 @@ func (s *SQLiteConversationStore) ListRewindPoints(ctx context.Context, convID s
 	byID := map[string]int{}
 	points := []RewindPoint{}
 	for rows.Next() {
-		var id, tool, created, path, reason, expected string
+		var id, tool, created, reason, expected string
+		var path sql.NullString
 		var step, existed, skipped int
 		var content []byte
 		if err := rows.Scan(&id, &step, &tool, &created, &path, &content, &existed, &skipped, &reason, &expected); err != nil {
@@ -505,8 +506,8 @@ func (s *SQLiteConversationStore) ListRewindPoints(ctx context.Context, convID s
 			byID[id] = i
 			points = append(points, RewindPoint{ID: id, ConversationID: convID, Step: step, Tool: tool, CreatedAt: t})
 		}
-		if path != "" {
-			points[i].Files = append(points[i].Files, RewindFileSnapshot{Path: path, Content: content, Exists: existed == 1, Skipped: skipped == 1, SkipReason: reason, ExpectedHash: expected})
+		if path.Valid && path.String != "" {
+			points[i].Files = append(points[i].Files, RewindFileSnapshot{Path: path.String, Content: content, Exists: existed == 1, Skipped: skipped == 1, SkipReason: reason, ExpectedHash: expected})
 		}
 	}
 	if err := rows.Err(); err != nil {

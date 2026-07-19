@@ -70,6 +70,7 @@ type RewindPoint struct {
 type RewindStore interface {
 	SaveRewindPoint(context.Context, RewindPoint) error
 	ListRewindPoints(context.Context, string) ([]RewindPoint, error)
+	RestoreRewindPoint(context.Context, string, string, string, bool) (RewindRestoreResult, error)
 }
 
 var rewindPatchPath = regexp.MustCompile(`(?m)^\+\+\+\s+(?:[ab]/)?([^\t\n]+)`) // unified diff destination path
