@@ -176,6 +176,16 @@ func (a *Agent) projectEvent(ctx context.Context, id acp.SessionId, event harnes
 	case "tool.call.completed":
 		callID, _ := event.Data["call_id"].(string)
 		return a.update(ctx, id, acp.UpdateToolCall(acp.ToolCallId(callID), acp.WithUpdateStatus(acp.ToolCallStatusCompleted)))
+	case "todos.updated":
+		raw, _ := event.Data["todos"].([]any)
+		entries := make([]acp.PlanEntry, 0, len(raw))
+		for _, value := range raw {
+			todo, _ := value.(map[string]any)
+			text, _ := todo["text"].(string)
+			status, _ := todo["status"].(string)
+			entries = append(entries, acp.PlanEntry{Content: text, Status: acp.PlanEntryStatus(status)})
+		}
+		return a.update(ctx, id, acp.UpdatePlan(entries...))
 	}
 	return nil
 }

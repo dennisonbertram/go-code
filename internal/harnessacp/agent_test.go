@@ -102,6 +102,18 @@ func TestApprovalEventRequestsPermissionAndApprovesRun(t *testing.T) {
 	}
 }
 
+func TestProjectEventProjectsTodosAsPlan(t *testing.T) {
+	agent := NewAgent("http://example.test")
+	var got acp.SessionUpdate
+	agent.update = func(_ context.Context, _ acp.SessionId, u acp.SessionUpdate) error { got = u; return nil }
+	if err := agent.projectEvent(context.Background(), "s", harnessmcp.RunEvent{Type: "todos.updated", Data: map[string]any{"todos": []any{map[string]any{"text": "write tests", "status": "in_progress"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got.Plan == nil || len(got.Plan.Entries) != 1 {
+		t.Fatalf("plan = %#v", got.Plan)
+	}
+}
+
 func TestNewSessionCreatesStableHarnessConversation(t *testing.T) {
 	agent := NewAgent("http://example.test")
 	got, err := agent.NewSession(context.Background(), acp.NewSessionRequest{Cwd: "/workspace", McpServers: []acp.McpServer{}})
