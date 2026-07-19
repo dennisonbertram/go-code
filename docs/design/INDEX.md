@@ -9,4 +9,4 @@
 - `plugins.md`: Plugin system design — Go-level hook model, plugin structure, conclusion-watcher reference, and the config-driven hooks layer (hook-file schema, discovery, trust model, wire protocol).
 # Installable plugin bundles
 
-- `installable-plugin-bundles.md`: Bundle layout, trust model, lifecycle, and marketplace format.
+- `installable-plugin-bundles.md`: Plugin home decision, `plugin.json` manifest v1 authoring contract, install layout, trust model, and marketplace format.

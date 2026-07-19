@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	tuiplugin "go-agent-harness/cmd/harnesscli/tui/plugin"
 )
@@ -32,6 +34,35 @@ func LoadAndRegisterPlugins(registry *CommandRegistry, dirs ...string) []string 
 		return nil
 	}
 	return warnings
+}
+
+// legacyPluginsDirWarning returns a deprecation warning when dir (the legacy
+// ~/.config/harnesscli/plugins directory) contains JSON plugin definitions,
+// pointing the user at the installable bundle format and its plugin home. It
+// returns "" when the directory is missing, unreadable, or holds no JSON
+// files; broken files inside an existing dir are already surfaced as loader
+// errors by LoadAndRegisterPlugins.
+func legacyPluginsDirWarning(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if filepath.Ext(entry.Name()) == ".json" {
+			count++
+		}
+	}
+	if count == 0 {
+		return ""
+	}
+	return fmt.Sprintf("legacy plugin directory %s contains %d JSON plugin(s); the legacy JSON plugin format is deprecated — migrate to installable plugin bundles (plugin.json manifest) under ~/.go-harness/plugins", dir, count)
 }
 
 func pluginCommandEntry(def tuiplugin.PluginDef) CommandEntry {

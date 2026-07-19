@@ -1,5 +1,13 @@
 # Engineering Log
 
+## 2026-07-19 (Plugin Home Decision + Manifest v1 Contract — Epic #821 Slice 1)
+
+- Extended `docs/design/installable-plugin-bundles.md` into the stable v1 authoring contract: full `plugin.json` field reference with validation rules, install layout (`<name>/<version>` under `$HARNESS_GLOBAL_DIR/plugins`, default `~/.go-harness/plugins`), and the enabled-vs-trusted gating table grounded in the current loader wiring.
+- Decided the single plugin home: `~/.go-harness/plugins` is the bundle home; `~/.config/harnesscli/plugins/*.json` is legacy-but-supported with a documented migration path.
+- Added a TUI startup warning (`legacyPluginsDirWarning` in `cmd/harnesscli/tui/plugin_loader.go`, wired in `model.go`) when the legacy dir contains JSON plugins, pointing at the bundle format; startup status wording changed from "had errors loading" to "plugin warning(s) at startup" since warnings now include a non-error deprecation notice.
+- TDD: failing-first tests cover the warning surface (non-empty/missing/empty/JSON-free dirs) and that legacy JSON plugins still register as working slash commands while the warning surfaces.
+- Validation: `go test ./cmd/harnesscli/tui/ -run 'TestLegacyPluginsDir|TestNoLegacyPluginsDir|TestLoadAndRegisterPlugins|TestWithPluginsDir' -count=1` and the full touched-package runs below are green.
+
 ## 2026-07-19 (ACP Server Mode — Epic #746)
 
 - Added `cmd/harness-acp` and `internal/harnessacp`, using pinned
