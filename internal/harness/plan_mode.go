@@ -88,6 +88,19 @@ type runPlanModeGate struct {
 	runID  string
 }
 
+// PlanModeState returns the live plan-mode state for a run. It is primarily
+// useful to transports and integration tests which must observe approval
+// transitions without reaching into runner internals.
+func (r *Runner) PlanModeState(runID string) (PlanModeState, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	st, ok := r.runs[runID]
+	if !ok {
+		return "", false
+	}
+	return st.planMode, true
+}
+
 func (g runPlanModeGate) Active() bool {
 	g.runner.mu.RLock()
 	defer g.runner.mu.RUnlock()
