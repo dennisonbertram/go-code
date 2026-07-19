@@ -303,6 +303,9 @@ func (m *mockConvStore) UndoPrompts(_ context.Context, _ string, _ int) (int, er
 func (m *mockConvStore) GetConversationOwner(_ context.Context, _ string) (*Conversation, error) {
 	return nil, nil
 }
+func (m *mockConvStore) ForkConversation(_ context.Context, _, _ string) (*Conversation, error) {
+	return nil, nil
+}
 
 func TestConversationStoreAdapterListConversations(t *testing.T) {
 	t.Parallel()

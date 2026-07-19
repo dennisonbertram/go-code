@@ -308,3 +308,29 @@ func (s *memoryConversationStore) CompactConversation(context.Context, string, i
 func (s *memoryConversationStore) UndoPrompts(context.Context, string, int) (int, error) {
 	return 0, nil
 }
+
+func (s *memoryConversationStore) ForkConversation(_ context.Context, srcID, newID string) (*Conversation, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	src, ok := s.owners[srcID]
+	if !ok {
+		return nil, fmt.Errorf("fork: source conversation %q not found", srcID)
+	}
+	if _, taken := s.owners[newID]; taken {
+		return nil, fmt.Errorf("fork: target conversation %q already exists", newID)
+	}
+	s.messages[newID] = copyMessages(s.messages[srcID])
+	now := time.Now().UTC()
+	fork := &Conversation{
+		ID:        newID,
+		Title:     src.Title,
+		CreatedAt: now,
+		UpdatedAt: now,
+		MsgCount:  len(s.messages[newID]),
+		Workspace: src.Workspace,
+		TenantID:  src.TenantID,
+	}
+	s.owners[newID] = fork
+	out := *fork
+	return &out, nil
+}

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -93,6 +94,22 @@ func (f *forkHistoryConvStore) CompactConversation(_ context.Context, _ string, 
 }
 func (f *forkHistoryConvStore) UndoPrompts(_ context.Context, _ string, _ int) (int, error) {
 	return 0, nil
+}
+func (f *forkHistoryConvStore) ForkConversation(_ context.Context, srcID, newID string) (*harness.Conversation, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	msgs, ok := f.messages[srcID]
+	if !ok {
+		return nil, fmt.Errorf("fork: source conversation %q not found", srcID)
+	}
+	if _, taken := f.messages[newID]; taken {
+		return nil, fmt.Errorf("fork: target conversation %q already exists", newID)
+	}
+	cp := make([]harness.Message, len(msgs))
+	copy(cp, msgs)
+	f.messages[newID] = cp
+	f.tenants[newID] = f.tenants[srcID]
+	return &harness.Conversation{ID: newID, TenantID: f.tenants[newID], MsgCount: len(msgs)}, nil
 }
 
 // multiTurnForkRollout is a hand-authored rollout with two user turns

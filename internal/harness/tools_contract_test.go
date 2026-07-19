@@ -218,6 +218,9 @@ func (m *contractMockConversationStore) UndoPrompts(_ context.Context, _ string,
 func (m *contractMockConversationStore) GetConversationOwner(_ context.Context, _ string) (*Conversation, error) {
 	return nil, nil
 }
+func (m *contractMockConversationStore) ForkConversation(_ context.Context, _, _ string) (*Conversation, error) {
+	return nil, nil
+}
 
 // TestDefaultRegistryToolContractWithConversations verifies conversation tools appear when store is configured.
 func TestDefaultRegistryToolContractWithConversations(t *testing.T) {
