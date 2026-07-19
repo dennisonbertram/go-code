@@ -5,6 +5,7 @@
 - `813-skill-args.md` — Epic #813 slice 1: quote-aware argument tokenizer (`SplitArgs`) for skill argument paths (in implementation).
 - `807-service-install.md` — Epic #807 slice 1: `harnesscli service install/uninstall` with launchd + systemd generators (in implementation).
 - `806-acp-server.md` — ACP server mode epic #806, slice 1: stdio JSON-RPC framing and initialize handshake in the stdlib-only `internal/acp` package plus the `harness acp` subcommand (in implementation).
+- `805-undo-prompts.md` — Epic #805 Slice 1 plan: `ConversationStore.UndoPrompts` with compaction-boundary guard (in implementation).
 - `2026-07-19-acp-epic-746-plan.md` — ACP server mode epic #746 (in implementation).
 
 - `PLAN_TEMPLATE.md`: Required template for pre-implementation planning with checklist.
