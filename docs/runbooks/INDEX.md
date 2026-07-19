@@ -1,5 +1,6 @@
 # Runbooks Index
 
+- `acp.md` — configure and verify the `harness-acp` Agent Client Protocol stdio adapter.
 - [Session rewind](session-rewind.md) — destructive file-snapshot restore and conversation truncation.
 
 - `testing.md`: How to design and run meaningful tests before commit.

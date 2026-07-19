@@ -77,7 +77,9 @@ const (
 	// tool call. A permission_denied error is returned to the LLM and the run
 	// continues to the next step.
 	// Payload fields: call_id (string), tool (string).
-	EventToolApprovalDenied   EventType = "tool.approval_denied"
+	EventToolApprovalDenied EventType = "tool.approval_denied"
+	// EventTodosUpdated is emitted after a run's todo list changes.
+	EventTodosUpdated        EventType = "todos.updated"
 	EventPlanApprovalRequired EventType = "plan.approval_required"
 	EventPlanApprovalGranted  EventType = "plan.approval_granted"
 	EventPlanApprovalDenied   EventType = "plan.approval_denied"
@@ -408,6 +410,7 @@ func AllEventTypes() []EventType {
 		EventToolApprovalRequired,
 		EventToolApprovalGranted,
 		EventToolApprovalDenied,
+		EventTodosUpdated,
 		EventAssistantMessage,
 		EventConversationContinued,
 		EventPromptResolved,

@@ -8,10 +8,52 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"go-agent-harness/internal/harness"
 	"go-agent-harness/internal/harness/tools/deferred"
 )
+
+func TestTodosPutEmitsTodosUpdatedEventForActiveRun(t *testing.T) {
+	blocker := make(chan struct{})
+	runner := harness.NewRunner(&blockingServerProvider{blocker: blocker}, harness.NewRegistry(), harness.RunnerConfig{MaxSteps: 1})
+	todos := newFakeTodoManager()
+	ts := httptest.NewServer(NewWithOptions(ServerOptions{Runner: runner, Todos: todos}))
+	defer ts.Close()
+	defer close(blocker)
+	run, err := runner.StartRun(harness.RunRequest{Prompt: "block"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, stream, cancel, err := runner.Subscribe(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancel()
+	req, err := http.NewRequest(http.MethodPut, ts.URL+"/v1/runs/"+run.ID+"/todos", bytes.NewBufferString(`{"todos":[{"text":"write regression","status":"in_progress"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT todos status = %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case event := <-stream:
+			if event.Type == harness.EventTodosUpdated {
+				return
+			}
+		case <-deadline:
+			t.Fatal("timed out waiting for todos.updated")
+		}
+	}
+}
 
 // fakeTodoManager is a simple in-memory TodoManager for testing.
 type fakeTodoManager struct {
@@ -256,9 +298,9 @@ func TestExtractRunID(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		path          string
-		wantRunID     string
-		wantSuffix    string
+		path       string
+		wantRunID  string
+		wantSuffix string
 	}{
 		{"/v1/runs/abc123/todos", "abc123", "todos"},
 		{"/v1/runs/run-xyz/todos", "run-xyz", "todos"},

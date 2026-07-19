@@ -1,10 +1,12 @@
 package harnessmcp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -14,6 +16,99 @@ import (
 type HarnessClient struct {
 	baseURL    string
 	httpClient *http.Client
+}
+
+// RunEvent is the typed payload delivered by harnessd's existing SSE endpoint.
+type RunEvent struct {
+	Type string
+	Data map[string]any
+}
+
+func (c *HarnessClient) ContinueRun(ctx context.Context, runID, prompt string) (StartRunResponse, error) {
+	return c.postRun(ctx, "/v1/runs/"+url.PathEscape(runID)+"/continue", map[string]string{"prompt": prompt})
+}
+func (c *HarnessClient) CancelRun(ctx context.Context, runID string) error {
+	_, err := c.postRun(ctx, "/v1/runs/"+url.PathEscape(runID)+"/cancel", nil)
+	return err
+}
+func (c *HarnessClient) ApproveRun(ctx context.Context, runID string) error {
+	_, err := c.postRun(ctx, "/v1/runs/"+url.PathEscape(runID)+"/approve", nil)
+	return err
+}
+func (c *HarnessClient) DenyRun(ctx context.Context, runID string) error {
+	_, err := c.postRun(ctx, "/v1/runs/"+url.PathEscape(runID)+"/deny", nil)
+	return err
+}
+func (c *HarnessClient) postRun(ctx context.Context, path string, bodyValue any) (StartRunResponse, error) {
+	var body io.Reader
+	if bodyValue != nil {
+		raw, err := json.Marshal(bodyValue)
+		if err != nil {
+			return StartRunResponse{}, err
+		}
+		body = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, body)
+	if err != nil {
+		return StartRunResponse{}, err
+	}
+	if bodyValue != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return StartRunResponse{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return StartRunResponse{}, fmt.Errorf("harness_client: post %s: status %d", path, resp.StatusCode)
+	}
+	var result StartRunResponse
+	_ = json.NewDecoder(resp.Body).Decode(&result)
+	return result, nil
+}
+
+// StreamRunEvents parses harnessd SSE blocks into typed events. It is shared by protocol adapters.
+func (c *HarnessClient) StreamRunEvents(ctx context.Context, runID string, receive func(RunEvent) error) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/runs/"+url.PathEscape(runID)+"/events", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("harness_client: events status %d", resp.StatusCode)
+	}
+	s := bufio.NewScanner(resp.Body)
+	var typ string
+	var data []byte
+	for s.Scan() {
+		line := s.Text()
+		if line == "" {
+			if typ != "" {
+				var payload map[string]any
+				if err := json.Unmarshal(data, &payload); err != nil {
+					return err
+				}
+				if err := receive(RunEvent{Type: typ, Data: payload}); err != nil {
+					return err
+				}
+				typ = ""
+				data = nil
+			}
+			continue
+		}
+		if len(line) > 7 && line[:7] == "event: " {
+			typ = line[7:]
+		}
+		if len(line) > 6 && line[:6] == "data: " {
+			data = append(data, line[6:]...)
+		}
+	}
+	return s.Err()
 }
 
 // NewHarnessClient creates a new HarnessClient pointing at baseURL.

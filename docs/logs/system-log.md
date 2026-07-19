@@ -1,5 +1,17 @@
 # System Log
 
+## 2026-07-19 (ACP Server Mode — Epic #746)
+
+- System/component: `cmd/harness-acp` and `internal/harnessacp`.
+- Responsibilities: ACP stdio lifecycle and wire translation only; harnessd
+  remains responsible for execution, event production, approval brokerage,
+  cancellation, and todo state.
+- Inputs/outputs: ACP JSON-RPC on stdio; harnessd REST for run commands and
+  SSE for streamed events; ACP session updates/permission requests to editor.
+- Failure modes: daemon/network failures are returned as ACP request errors;
+  session cancellation maps to the underlying run cancel route; an editor
+  permission denial maps to the existing deny route.
+
 ## 2026-07-19 (Enforced Plan Mode — Epic #740)
 
 - `RunRequest.PlanMode` initializes `Active`; the step engine places a runner-owned gate in real tool contexts, and `ApplyPolicy` returns `plan_mode_denied` before normal approval handling for non-plan mutations. A terminal plan response transitions to `ExitPending`, emits plan approval events, uses the configured `ApprovalBroker`, and returns to `Active` on deny or `Inactive` on approve. `conversation_plans` is run/conversation scoped.

@@ -1,5 +1,19 @@
 # Engineering Log
 
+## 2026-07-19 (ACP Server Mode — Epic #746)
+
+- Added `cmd/harness-acp` and `internal/harnessacp`, using pinned
+  `github.com/coder/acp-go-sdk v0.13.5` (compatible with Go 1.25) for stdio
+  JSON-RPC lifecycle handling.
+- The adapter keeps harnessd as the only execution path: ACP sessions map to
+  stable conversations; prompt/cancel/approve/deny use existing run routes;
+  the shared `HarnessClient` now exposes parsed SSE streaming for adapters.
+- ACP updates project assistant message/thought deltas, tool lifecycle events,
+  approval requests, and todo plan updates. The key-free fake HTTP/SSE ACP
+  prompt-turn test covers request-to-terminal update flow.
+- Validation before PR: targeted ACP and harness MCP package tests, then the
+  repository formatting, vet, and regression gates.
+
 ## 2026-07-19 (Enforced Plan Mode — Epic #740)
 
 - Added per-run plan state, central policy-wrapper gating, broker-backed plan-exit approval, SQLite plan persistence, CLI/TUI request plumbing, and a scrollable TUI approval preview. Mutations with absent or non-matching paths fail closed while planning.

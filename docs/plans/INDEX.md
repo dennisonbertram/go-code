@@ -1,5 +1,7 @@
 # Plans Index
 
+- `2026-07-19-acp-epic-746-plan.md` — ACP server mode epic #746 (in implementation).
+
 - `PLAN_TEMPLATE.md`: Required template for pre-implementation planning with checklist.
 - `IMPACT_MAP_TEMPLATE.md`: One-page cross-surface impact map template for provider/model flow changes.
 - `active-plan.md`: Current active plan tracker.

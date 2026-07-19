@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"go-agent-harness/internal/harness"
 	"go-agent-harness/internal/harness/tools/deferred"
 )
 
@@ -53,6 +54,7 @@ func (s *Server) handlePutRunTodos(w http.ResponseWriter, r *http.Request, runID
 	}
 
 	todos := s.todos.GetTodos(runID)
+	s.runner.EmitEvent(runID, harness.EventTodosUpdated, map[string]any{"todos": todos})
 	writeJSON(w, http.StatusOK, map[string]any{"run_id": runID, "todos": todos})
 }
 

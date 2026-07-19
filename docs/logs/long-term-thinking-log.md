@@ -1,5 +1,12 @@
 # Long-Term Thinking Log
 
+## 2026-07-19 (Agent Client Protocol Server Mode — Epic #746)
+
+- Command intent: Implement ACP server mode and all eight child slices (#751, #754, #758, #760, #771, #772, #773, #774), commit each slice, then push and open a PR without merging it.
+- User intent: Let ACP editors start and continue harnessd conversations, receive live assistant/tool/plan state, decide approvals, and cancel a turn without creating a second execution path.
+- Success definition: `harness-acp` completes ACP initialize over stdio; session/new and session/prompt map to existing harnessd APIs; SSE is projected as ACP updates; approval/cancel/todos map to their existing APIs; fake-provider integration is key-free; docs include a Zed checklist.
+- Guardrails/constraints: SDK v0.13.5 is compatible with Go 1.25 (requires Go 1.21+); use it rather than hand-rolling transport. The adapter owns wire translation only and must reuse harnessd HTTP/SSE, approval broker routes, and todo state.
+
 ## 2026-07-19 (Plan Mode — Epic #740)
 
 - Command intent: Implement all six plan-mode slices in this worktree, verify, push, and open a PR without merging it.
