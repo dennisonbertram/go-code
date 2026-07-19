@@ -3,6 +3,7 @@
 - `2026-07-20-kimi-subscription-auth-848-plan.md` — Epic #848 Kimi Code subscription auth, endpoint spike, token import, provider wiring, and CLI/TUI lifecycle (in implementation).
 - `2026-07-20-kimi-subscription-auth-848-impact-map.md` — Cross-surface impact map for Epic #848 Kimi subscription authentication.
 - `819-plan-mode.md` — Epic #819 slice 1: pin plan-mode exit semantics across approval modes (in implementation).
+- `814-tasks-panel.md` — Epic #814 slice 1: `GET /v1/tasks` union endpoint for subagents, cron jobs, and delayed callbacks (in implementation).
 
 - `2026-07-20-codex-subscription-auth-847-plan.md` — Epic #847 ChatGPT-subscription authentication for the Codex provider (in implementation).
 - `2026-07-20-codex-subscription-auth-847-impact-map.md` — Cross-surface impact map for Epic #847 Codex subscription routing.
