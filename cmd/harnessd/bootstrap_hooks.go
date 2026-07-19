@@ -2,10 +2,12 @@ package main
 
 import (
 	"log"
+	"path/filepath"
 
 	"go-agent-harness/internal/config"
 	"go-agent-harness/internal/harness"
 	"go-agent-harness/internal/hooks"
+	"go-agent-harness/internal/plugins"
 )
 
 // registerConfigDrivenHooks loads config-driven lifecycle hooks (epic #737)
@@ -58,4 +60,29 @@ func registerConfigDrivenHooks(harnessCfg config.Config, workspace, home string,
 			h.Name, h.Event, h.Kind, h.Source, h.File)
 	}
 	return summary
+}
+
+// registerTrustedPluginHooks reuses the single hooks loader after the plugin
+// state store has independently granted executable trust. Untrusted bundles
+// never reach hooks.LoadWithOptions and therefore cannot execute.
+func registerTrustedPluginHooks(root string, store *plugins.StateStore, runnerCfg *harness.RunnerConfig) {
+	bundles, err := plugins.TrustedBundles(root, store)
+	if err != nil {
+		log.Printf("plugin hooks: discover trusted bundles: %v", err)
+		return
+	}
+	for _, bundle := range bundles {
+		if bundle.HooksPath == "" {
+			continue
+		}
+		defs, skips := hooks.LoadWithOptions(hooks.LoadOptions{UserDir: filepath.Dir(bundle.HooksPath)}, filepath.Dir(bundle.HooksPath))
+		for _, skip := range skips {
+			log.Printf("plugin hooks: skipped %s: %s", skip.File, skip.Reason)
+		}
+		adapters := hooks.Build(defs, &stdLogger{})
+		runnerCfg.PreMessageHooks = append(runnerCfg.PreMessageHooks, adapters.PreMessage...)
+		runnerCfg.PostMessageHooks = append(runnerCfg.PostMessageHooks, adapters.PostMessage...)
+		runnerCfg.PreToolUseHooks = append(runnerCfg.PreToolUseHooks, adapters.PreToolUse...)
+		runnerCfg.PostToolUseHooks = append(runnerCfg.PostToolUseHooks, adapters.PostToolUse...)
+	}
 }

@@ -845,6 +845,8 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	// and append adapters to the existing hook slices. Runs AFTER compiled-in
 	// plugins so plugin hooks keep their leading slice position.
 	hooksSummary := registerConfigDrivenHooks(harnessCfg, workspace, home, &runnerCfg)
+	pluginRoot := filepath.Join(globalDir, "plugins")
+	registerTrustedPluginHooks(pluginRoot, plugins.NewStateStore(filepath.Join(pluginRoot, "state.json")), &runnerCfg)
 
 	subagentConfigTOML, err := config.WorkspaceRunnerConfigFromConfig(harnessCfg).ToTOML()
 	if err != nil {
