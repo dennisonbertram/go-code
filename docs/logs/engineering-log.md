@@ -116,6 +116,20 @@
 - Verified on macOS against the real clipboard (image set then restored):
   reader produced a valid PNG temp file via the unfaked code path.
 
+## 2026-07-19 (Shell Mode Slice 1 — Epic #811)
+
+- Added shell-mode input state to the `harnesscli` TUI: `!` on an empty input
+  (typed or pasted) enters shell mode; the input area renders a `!` prompt
+  marker inside a violet rounded border; Backspace/Esc on an empty shell-mode
+  input exits; submit is a stub status message (execution lands in slice 2).
+- Root `Model` owns the `shellMode` flag and re-applies it to the re-created
+  input component on every `WindowSizeMsg`; the inputarea component owns only
+  rendering state (`SetShellMode`), keeping mode transitions in one place.
+- Esc with a non-empty shell input clears the text but stays in shell mode —
+  exit happens only on an already-empty input, matching kimi-code.
+- Validation: `go test ./cmd/harnesscli/tui/ -count=1` and
+  `go test ./cmd/harnesscli/tui/components/inputarea/... -count=1` pass.
+
 ## 2026-07-19 (ACP Server Mode — Epic #746)
 
 - Added `cmd/harness-acp` and `internal/harnessacp`, using pinned

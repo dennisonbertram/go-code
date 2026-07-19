@@ -325,6 +325,11 @@ type Model struct {
 	// planMode tracks whether plan mode is toggled on (ctrl+o when idle).
 	planMode bool
 
+	// shellMode tracks whether the input area is in shell mode (entered with
+	// "!" on an empty input, exited with Backspace/Esc on an empty input or on
+	// submit). Slice 1 of epic #811 ships input state only — no execution.
+	shellMode bool
+
 	// pluginsDir is the directory from which custom slash-command plugins are loaded.
 	// Defaults to ~/.config/harnesscli/plugins when empty.
 	pluginsDir string
@@ -457,6 +462,7 @@ func buildHelpDialog(reg *CommandRegistry, keys KeyMap) helpdialog.Model {
 		{Keys: "pgdn", Description: keys.PageDown.Help().Desc},
 		{Keys: "/", Description: keys.SlashCmd.Help().Desc},
 		{Keys: "@", Description: keys.AtMention.Help().Desc},
+		{Keys: "!", Description: keys.ShellMode.Help().Desc},
 		{Keys: "? / ctrl+h", Description: keys.Help.Help().Desc},
 		{Keys: "ctrl+o", Description: "plan mode / expand active tool"},
 		{Keys: "ctrl+e", Description: keys.EditMode.Help().Desc},
@@ -676,6 +682,24 @@ func (m Model) AskUserActive() bool {
 // PlanMode returns true when plan mode is toggled on (for testing).
 func (m Model) PlanMode() bool {
 	return m.planMode
+}
+
+// ShellMode returns true when the input area is in shell mode (for testing).
+func (m Model) ShellMode() bool {
+	return m.shellMode
+}
+
+// enterShellMode switches the input area into shell mode ("!" marker + violet
+// border). The input buffer is untouched.
+func (m *Model) enterShellMode() {
+	m.shellMode = true
+	m.input = m.input.SetShellMode(true)
+}
+
+// exitShellMode returns the input area to normal prompt mode.
+func (m *Model) exitShellMode() {
+	m.shellMode = false
+	m.input = m.input.SetShellMode(false)
 }
 
 // InterruptBannerVisible returns true when the interrupt confirmation banner is
@@ -1897,6 +1921,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.historyStore = m.input.HistoryState()
 		}
 		m.input = inputarea.NewWithHistory(msg.Width, m.historyStore)
+		// Re-apply shell mode: the input component is re-created above, so its
+		// rendering state must be restored after every resize.
+		m.input = m.input.SetShellMode(m.shellMode)
 		// Re-wire autocomplete provider each time the input is re-created.
 		if m.autocompleteProvider != nil {
 			m.input = m.input.SetAutocompleteProvider(m.autocompleteProvider)
@@ -2098,6 +2125,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelRun = nil
 				m.interruptActiveToolCall()
 				cmds = append(cmds, m.setStatusMsg("Interrupted"))
+				return m, tea.Batch(cmds...)
+			}
+			// Shell mode: Esc on an already-empty input exits shell mode
+			// (kimi-code behavior). Esc with text falls through to the
+			// clear-input arm below and stays in shell mode.
+			if m.shellMode && m.input.Value() == "" {
+				m.exitShellMode()
 				return m, tea.Batch(cmds...)
 			}
 			if m.input.Value() != "" {
@@ -2763,6 +2797,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.Batch(cmds...)
 			}
+			// Shell mode: Backspace on an already-empty shell input exits shell
+			// mode (kimi-code behavior). With text present it edits normally.
+			if m.shellMode && m.input.Value() == "" && msg.Type == tea.KeyBackspace {
+				m.exitShellMode()
+				return m, tea.Batch(cmds...)
+			}
+			// Shell-mode entry: "!" on an empty input — typed (single rune) or
+			// pasted (multi-rune KeyRunes from bracketed paste). The leading "!"
+			// switches mode and is not inserted; any pasted remainder lands in
+			// the input as the shell command text.
+			if !m.shellMode && !m.overlayActive && m.input.Value() == "" &&
+				msg.Type == tea.KeyRunes && len(msg.Runes) > 0 && msg.Runes[0] == '!' {
+				m.enterShellMode()
+				if len(msg.Runes) > 1 {
+					var cmd tea.Cmd
+					m.input, cmd = m.input.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: msg.Runes[1:]})
+					if cmd != nil {
+						cmds = append(cmds, cmd)
+					}
+				}
+				return m, tea.Batch(cmds...)
+			}
 			// Route to input area
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
@@ -2789,6 +2845,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Close the dropdown whenever a command is submitted.
 		m.slashComplete = m.slashComplete.Close()
+		// Shell mode (epic #811, slice 1): local execution is not implemented
+		// yet — acknowledge the command with a stub status message and return
+		// to normal mode. Slice 2 replaces this stub with real execution.
+		if m.shellMode {
+			m.exitShellMode()
+			cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("shell: %q not executed (execution arrives in the next slice)", msg.Value)))
+			return m, tea.Batch(cmds...)
+		}
 		// Check if it's a slash command; dispatch if so.
 		if cmd, ok := ParseCommand(msg.Value); ok {
 			// Plugin commands (bash or prompt handlers loaded from disk) only set

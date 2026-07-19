@@ -36,6 +36,7 @@
 - `IMPACT_MAP_TEMPLATE.md`: One-page cross-surface impact map template for provider/model flow changes.
 - `active-plan.md`: Current active plan tracker.
 - `2026-07-19-plan-mode-epic-740-plan.md`: Enforced plan-mode epic plan covering #764–#769.
+- `811-shell-mode.md`: Shell-mode epic #811, slice 1 — `!`-prefix shell-mode input state (entry/exit/rendering; no execution yet).
 - `2026-07-19-dashboard-epic-738-plan.md`: Multi-run TUI dashboard epic plan covering #742, #745, #749, #753, #757, and #762.
 - `2026-06-28-config-driven-hooks-epic-737-plan.md`: Active epic plan for config-driven lifecycle hooks (shell/HTTP) covering child issues #741, #744, #750, #755, #759, #763 with per-slice TDD and trust-model guardrails.
 - `2026-06-26-adapter-first-eval-harness-plan.md`: Implemented adapter-first Terminal-Bench eval harness hardening plan; full regression and real-provider smoke baseline acceptance are green.

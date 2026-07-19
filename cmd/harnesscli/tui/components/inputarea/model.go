@@ -22,6 +22,7 @@ type Model struct {
 	history      History
 	focused      bool
 	autocomplete AutocompleteProvider // may be nil
+	shellMode    bool
 }
 
 var (
@@ -29,9 +30,16 @@ var (
 			Foreground(lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"}).
 			Bold(true)
 	inputStyle = lipgloss.NewStyle()
+	// shellBorderStyle frames the input area while shell mode is active. The
+	// violet border mirrors kimi-code's shell mode so the mode is visible at a
+	// glance; the "!" prompt marker uses the same violet as the normal prompt.
+	shellBorderStyle = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"})
 )
 
 const promptSymbol = "❯"
+const shellPromptSymbol = "!"
 
 // New creates a new input area for the given width.
 func New(width int) Model {
@@ -56,6 +64,16 @@ func (m Model) SetValue(v string) Model {
 	m.cursor = len([]rune(v))
 	return m
 }
+
+// SetShellMode toggles shell-mode rendering ("!" prompt marker + violet
+// border). The buffer, cursor, and history are untouched. Value semantics.
+func (m Model) SetShellMode(on bool) Model {
+	m.shellMode = on
+	return m
+}
+
+// ShellMode reports whether shell-mode rendering is active.
+func (m Model) ShellMode() bool { return m.shellMode }
 
 // SetWidth updates the display width.
 func (m *Model) SetWidth(w int) { m.width = w }
@@ -249,10 +267,16 @@ func (m Model) MultilineView(maxLines int) string {
 // renderLines is the shared implementation for View and MultilineView.
 func (m Model) renderLines(maxLines int) string {
 	prompt := promptStyle.Render(promptSymbol)
+	if m.shellMode {
+		prompt = promptStyle.Render(shellPromptSymbol)
+	}
 	indent := "  " // align continuation lines under text after prompt
 
 	runes := []rune(m.value)
 	width := m.width - 3 // "❯ " = 2 + 1 margin
+	if m.shellMode {
+		width -= 2 // the shell-mode border occupies one column on each side
+	}
 	if width < 10 {
 		width = 10
 	}
@@ -325,7 +349,18 @@ func (m Model) renderLines(maxLines int) string {
 		}
 	}
 
-	return sb.String()
+	out := sb.String()
+	if m.shellMode {
+		// Frame the whole input in the violet shell-mode border. Width() sets
+		// the content width; the border columns sit outside it, so subtract 2
+		// to keep the framed box within the component's total width.
+		frameWidth := m.width - 2
+		if frameWidth < 12 {
+			frameWidth = 12
+		}
+		out = shellBorderStyle.Width(frameWidth).Render(out)
+	}
+	return out
 }
 
 // Init satisfies tea.Model for standalone use.
