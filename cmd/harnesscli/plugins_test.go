@@ -36,3 +36,22 @@ func TestPluginCLI_InstallListUpdateAndUninstall(t *testing.T) {
 		t.Fatalf("uninstall = %d, %q", code, output)
 	}
 }
+
+func TestPluginMarketplaceCLIListsLocalIndex(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	index := filepath.Join(t.TempDir(), "marketplace.json")
+	if err := os.WriteFile(index, []byte(`{"plugins":[{"name":"demo","source":"owner/demo"}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	oldOut, oldErr := stdout, stderr
+	defer func() { stdout, stderr = oldOut, oldErr }()
+	var out, errOut bytes.Buffer
+	stdout = &out
+	stderr = &errOut
+	if code := dispatch([]string{"plugin", "marketplace", "add", "local", index}); code != 0 {
+		t.Fatalf("add %d: %s", code, errOut.String())
+	}
+	if code := dispatch([]string{"plugin", "marketplace", "list"}); code != 0 || !strings.Contains(out.String(), "demo") {
+		t.Fatalf("list %d: %s", code, out.String())
+	}
+}

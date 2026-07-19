@@ -24,6 +24,9 @@ func TestPluginBrowserKeyboardEnablesSelectedPlugin(t *testing.T) {
 	}
 	m := New(DefaultTUIConfig())
 	executePluginsCommand(&m, Command{Name: "plugins"})
+	if got := m.pluginBrowser.View(80); got == "" {
+		t.Fatal("browser view is empty")
+	}
 	if !m.overlayActive || m.activeOverlay != "plugins" {
 		t.Fatalf("overlay=%q", m.activeOverlay)
 	}
