@@ -1029,6 +1029,16 @@ func (se *stepEngine) run() {
 			isSafe := runTools.IsParallelSafe(pe.call.Name) && !pe.waitingForUser
 
 			if !isSafe {
+				if rewind, ok := r.config.ConversationStore.(RewindStore); ok && runTools.IsMutating(pe.call.Name) {
+					meta := r.runMetadata(runID)
+					workspace := r.config.WorkspaceBaseOptions.RepoPath
+					if workspace != "" {
+						point := RewindPoint{ID: fmt.Sprintf("%s-%d-%s", runID, step, pe.call.ID), ConversationID: meta.ConversationID, Step: step, Tool: pe.call.Name}
+						if err := CaptureRewindPreImage(pe.toolCtx, rewind, point, workspace, pe.callArgs); err != nil {
+							r.emit(runID, EventToolCallCompleted, map[string]any{"call_id": pe.call.ID, "tool": pe.call.Name, "rewind_warning": err.Error()})
+						}
+					}
+				}
 				start := time.Now()
 				out, err := runTools.Execute(pe.toolCtx, pe.call.Name, pe.callArgs)
 				execResults[pe.origIdx] = toolExecResult{

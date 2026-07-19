@@ -454,6 +454,11 @@ func (s *SQLiteConversationStore) SaveRewindPoint(ctx context.Context, point Rew
 	if created.IsZero() {
 		created = time.Now().UTC()
 	}
+	// Tool snapshots can arrive before the run's normal terminal persistence.
+	// Create the minimal conversation row first so the foreign key remains real.
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO conversations (id, created_at, updated_at) VALUES (?, ?, ?)`, point.ConversationID, created.Format(time.RFC3339Nano), created.Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("create rewind conversation: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO rewind_points (id, conversation_id, step, tool, created_at) VALUES (?, ?, ?, ?, ?)`, point.ID, point.ConversationID, point.Step, point.Tool, created.Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("insert rewind point: %w", err)
 	}

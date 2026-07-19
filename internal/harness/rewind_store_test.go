@@ -23,3 +23,10 @@ func TestSQLiteConversationStoreRewindPointRoundTrip(t *testing.T) {
 		t.Fatalf("points = %#v", points)
 	}
 }
+
+func TestExtractRewindPathsUsesWriteEditAndPatchArguments(t *testing.T) {
+	paths := ExtractRewindPaths("apply_patch", []byte(`{"patch":"--- a/a.txt\n+++ b/a.txt\n--- a/b.txt\n+++ b/b.txt"}`))
+	if len(paths) != 2 || paths[0] != "a.txt" || paths[1] != "b.txt" {
+		t.Fatalf("paths = %#v", paths)
+	}
+}
