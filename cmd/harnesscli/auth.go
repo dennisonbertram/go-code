@@ -109,6 +109,8 @@ func dispatch(args []string) int {
 		return runAuth(args[1:])
 	case "hooks":
 		return runHooks(args[1:])
+	case "service":
+		return runService(args[1:])
 	case "list":
 		return runList(args[1:])
 	case "runs":
