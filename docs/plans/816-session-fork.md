@@ -40,7 +40,7 @@
 - [x] Fix compile breakage in mock stores enumerated by `go build ./...` / `go vet ./...`.
 - [x] `go test ./internal/harness/ -run Fork -v` green; touched packages' tests green.
 - [x] gofmt + go vet clean.
-- [ ] Commit, push `epic/816-session-fork`, open PR against repo (no merge).
+- [x] Commit, push `epic/816-session-fork`, open PR against repo (no merge).
 
 ## Risks and Mitigations
 
