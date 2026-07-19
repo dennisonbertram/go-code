@@ -87,6 +87,29 @@ func TestConnReadLine(t *testing.T) {
 		}
 	})
 
+	t.Run("oversized line with unconsumed terminator drains remainder", func(t *testing.T) {
+		// When the fragment that pushes the buffer over maxMessageSize does
+		// not contain the line's newline, ReadLine must drain through the
+		// terminator so the stream stays aligned. Shrink the cap below the
+		// bufio buffer size so the crossing fragment ends mid-line.
+		old := maxMessageSize
+		maxMessageSize = 5000
+		defer func() { maxMessageSize = old }()
+
+		big := strings.Repeat("x", 9000)
+		c := NewConn(strings.NewReader(big+"\n{\"ok\":true}\n"), io.Discard)
+		if _, err := c.ReadLine(); !errors.Is(err, ErrMessageTooLarge) {
+			t.Fatalf("expected ErrMessageTooLarge, got %v", err)
+		}
+		line, err := c.ReadLine()
+		if err != nil {
+			t.Fatalf("ReadLine after oversized: %v", err)
+		}
+		if string(line) != `{"ok":true}` {
+			t.Fatalf("stream misaligned after drain, got %q", line[:min(len(line), 40)])
+		}
+	})
+
 	t.Run("final line without trailing newline is delivered", func(t *testing.T) {
 		c := NewConn(strings.NewReader(`{"a":1}`), io.Discard)
 		line, err := c.ReadLine()

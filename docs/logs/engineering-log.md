@@ -1,5 +1,11 @@
 # Engineering Log
 
+## 2026-07-19 (Coverage-Gate Fix — `internal/acp` Zero-Coverage Functions)
+
+- Post-merge regression gate (`scripts/test-regression.sh`) failed after epic #806 slice 1 landed: `coveragegate` flagged `(*Conn).drainLine` (conn.go) and `(*rpcError).Error` (jsonrpc.go) at 0.0%.
+- Cause: the existing oversized-line tests only exercised the path where the over-cap fragment already contains the newline (no drain needed); the drain path (fragment ends mid-line, `ErrBufferFull`) and the `error`-interface method were never called.
+- Fix (test-only): added a `ReadLine` subtest that shrinks `maxMessageSize` below the bufio buffer size so the crossing fragment lacks the terminator (covers `drainLine` and stream realignment), plus a direct `rpcError.Error` test. Both functions now report 100%.
+
 ## 2026-07-19 (Plugin Home Decision + Manifest v1 Contract — Epic #821 Slice 1)
 
 - Extended `docs/design/installable-plugin-bundles.md` into the stable v1 authoring contract: full `plugin.json` field reference with validation rules, install layout (`<name>/<version>` under `$HARNESS_GLOBAL_DIR/plugins`, default `~/.go-harness/plugins`), and the enabled-vs-trusted gating table grounded in the current loader wiring.
