@@ -168,7 +168,9 @@ func (j *eventJournal) prepareLocked(state *runState, runID string, eventType Ev
 }
 
 func (j *eventJournal) publishTerminal(delivery eventDispatch) {
-	j.runner.storeAppendEvent(delivery.event, delivery.eventSeq)
+	if j.runner.storeAppendEvent(delivery.event, delivery.eventSeq) {
+		j.runner.markTerminalEventPersisted(delivery.runID)
+	}
 
 	for _, sub := range delivery.subscribers {
 		j.runner.sendTerminalSubscriberEvent(sub.ch, sub.event)

@@ -2,6 +2,12 @@
 
 Use this file to document systems, interfaces, and interactions as they are built.
 
+## 2026-07-19 (TUI Multi-run Dashboard — Epic #738)
+
+- System/component: `cmd/harnesscli/tui` dashboard overlay.
+- Responsibilities: lifecycle-bound `tea.Tick` list refreshes consume existing `GET /v1/runs`; the selected-run peek consumes the existing SSE bridge; control/dispatch consume existing run endpoints. Closing the peek or overlay cancels its bridge without affecting the attached session.
+- Failure modes: list/control failures surface in the dashboard status path; an inactive overlay does not reschedule polling; a new peek stops the previous subscription.
+
 ## 2026-06-28 (Config-Driven Lifecycle Hooks — Epic #737)
 
 - System/component: `internal/hooks` (schema, loader, adapters, trust store, builder), `internal/config` `[hooks]` section, `cmd/harnessd` bootstrap wiring, `internal/server` `GET /v1/hooks`, `cmd/harnesscli` `hooks` subcommand + TUI `/hooks`.

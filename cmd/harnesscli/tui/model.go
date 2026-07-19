@@ -198,6 +198,9 @@ type Model struct {
 	// Valid values: "", "help", "stats", "context".
 	activeOverlay string
 
+	// dashboard holds transient state for the multi-run dashboard overlay.
+	dashboard dashboardState
+
 	// statusMsg is a transient overlay message shown on the status bar.
 	statusMsg string
 	// statusMsgExpiry is when statusMsg should be cleared.
@@ -1592,6 +1595,10 @@ func executeRunsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	}, false
 }
 
+func executeDashboardCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	return m.dashboardOpenCmds(), false
+}
+
 func executeCancelCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	runID := ""
 	if len(cmd.Args) > 0 {
@@ -1866,6 +1873,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.setStatusMsg("Copy unavailable"))
 			}
 		case key.Matches(msg, m.keys.Interrupt):
+			if m.overlayActive && m.activeOverlay == "dashboard" && m.dashboard.peekID != "" {
+				if m.dashboard.stopPeek != nil {
+					m.dashboard.stopPeek()
+				}
+				m.dashboard.peekID, m.dashboard.peekCh, m.dashboard.stopPeek = "", nil, nil
+				return m, tea.Batch(cmds...)
+			}
 			// If the interrupt banner is visible, Escape dismisses it without
 			// cancelling the run (user changed their mind).
 			if m.interruptBanner.IsVisible() {
@@ -1970,6 +1984,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchResults = nil
 				m.searchQuery = ""
 				m.searchSelectedIdx = 0
+				return m, tea.Batch(cmds...)
+			}
+			if m.activeOverlay == "dashboard" {
+				m.closeDashboard()
 				return m, tea.Batch(cmds...)
 			}
 			if m.overlayActive {
@@ -2370,6 +2388,61 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.permissionsPanel = m.permissionsPanel.RemoveSelected()
 			}
 			return m, tea.Batch(cmds...)
+		case m.overlayActive && m.activeOverlay == "dashboard":
+			if m.dashboard.inputMode != "" {
+				switch {
+				case msg.Type == tea.KeyRunes:
+					m.dashboard.input += string(msg.Runes)
+				case msg.Type == tea.KeyBackspace:
+					if len(m.dashboard.input) > 0 {
+						m.dashboard.input = m.dashboard.input[:len(m.dashboard.input)-1]
+					}
+				case msg.Type == tea.KeyEnter:
+					if m.dashboard.inputMode == "new" {
+						cmds = append(cmds, dashboardDispatchCmd(m.config.BaseURL, m.dashboard.input, m.config.APIKey))
+					} else if run, ok := m.dashboardSelected(); ok {
+						cmds = append(cmds, dashboardControlCmd(m.config.BaseURL, run.displayID(), "steer", m.dashboard.input, m.config.APIKey))
+					}
+					m.dashboard.inputMode, m.dashboard.input = "", ""
+				}
+				return m, tea.Batch(cmds...)
+			}
+			if msg.String() == "n" {
+				m.dashboard.inputMode, m.dashboard.input = "new", ""
+				return m, tea.Batch(cmds...)
+			}
+			if msg.String() == "x" {
+				if run, ok := m.dashboardSelected(); ok {
+					m.dashboard.dashboardAction = dashboardControlCmd(m.config.BaseURL, run.displayID(), "cancel", "", m.config.APIKey)
+					cmds = append(cmds, m.dashboard.dashboardAction)
+				}
+				return m, tea.Batch(cmds...)
+			}
+			if msg.String() == "s" {
+				m.dashboard.inputMode, m.dashboard.input = "steer", ""
+				return m, tea.Batch(cmds...)
+			}
+			if msg.String() == "p" || msg.Type == tea.KeyEnter {
+				if run, ok := m.dashboardSelected(); ok {
+					if m.dashboard.stopPeek != nil {
+						m.dashboard.stopPeek()
+					}
+					m.dashboard.peekID = run.displayID()
+					m.dashboard.peek = nil
+					m.dashboard.peekCh, m.dashboard.stopPeek = startSSEForRun(m.config.BaseURL, run.displayID(), m.config.APIKey)
+					cmds = append(cmds, pollSSECmd(m.dashboard.peekCh))
+				}
+				return m, tea.Batch(cmds...)
+			}
+			if len(m.dashboard.runs) > 0 {
+				switch {
+				case msg.Type == tea.KeyUp || msg.String() == "k":
+					m.dashboard.cursor = (m.dashboard.cursor - 1 + len(m.dashboard.runs)) % len(m.dashboard.runs)
+				case msg.Type == tea.KeyDown || msg.String() == "j":
+					m.dashboard.cursor = (m.dashboard.cursor + 1) % len(m.dashboard.runs)
+				}
+			}
+			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "search" && (msg.Type == tea.KeyUp || msg.Type == tea.KeyDown || msg.String() == "k" || msg.String() == "j"):
 			// Navigate search results with Up/Down or vim k/j.
 			isUp := msg.Type == tea.KeyUp || msg.String() == "k"
@@ -2514,6 +2587,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return editorDoneMsg{tmpFile: tmpFile, err: err}
 				},
 			)
+
+		case key.Matches(msg, m.keys.Dashboard) && !m.overlayActive:
+			cmds = append(cmds, m.dashboardOpenCmds()...)
+			return m, tea.Batch(cmds...)
 
 		default:
 			// When model overlay is open (not config panel), intercept keys for navigation, search, and star.
@@ -2776,6 +2853,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case OverlayCloseMsg:
+		if m.activeOverlay == "dashboard" {
+			m.closeDashboard()
+			break
+		}
 		m.overlayActive = false
 		m.activeOverlay = ""
 		m.helpDialog = m.helpDialog.Close()
@@ -2856,6 +2937,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.vp.AppendLine("")
 		cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Loaded %d run(s)", len(msg.Runs))))
 
+	case DashboardRunsLoadedMsg:
+		if msg.Err != "" {
+			cmds = append(cmds, m.setStatusMsg("Dashboard load failed: "+msg.Err))
+			break
+		}
+		m.dashboard.runs = msg.Runs
+		if m.dashboard.cursor >= len(msg.Runs) {
+			m.dashboard.cursor = len(msg.Runs) - 1
+			if m.dashboard.cursor < 0 {
+				m.dashboard.cursor = 0
+			}
+		}
+
+	case dashboardPollTickMsg:
+		if m.overlayActive && m.activeOverlay == "dashboard" {
+			cmds = append(cmds, loadDashboardRunsCmd(m.config.BaseURL, m.config.APIKey), dashboardPollCmd())
+		}
+
 	case RunControlResultMsg:
 		if msg.Err != "" {
 			cmds = append(cmds, m.setStatusMsg(msg.Kind+" failed: "+msg.Err))
@@ -2882,6 +2981,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case SSEEventMsg:
+		if m.dashboard.peekID != "" {
+			m.dashboard.peek = append(m.dashboard.peek, msg.EventType)
+			if m.dashboard.peekCh != nil {
+				cmds = append(cmds, pollSSECmd(m.dashboard.peekCh))
+			}
+			return m, tea.Batch(cmds...)
+		}
 		// Track the most recent event ID so a mid-run reconnect (see the
 		// SSEDoneMsg case below) can resume exactly here via Last-Event-ID.
 		if msg.ID != "" {
@@ -3460,6 +3566,8 @@ func (m Model) View() string {
 			mainContent = boxOverlay(raw, m.width)
 		case "plugins":
 			mainContent = m.pluginBrowser.View(m.width)
+		case "dashboard":
+			mainContent = boxOverlay(m.dashboardView(), m.width)
 		default:
 			// Unknown overlay kind — fall back to viewport.
 			mainContent = m.vp.View()

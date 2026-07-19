@@ -61,6 +61,13 @@ go run ./cmd/harnesscli \
 - Terminal events should stop the session cleanly.
 - If a live run fails, inspect the server event stream first, then the run summary and conversation endpoints.
 
+## Dashboard smoke
+
+1. Start two runs, then enter the TUI and type `/dashboard` (or press `Ctrl+D`).
+2. Confirm grouped running/waiting/completed rows refresh without closing the current session.
+3. Select a running row and press `p`; confirm its event stream appears. Press `Esc` once to close peek and again to close the dashboard.
+4. Use `s` to enter a steering prompt, `x` to cancel a selected run, and `n` to dispatch a new prompt. Confirm each change appears on the next refresh.
+
 ## Relevant Code Paths
 
 - CLI entrypoint: `cmd/harnesscli/main.go`

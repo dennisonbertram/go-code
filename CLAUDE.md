@@ -49,6 +49,11 @@ Config-driven lifecycle hooks (shell/HTTP, epic #737) are listed via:
   Read-only; trust is managed offline with `harnesscli hooks trust|revoke|list`.
   See `docs/design/plugins.md` → "Config-driven hooks" for the hook-file schema and wire protocol.
 
+### TUI Dashboard
+
+`/dashboard` (or `Ctrl+D`) is a TUI-only multi-run overlay. It uses the existing
+`/v1/runs`, run-control, and SSE event routes; do not add dashboard server routes.
+
 Wiring: `ServerOptions.ScriptWorkflows` accepts a `scriptWorkflowManager` interface.
 15 POC tests in `internal/server/http_script_workflows_test.go` and `*_advanced_test.go`
 cover CRUD, SSE streaming, resume, adversarial verify, loop-until-dry, concurrent fan-out,
