@@ -53,3 +53,6 @@
 - `2026-03-04-toolset-read-write-edit-bash-plan.md`: Active plan for swapping default harness tools to `read`, `write`, `edit`, and `bash`.
 - `2026-03-04-openai-poc-coding-harness-plan.md`: Active implementation plan for the OpenAI-powered event-driven coding harness POC.
 - `2026-03-04-repo-bootstrap-plan.md`: Completed plan/checklist for initial repository and documentation bootstrap.
+# 2026-07-19 — Installable plugin bundles and marketplace — Epic #748
+
+Plan for user-installable plugin bundles, trust gating, marketplace management, and TUI browsing.
