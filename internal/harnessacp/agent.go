@@ -6,14 +6,19 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"sync"
 
 	acp "github.com/coder/acp-go-sdk"
+	"go-agent-harness/internal/harnessmcp"
 )
 
 // Agent is the ACP-facing adapter. It never embeds a harness runner.
 type Agent struct {
 	addr     string
+	client   *harnessmcp.HarnessClient
+	conn     *acp.AgentSideConnection
+	update   func(context.Context, acp.SessionId, acp.SessionUpdate) error
 	mu       sync.Mutex
 	sessions map[acp.SessionId]session
 }
@@ -21,10 +26,15 @@ type Agent struct {
 type session struct{ conversationID, runID string }
 
 func NewAgent(addr string) *Agent {
-	return &Agent{addr: addr, sessions: make(map[acp.SessionId]session)}
+	return &Agent{addr: addr, client: harnessmcp.NewHarnessClient(addr), sessions: make(map[acp.SessionId]session)}
 }
 
-func (a *Agent) SetAgentConnection(_ *acp.AgentSideConnection) {}
+func (a *Agent) SetAgentConnection(conn *acp.AgentSideConnection) {
+	a.conn = conn
+	a.update = func(ctx context.Context, id acp.SessionId, update acp.SessionUpdate) error {
+		return conn.SessionUpdate(ctx, acp.SessionNotification{SessionId: id, Update: update})
+	}
+}
 
 func (a *Agent) Initialize(context.Context, acp.InitializeRequest) (acp.InitializeResponse, error) {
 	return acp.InitializeResponse{
@@ -79,8 +89,58 @@ func randomID() (string, error) {
 	}
 	return hex.EncodeToString(b), nil
 }
-func (a *Agent) Prompt(context.Context, acp.PromptRequest) (acp.PromptResponse, error) {
-	return acp.PromptResponse{}, fmt.Errorf("ACP session/prompt is not implemented")
+func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.PromptResponse, error) {
+	a.mu.Lock()
+	s, ok := a.sessions[params.SessionId]
+	a.mu.Unlock()
+	if !ok {
+		return acp.PromptResponse{}, fmt.Errorf("unknown ACP session %q", params.SessionId)
+	}
+	var parts []string
+	for _, block := range params.Prompt {
+		if block.Text != nil {
+			parts = append(parts, block.Text.Text)
+		}
+	}
+	var result harnessmcp.StartRunResponse
+	var err error
+	if s.runID == "" {
+		result, err = a.client.StartRun(ctx, harnessmcp.StartRunRequest{Prompt: strings.Join(parts, "\n"), ConversationID: s.conversationID})
+	} else {
+		result, err = a.client.ContinueRun(ctx, s.runID, strings.Join(parts, "\n"))
+	}
+	if err != nil {
+		return acp.PromptResponse{}, err
+	}
+	a.mu.Lock()
+	s.runID = result.RunID
+	a.sessions[params.SessionId] = s
+	a.mu.Unlock()
+	stop := acp.StopReasonEndTurn
+	err = a.client.StreamRunEvents(ctx, result.RunID, func(event harnessmcp.RunEvent) error {
+		if event.Type == "run.cancelled" {
+			stop = acp.StopReasonCancelled
+		}
+		return a.projectEvent(ctx, params.SessionId, event)
+	})
+	if err != nil {
+		return acp.PromptResponse{}, err
+	}
+	return acp.PromptResponse{StopReason: stop}, nil
+}
+
+func (a *Agent) projectEvent(ctx context.Context, id acp.SessionId, event harnessmcp.RunEvent) error {
+	if a.update == nil {
+		return nil
+	}
+	text, _ := event.Data["text"].(string)
+	switch event.Type {
+	case "assistant.message.delta":
+		return a.update(ctx, id, acp.UpdateAgentMessageText(text))
+	case "assistant.thinking.delta":
+		return a.update(ctx, id, acp.UpdateAgentThoughtText(text))
+	}
+	return nil
 }
 func (a *Agent) ResumeSession(context.Context, acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
 	return acp.ResumeSessionResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionResume)
