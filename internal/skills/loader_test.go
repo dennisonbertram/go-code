@@ -19,6 +19,24 @@ func writeSkillFile(t *testing.T, dir, name, content string) string {
 	return path
 }
 
+func TestLoader_LoadsEnabledPluginSkillDirectory(t *testing.T) {
+	pluginDir := t.TempDir()
+	skillDir := filepath.Join(pluginDir, "plugin-skill")
+	if err := os.Mkdir(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: plugin-skill\ndescription: Plugin skill\nversion: 1\n---\nBody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := NewLoader(LoaderConfig{PluginDirs: []string{pluginDir}}).Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(loaded) != 1 || loaded[0].Source != SourcePlugin {
+		t.Fatalf("loaded = %#v", loaded)
+	}
+}
+
 const validSkillMD = `---
 name: my-skill
 description: "A test skill. Trigger: do my thing"

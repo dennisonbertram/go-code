@@ -29,6 +29,10 @@ func ParseMCPServersEnvWith(getenv func(string) string) ([]ServerConfig, error) 
 	return parseMCPServersJSON(raw)
 }
 
+// ParseServerConfigsJSON validates a JSON array using the same parser and
+// duplicate-name handling as HARNESS_MCP_SERVERS.
+func ParseServerConfigsJSON(raw string) ([]ServerConfig, error) { return parseMCPServersJSON(raw) }
+
 // parseMCPServersJSON parses a JSON array of server config objects. Each
 // element is validated independently; invalid entries are logged and skipped.
 func parseMCPServersJSON(raw string) ([]ServerConfig, error) {
@@ -129,4 +133,3 @@ func validateServerConfig(cfg ServerConfig) error {
 	}
 	return nil
 }
-

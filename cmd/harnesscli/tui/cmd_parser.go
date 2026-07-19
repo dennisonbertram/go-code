@@ -78,6 +78,7 @@ func newEmptyCommandRegistry() *CommandRegistry {
 
 func builtinCommandEntries() []CommandEntry {
 	return []CommandEntry{
+		{Name: "plugins", Description: "Browse installed plugin bundles", Handler: func(Command) CommandResult { return CommandResult{Status: CmdOK} }, Execute: executePluginsCommand},
 		{
 			Name:        "clear",
 			Description: "Clear conversation history",
