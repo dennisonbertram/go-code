@@ -19,6 +19,8 @@ type RewindRestoreResult struct {
 	MessagesTruncated int `json:"messages_truncated"`
 }
 
+const rewindMaxFileBytes int64 = 1 << 20 // bounded snapshot storage: 1 MiB per file
+
 func RewindContentHash(content []byte) string {
 	sum := sha256.Sum256(content)
 	return fmt.Sprintf("%x", sum[:])
@@ -40,7 +42,13 @@ type RewindFileSnapshot struct {
 func CaptureRewindPreImage(ctx context.Context, store RewindStore, point RewindPoint, workspace string, raw []byte) error {
 	for _, path := range ExtractRewindPaths(point.Tool, raw) {
 		file := RewindFileSnapshot{Path: path}
-		contents, err := os.ReadFile(filepath.Join(workspace, path))
+		absolute := filepath.Join(workspace, path)
+		if info, err := os.Stat(absolute); err == nil && info.Size() > rewindMaxFileBytes {
+			file.Skipped, file.SkipReason = true, "file exceeds rewind snapshot size cap"
+			point.Files = append(point.Files, file)
+			continue
+		}
+		contents, err := os.ReadFile(absolute)
 		if err == nil {
 			file.Exists = true
 			file.Content = contents

@@ -60,6 +60,22 @@ func TestSQLiteConversationStoreRestoreRewindRefusesExternalModification(t *test
 	}
 }
 
+func TestCaptureRewindPreImageSkipsOversizedFiles(t *testing.T) {
+	ctx := context.Background()
+	store := newTestConversationStore(t)
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "big.txt"), make([]byte, rewindMaxFileBytes+1), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := CaptureRewindPreImage(ctx, store, RewindPoint{ID: "cap", ConversationID: "capconv", Tool: "write"}, root, []byte(`{"path":"big.txt"}`)); err != nil {
+		t.Fatal(err)
+	}
+	points, err := store.ListRewindPoints(ctx, "capconv")
+	if err != nil || len(points) != 1 || !points[0].Files[0].Skipped {
+		t.Fatalf("points=%#v err=%v", points, err)
+	}
+}
+
 func TestExtractRewindPathsUsesWriteEditAndPatchArguments(t *testing.T) {
 	paths := ExtractRewindPaths("apply_patch", []byte(`{"patch":"--- a/a.txt\n+++ b/a.txt\n--- a/b.txt\n+++ b/b.txt"}`))
 	if len(paths) != 2 || paths[0] != "a.txt" || paths[1] != "b.txt" {
