@@ -114,6 +114,36 @@ func TestProjectEventProjectsTodosAsPlan(t *testing.T) {
 	}
 }
 
+// TestFakeACPClientPromptTurn is a key-free ACP client/server round trip using
+// the same fake harnessd HTTP/SSE contract used by the fake provider smoke.
+func TestFakeACPClientPromptTurn(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/runs":
+			_, _ = w.Write([]byte(`{"run_id":"fake-run"}`))
+		case "/v1/runs/fake-run/events":
+			_, _ = w.Write([]byte("event: assistant.message.delta\ndata: {\"text\":\"fake answer\"}\n\nevent: run.completed\ndata: {}\n\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	agent := NewAgent(server.URL)
+	var updates []acp.SessionUpdate
+	agent.update = func(_ context.Context, _ acp.SessionId, u acp.SessionUpdate) error {
+		updates = append(updates, u)
+		return nil
+	}
+	session, err := agent.NewSession(context.Background(), acp.NewSessionRequest{Cwd: "/workspace", McpServers: []acp.McpServer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := agent.Prompt(context.Background(), acp.PromptRequest{SessionId: session.SessionId, Prompt: []acp.ContentBlock{acp.TextBlock("hello")}})
+	if err != nil || response.StopReason != acp.StopReasonEndTurn || len(updates) != 1 || updates[0].AgentMessageChunk == nil {
+		t.Fatalf("response=%#v updates=%#v err=%v", response, updates, err)
+	}
+}
+
 func TestNewSessionCreatesStableHarnessConversation(t *testing.T) {
 	agent := NewAgent("http://example.test")
 	got, err := agent.NewSession(context.Background(), acp.NewSessionRequest{Cwd: "/workspace", McpServers: []acp.McpServer{}})
