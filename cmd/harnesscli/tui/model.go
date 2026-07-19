@@ -2359,6 +2359,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "dashboard":
+			if msg.String() == "x" {
+				if run, ok := m.dashboardSelected(); ok {
+					m.dashboard.dashboardAction = dashboardControlCmd(m.config.BaseURL, run.displayID(), "cancel", "", m.config.APIKey)
+					cmds = append(cmds, m.dashboard.dashboardAction)
+				}
+				return m, tea.Batch(cmds...)
+			}
+			if msg.String() == "s" {
+				m.dashboard.inputMode, m.dashboard.input = "steer", ""
+				return m, tea.Batch(cmds...)
+			}
 			if msg.String() == "p" || msg.Type == tea.KeyEnter {
 				if run, ok := m.dashboardSelected(); ok {
 					if m.dashboard.stopPeek != nil {

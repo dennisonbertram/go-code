@@ -75,3 +75,21 @@ func TestDashboardPeekStartsSingleBridgeAndClosesBeforeOverlay(t *testing.T) {
 		t.Fatal("escape must close peek first")
 	}
 }
+
+func TestDashboardSteerAndCancelUseSelectedRun(t *testing.T) {
+	var gotPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { gotPath = r.URL.Path; w.WriteHeader(http.StatusAccepted) }))
+	defer ts.Close()
+	m := New(TUIConfig{BaseURL: ts.URL})
+	m.overlayActive, m.activeOverlay = true, "dashboard"
+	m.dashboard.runs = []tuiRunRecord{{ID: "run-1", Status: "running"}}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
+	cmd := updated.(Model).dashboard.dashboardAction
+	if cmd == nil {
+		t.Fatal("cancel command missing")
+	}
+	_ = cmd()
+	if gotPath != "/v1/runs/run-1/cancel" {
+		t.Fatalf("path=%s", gotPath)
+	}
+}

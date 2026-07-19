@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -69,14 +70,15 @@ func (m Model) dashboardView() string {
 // dashboardState is deliberately owned by the existing Model overlay; its poll
 // command is scheduled only while the dashboard is active.
 type dashboardState struct {
-	runs      []tuiRunRecord
-	cursor    int
-	peekID    string
-	peek      []string
-	peekCh    <-chan tea.Msg
-	stopPeek  func()
-	inputMode string // "steer" or "new"
-	input     string
+	runs            []tuiRunRecord
+	cursor          int
+	peekID          string
+	peek            []string
+	peekCh          <-chan tea.Msg
+	stopPeek        func()
+	inputMode       string // "steer" or "new"
+	input           string
+	dashboardAction tea.Cmd
 }
 
 type DashboardRunsLoadedMsg struct {
@@ -111,6 +113,31 @@ func loadDashboardRunsCmd(baseURL, apiKey string) tea.Cmd {
 
 func dashboardPollCmd() tea.Cmd {
 	return tea.Tick(2*time.Second, func(time.Time) tea.Msg { return dashboardPollTickMsg{} })
+}
+
+func dashboardControlCmd(baseURL, runID, action, prompt, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		var raw []byte
+		if action == "steer" {
+			raw, _ = json.Marshal(map[string]string{"prompt": prompt})
+		}
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/runs/"+runID+"/"+action, bytes.NewReader(raw), apiKey)
+		if err != nil {
+			return DashboardRunsLoadedMsg{Err: err.Error()}
+		}
+		if action == "steer" {
+			req.Header.Set("Content-Type", "application/json")
+		}
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return DashboardRunsLoadedMsg{Err: err.Error()}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			return DashboardRunsLoadedMsg{Err: fmt.Sprintf("%s failed: HTTP %d", action, resp.StatusCode)}
+		}
+		return dashboardPollTickMsg{}
+	}
 }
 
 func (m *Model) dashboardOpenCmds() []tea.Cmd {
