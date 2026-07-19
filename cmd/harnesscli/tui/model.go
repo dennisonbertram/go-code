@@ -1534,6 +1534,16 @@ func executeSessionsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	return nil, false
 }
 
+// executeRewindCommand intentionally requires an explicit point id and force
+// confirmation token. The server endpoint remains the authority for file
+// restore; this command never issues a destructive request implicitly.
+func executeRewindCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
+	if len(cmd.Args) < 2 || cmd.Args[1] != "confirm" {
+		return []tea.Cmd{m.setStatusMsg("Usage: /rewind <point-id> confirm (destructive)")}, false
+	}
+	return []tea.Cmd{m.setStatusMsg("Rewind confirmation accepted; use the session rewind endpoint to restore " + cmd.Args[0])}, false
+}
+
 func executeNewSessionCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.conversationID = ""
 	m.vp = viewport.New(m.width, m.layout.ViewportHeight)

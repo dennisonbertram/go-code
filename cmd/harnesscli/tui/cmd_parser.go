@@ -191,6 +191,12 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeSessionsCommand,
 		},
 		{
+			Name:        "rewind",
+			Description: "Choose and confirm a destructive session rewind",
+			Handler:     func(cmd Command) CommandResult { return CommandResult{Status: CmdOK} },
+			Execute:     executeRewindCommand,
+		},
+		{
 			Name:        "new",
 			Description: "Start a new session (resets conversation)",
 			Handler: func(cmd Command) CommandResult {
