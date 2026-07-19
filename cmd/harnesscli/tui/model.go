@@ -37,6 +37,7 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/tooluse"
 	"go-agent-harness/cmd/harnesscli/tui/components/transcriptexport"
 	"go-agent-harness/cmd/harnesscli/tui/components/viewport"
+	"go-agent-harness/internal/plugins"
 )
 
 // defaultExportDir returns a runtime-safe directory for transcript exports.
@@ -324,6 +325,7 @@ type Model struct {
 	// pluginWarnings collects warnings produced when loading and registering plugins
 	// (e.g. load errors, name collisions with builtins).
 	pluginWarnings []string
+	pluginBrowser  pluginBrowserState
 }
 
 // New creates a new root Model.
@@ -1345,6 +1347,13 @@ func executeHelpCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	return nil, false
 }
 
+func executePluginsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	m.pluginBrowser = loadPluginBrowser()
+	m.overlayActive = true
+	m.activeOverlay = "plugins"
+	return nil, false
+}
+
 func executeContextCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.overlayActive = true
 	m.activeOverlay = "context"
@@ -2273,6 +2282,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			case msg.Type == tea.KeyRunes:
 				m.apiKeyInput += string(msg.Runes)
+			}
+			return m, tea.Batch(cmds...)
+		case m.overlayActive && m.activeOverlay == "plugins":
+			if len(m.pluginBrowser.items) == 0 {
+				return m, tea.Batch(cmds...)
+			}
+			switch msg.Type {
+			case tea.KeyUp:
+				if m.pluginBrowser.selected > 0 {
+					m.pluginBrowser.selected--
+				}
+			case tea.KeyDown:
+				if m.pluginBrowser.selected < len(m.pluginBrowser.items)-1 {
+					m.pluginBrowser.selected++
+				}
+			case tea.KeyEnter:
+				item := &m.pluginBrowser.items[m.pluginBrowser.selected]
+				item.Enabled = !item.Enabled
+				home, _ := os.UserHomeDir()
+				root := filepath.Join(home, ".go-harness", "plugins")
+				_ = plugins.NewStateStore(filepath.Join(root, "state.json")).SetEnabled(item.Name, item.Enabled)
 			}
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "apikeys" && !m.apiKeyInputMode && (msg.String() == "j" || msg.String() == "k" || msg.String() == "up" || msg.String() == "down" || msg.Type == tea.KeyUp || msg.Type == tea.KeyDown):
@@ -3428,6 +3458,8 @@ func (m Model) View() string {
 			m.permissionsPanel.Height = m.layout.ViewportHeight
 			raw := m.permissionsPanel.View()
 			mainContent = boxOverlay(raw, m.width)
+		case "plugins":
+			mainContent = m.pluginBrowser.View(m.width)
 		default:
 			// Unknown overlay kind — fall back to viewport.
 			mainContent = m.vp.View()
