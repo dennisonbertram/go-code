@@ -2359,6 +2359,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "dashboard":
+			if m.dashboard.inputMode != "" {
+				switch {
+				case msg.Type == tea.KeyRunes:
+					m.dashboard.input += string(msg.Runes)
+				case msg.Type == tea.KeyBackspace:
+					if len(m.dashboard.input) > 0 {
+						m.dashboard.input = m.dashboard.input[:len(m.dashboard.input)-1]
+					}
+				case msg.Type == tea.KeyEnter:
+					if m.dashboard.inputMode == "new" {
+						cmds = append(cmds, dashboardDispatchCmd(m.config.BaseURL, m.dashboard.input, m.config.APIKey))
+					} else if run, ok := m.dashboardSelected(); ok {
+						cmds = append(cmds, dashboardControlCmd(m.config.BaseURL, run.displayID(), "steer", m.dashboard.input, m.config.APIKey))
+					}
+					m.dashboard.inputMode, m.dashboard.input = "", ""
+				}
+				return m, tea.Batch(cmds...)
+			}
+			if msg.String() == "n" {
+				m.dashboard.inputMode, m.dashboard.input = "new", ""
+				return m, tea.Batch(cmds...)
+			}
 			if msg.String() == "x" {
 				if run, ok := m.dashboardSelected(); ok {
 					m.dashboard.dashboardAction = dashboardControlCmd(m.config.BaseURL, run.displayID(), "cancel", "", m.config.APIKey)

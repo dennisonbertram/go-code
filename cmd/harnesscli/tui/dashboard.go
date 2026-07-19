@@ -64,6 +64,9 @@ func (m Model) dashboardView() string {
 		lines = append(lines, "", "Peek: "+m.dashboard.peekID)
 		lines = append(lines, m.dashboard.peek...)
 	}
+	if m.dashboard.inputMode != "" {
+		lines = append(lines, "", m.dashboard.inputMode+": "+m.dashboard.input)
+	}
 	return strings.Join(lines, "\n")
 }
 
@@ -135,6 +138,29 @@ func dashboardControlCmd(baseURL, runID, action, prompt, apiKey string) tea.Cmd 
 		defer resp.Body.Close()
 		if resp.StatusCode >= 300 {
 			return DashboardRunsLoadedMsg{Err: fmt.Sprintf("%s failed: HTTP %d", action, resp.StatusCode)}
+		}
+		return dashboardPollTickMsg{}
+	}
+}
+
+func dashboardDispatchCmd(baseURL, prompt, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		body, err := json.Marshal(runCreateRequest{Prompt: prompt, AllowFallback: true})
+		if err != nil {
+			return DashboardRunsLoadedMsg{Err: err.Error()}
+		}
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, strings.TrimRight(baseURL, "/")+"/v1/runs", bytes.NewReader(body), apiKey)
+		if err != nil {
+			return DashboardRunsLoadedMsg{Err: err.Error()}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return DashboardRunsLoadedMsg{Err: err.Error()}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			return DashboardRunsLoadedMsg{Err: fmt.Sprintf("dispatch failed: HTTP %d", resp.StatusCode)}
 		}
 		return dashboardPollTickMsg{}
 	}

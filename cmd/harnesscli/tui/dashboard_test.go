@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -91,5 +92,24 @@ func TestDashboardSteerAndCancelUseSelectedRun(t *testing.T) {
 	_ = cmd()
 	if gotPath != "/v1/runs/run-1/cancel" {
 		t.Fatalf("path=%s", gotPath)
+	}
+}
+
+func TestDashboardNewRunDispatchPostsPromptWithoutAttachingMainSession(t *testing.T) {
+	var prompt string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&struct {
+			Prompt *string `json:"prompt"`
+		}{Prompt: &prompt})
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"run_id":"new-run"}`))
+	}))
+	defer ts.Close()
+	msg := dashboardDispatchCmd(ts.URL, "do work", "")()
+	if _, ok := msg.(dashboardPollTickMsg); !ok {
+		t.Fatalf("msg=%T", msg)
+	}
+	if prompt != "do work" {
+		t.Fatalf("prompt=%q", prompt)
 	}
 }
