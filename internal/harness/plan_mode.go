@@ -22,6 +22,18 @@ func (r *Runner) awaitPlanApproval(ctx context.Context, runID, content string) (
 		return false, fmt.Errorf("plan mode requires an approval broker")
 	}
 	r.setStatus(runID, RunStatusWaitingForApproval, "", "")
+	if plans, ok := r.config.ConversationStore.(PlanContentStore); ok {
+		r.mu.RLock()
+		st := r.runs[runID]
+		var convID string
+		if st != nil {
+			convID = st.run.ConversationID
+		}
+		r.mu.RUnlock()
+		if err := plans.SavePlanContent(ctx, convID, runID, content); err != nil {
+			return false, err
+		}
+	}
 	r.emit(runID, EventPlanApprovalRequired, map[string]any{"tool": "plan_exit", "plan": content})
 	approved, err := r.config.ApprovalBroker.Ask(ctx, ApprovalRequest{RunID: runID, CallID: "plan_exit", Tool: "plan_exit", Args: content, Timeout: r.config.AskUserTimeout})
 	if err != nil {
