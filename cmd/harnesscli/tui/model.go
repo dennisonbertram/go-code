@@ -1864,6 +1864,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.setStatusMsg("Copy unavailable"))
 			}
 		case key.Matches(msg, m.keys.Interrupt):
+			if m.overlayActive && m.activeOverlay == "dashboard" && m.dashboard.peekID != "" {
+				if m.dashboard.stopPeek != nil {
+					m.dashboard.stopPeek()
+				}
+				m.dashboard.peekID, m.dashboard.peekCh, m.dashboard.stopPeek = "", nil, nil
+				return m, tea.Batch(cmds...)
+			}
 			// If the interrupt banner is visible, Escape dismisses it without
 			// cancelling the run (user changed their mind).
 			if m.interruptBanner.IsVisible() {
@@ -2352,6 +2359,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "dashboard":
+			if msg.String() == "p" || msg.Type == tea.KeyEnter {
+				if run, ok := m.dashboardSelected(); ok {
+					if m.dashboard.stopPeek != nil {
+						m.dashboard.stopPeek()
+					}
+					m.dashboard.peekID = run.displayID()
+					m.dashboard.peek = nil
+					m.dashboard.peekCh, m.dashboard.stopPeek = startSSEForRun(m.config.BaseURL, run.displayID(), m.config.APIKey)
+					cmds = append(cmds, pollSSECmd(m.dashboard.peekCh))
+				}
+				return m, tea.Batch(cmds...)
+			}
 			if len(m.dashboard.runs) > 0 {
 				switch {
 				case msg.Type == tea.KeyUp || msg.String() == "k":
@@ -2899,6 +2918,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case SSEEventMsg:
+		if m.dashboard.peekID != "" {
+			m.dashboard.peek = append(m.dashboard.peek, msg.EventType)
+			if m.dashboard.peekCh != nil {
+				cmds = append(cmds, pollSSECmd(m.dashboard.peekCh))
+			}
+			return m, tea.Batch(cmds...)
+		}
 		// Track the most recent event ID so a mid-run reconnect (see the
 		// SSEDoneMsg case below) can resume exactly here via Last-Event-ID.
 		if msg.ID != "" {

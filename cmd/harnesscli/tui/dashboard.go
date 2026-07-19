@@ -59,6 +59,10 @@ func (m Model) dashboardView() string {
 	if len(m.dashboard.runs) == 0 {
 		lines = append(lines, "", "No runs found.")
 	}
+	if m.dashboard.peekID != "" {
+		lines = append(lines, "", "Peek: "+m.dashboard.peekID)
+		lines = append(lines, m.dashboard.peek...)
+	}
 	return strings.Join(lines, "\n")
 }
 

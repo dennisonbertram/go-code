@@ -59,3 +59,19 @@ func TestDashboardCommandAndKeybindingOpenOverlay(t *testing.T) {
 		t.Fatalf("keybinding overlay = %q", m.activeOverlay)
 	}
 }
+
+func TestDashboardPeekStartsSingleBridgeAndClosesBeforeOverlay(t *testing.T) {
+	m := New(TUIConfig{BaseURL: "http://example.invalid"})
+	m.overlayActive, m.activeOverlay = true, "dashboard"
+	m.dashboard.runs = []tuiRunRecord{{ID: "run-1", Status: "running"}}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
+	m = updated.(Model)
+	if m.dashboard.peekID != "run-1" || m.dashboard.stopPeek == nil {
+		t.Fatalf("peek not started: %#v", m.dashboard)
+	}
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEscape})
+	m = updated.(Model)
+	if m.dashboard.peekID != "" || m.activeOverlay != "dashboard" {
+		t.Fatal("escape must close peek first")
+	}
+}
