@@ -39,6 +39,27 @@ func LoadProfileWithDirs(name, projectDir, userDir string) (*Profile, error) {
 	return loadProfileWithDirs(name, projectDir, userDir)
 }
 
+// LoadProfileWithExtraDirs adds trusted external profile directories after
+// project and user directories and before built-ins.
+func LoadProfileWithExtraDirs(name, projectDir, userDir string, extraDirs []string) (*Profile, error) {
+	if err := config.ValidateProfileName(name); err != nil {
+		return nil, err
+	}
+	for _, dir := range append([]string{projectDir, userDir}, extraDirs...) {
+		if dir == "" {
+			continue
+		}
+		p, err := loadProfileFile(filepath.Join(dir, name+".toml"))
+		if err != nil && !os.IsNotExist(err) {
+			return nil, err
+		}
+		if p != nil {
+			return p, nil
+		}
+	}
+	return loadBuiltinProfile(name)
+}
+
 // loadProfileWithDirs is the internal implementation that accepts explicit dirs for testing.
 func loadProfileWithDirs(name, projectDir, userDir string) (*Profile, error) {
 	if err := config.ValidateProfileName(name); err != nil {

@@ -30,6 +30,7 @@ import (
 	"go-agent-harness/internal/mcp"
 	"go-agent-harness/internal/networks"
 	om "go-agent-harness/internal/observationalmemory"
+	"go-agent-harness/internal/plugins"
 	"go-agent-harness/internal/profiles"
 	"go-agent-harness/internal/provider/catalog"
 	openai "go-agent-harness/internal/provider/openai"
@@ -548,9 +549,21 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	var skillLoader *skills.Loader     // retained for hot-reload
 	var skillRegistry *skills.Registry // retained for hot-reload
 	if skillsEnabled {
+		pluginRoot := filepath.Join(globalDir, "plugins")
+		bundles, pluginErr := plugins.EnabledBundles(pluginRoot, plugins.NewStateStore(filepath.Join(pluginRoot, "state.json")))
+		if pluginErr != nil {
+			log.Printf("warning: failed to discover enabled plugin bundles: %v", pluginErr)
+		}
+		var pluginSkillDirs []string
+		for _, bundle := range bundles {
+			if bundle.SkillsDir != "" {
+				pluginSkillDirs = append(pluginSkillDirs, bundle.SkillsDir)
+			}
+		}
 		skillLoader = skills.NewLoader(skills.LoaderConfig{
 			GlobalDir:    filepath.Join(globalDir, "skills"),
 			WorkspaceDir: filepath.Join(workspace, ".go-harness", "skills"),
+			PluginDirs:   pluginSkillDirs,
 		})
 		skillRegistry = skills.NewRegistry()
 		if err := skillRegistry.Load(skillLoader); err != nil {
@@ -618,6 +631,15 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 			log.Printf("warning: failed to parse %s: %v (continuing without env-configured MCP servers)", mcp.EnvVarMCPServers, mcpErr)
 		} else {
 			envServers = mcpConfigs
+		}
+		pluginRoot := filepath.Join(globalDir, "plugins")
+		trustedBundles, pluginErr := plugins.TrustedBundles(pluginRoot, plugins.NewStateStore(filepath.Join(pluginRoot, "state.json")))
+		if pluginErr != nil {
+			log.Printf("warning: failed to discover trusted plugin bundles: %v", pluginErr)
+		} else if pluginServers, err := plugins.MCPServers(trustedBundles); err != nil {
+			log.Printf("warning: failed to load trusted plugin MCP config: %v", err)
+		} else {
+			envServers = append(envServers, pluginServers...)
 		}
 
 		registerMCPServersFromConfig(mcpManager, globalCfg.MCPServers, envServers, log.Printf)
@@ -823,6 +845,8 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	// and append adapters to the existing hook slices. Runs AFTER compiled-in
 	// plugins so plugin hooks keep their leading slice position.
 	hooksSummary := registerConfigDrivenHooks(harnessCfg, workspace, home, &runnerCfg)
+	pluginRoot := filepath.Join(globalDir, "plugins")
+	registerTrustedPluginHooks(pluginRoot, plugins.NewStateStore(filepath.Join(pluginRoot, "state.json")), &runnerCfg)
 
 	subagentConfigTOML, err := config.WorkspaceRunnerConfigFromConfig(harnessCfg).ToTOML()
 	if err != nil {
@@ -1142,7 +1166,16 @@ func loadStartupProfile(profileName, projectProfilesDir, userProfilesDir string)
 	if profileName == "" {
 		return nil, nil
 	}
-	profile, err := profiles.LoadProfileWithDirs(profileName, projectProfilesDir, userProfilesDir)
+	home, _ := os.UserHomeDir()
+	pluginRoot := filepath.Join(home, ".go-harness", "plugins")
+	trustedBundles, _ := plugins.TrustedBundles(pluginRoot, plugins.NewStateStore(filepath.Join(pluginRoot, "state.json")))
+	var agentDirs []string
+	for _, bundle := range trustedBundles {
+		if bundle.AgentsDir != "" {
+			agentDirs = append(agentDirs, bundle.AgentsDir)
+		}
+	}
+	profile, err := profiles.LoadProfileWithExtraDirs(profileName, projectProfilesDir, userProfilesDir, agentDirs)
 	if err != nil {
 		return nil, err
 	}

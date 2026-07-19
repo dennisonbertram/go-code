@@ -542,3 +542,6 @@ Use this file to document systems, interfaces, and interactions as they are buil
 - Operational notes:
   - workflow and network routes are now real but remain intentionally conservative in v1
   - sequential network execution is implemented; parallel fan-out remains deferred
+# 2026-07-19 — Plugin bundle subsystem
+
+- `internal/plugins` owns bundle validation, safe staged installation, persisted lifecycle state, marketplace index parsing, and discovery. `harnessd` loads enabled skills/commands and gates agents/MCP/hooks on trust.

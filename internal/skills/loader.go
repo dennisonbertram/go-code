@@ -39,6 +39,13 @@ func (l *Loader) Load() ([]Skill, error) {
 		return nil, err
 	}
 	skills = append(skills, local...)
+	for _, dir := range l.config.PluginDirs {
+		pluginSkills, err := l.loadDir(dir, SourcePlugin)
+		if err != nil {
+			return nil, err
+		}
+		skills = append(skills, pluginSkills...)
+	}
 
 	return skills, nil
 }

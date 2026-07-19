@@ -6,6 +6,7 @@ type SkillSource string
 const (
 	SourceGlobal SkillSource = "global"
 	SourceLocal  SkillSource = "local"
+	SourcePlugin SkillSource = "plugin"
 )
 
 // SkillContext determines how a skill is executed.
@@ -58,6 +59,7 @@ type frontmatter struct {
 
 // LoaderConfig holds paths for skill discovery.
 type LoaderConfig struct {
-	GlobalDir    string // e.g. ~/.go-harness/skills/
-	WorkspaceDir string // e.g. <workspace>/.go-harness/skills/
+	GlobalDir    string   // e.g. ~/.go-harness/skills/
+	WorkspaceDir string   // e.g. <workspace>/.go-harness/skills/
+	PluginDirs   []string // enabled installable bundle skills directories
 }

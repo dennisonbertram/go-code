@@ -17,6 +17,7 @@ This repository is a Go coding harness with a streamed run API, a CLI smoke-test
 - The canonical implementation details are in `internal/server`, `internal/harness`, `internal/config`, `cmd/harnessd`, and `cmd/harnesscli`.
 - The public-facing docs should stay aligned with the current routes, run request fields, event names, tool catalog, and environment variables.
 - If a docs change reveals a mismatch, update the docs rather than preserving stale prose.
+- Installable plugin bundles live in `internal/plugins`: `plugin.json` bundles are installed under `~/.go-harness/plugins`, with enabled visibility independent from executable trust. Skills/commands reuse their existing loaders; trusted bundles alone reach profiles, MCP validation, and hooks. This is separate from compile-time Go plugins in `plugins/`.
 
 ## Workflow Engine (`internal/workflow/`)
 
