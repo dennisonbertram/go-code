@@ -15,6 +15,7 @@ Command Registry - 80x24
 /model — Select AI model
 /new — Start a new session (resets conversation)
 /permissions — View session tool permissions
+/plugins — Browse installed plugin bundles
 /profiles — View and select a profile for next run
 /quit — Quit the TUI
 /replay — Replay a run
