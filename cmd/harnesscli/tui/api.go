@@ -60,6 +60,7 @@ type runCreateRequest struct {
 	// requested model's provider can't be resolved, instead of hard-failing
 	// the run. Always true from the TUI.
 	AllowFallback bool `json:"allow_fallback,omitempty"`
+	PlanMode      bool `json:"plan_mode,omitempty"`
 }
 
 type runCreateResponse struct {
@@ -111,7 +112,8 @@ type RemoteSubagent struct {
 // profile is the name of the capability profile to use (may be empty); it is
 // sent as the "profile" field so the server applies the profile's tool
 // restrictions and isolation.
-func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile, workspace, apiKey string) tea.Cmd {
+func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile, workspace, apiKey string, planMode ...bool) tea.Cmd {
+	enabled := len(planMode) > 0 && planMode[0]
 	return func() tea.Msg {
 		body, _ := json.Marshal(runCreateRequest{
 			Prompt:          prompt,
@@ -122,6 +124,7 @@ func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffo
 			ProfileName:     profile,
 			WorkspacePath:   workspace,
 			AllowFallback:   true,
+			PlanMode:        enabled,
 		})
 		url := strings.TrimRight(baseURL, "/") + "/v1/runs"
 		req, err := newHarnessRequest(context.Background(), http.MethodPost, url, bytes.NewReader(body), apiKey)

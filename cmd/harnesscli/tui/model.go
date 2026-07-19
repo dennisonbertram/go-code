@@ -317,6 +317,7 @@ type Model struct {
 	// toolApproval holds the state for an in-progress tool-approval decision.
 	// toolApproval.active is true when the overlay is shown.
 	toolApproval toolApprovalState
+	planApproval planApprovalState
 
 	// planMode tracks whether plan mode is toggled on (ctrl+o when idle).
 	planMode bool
@@ -1849,6 +1850,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		}
+		if m.planApproval.active {
+			newState, cmd := m.handlePlanApprovalKey(msg)
+			m.planApproval = newState
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			// Two-stage Ctrl+C interrupt when a run is active.
@@ -2760,7 +2769,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendMessageBubble(messagebubble.RoleUser, msg.Value)
 		// Fire off the run against the harness API with the expanded prompt.
 		effModel, effProvider := m.effectiveModelAndProvider()
-		cmds = append(cmds, startRunCmd(m.config.BaseURL, expandedValue, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, m.config.Workspace, m.config.APIKey))
+		cmds = append(cmds, startRunCmd(m.config.BaseURL, expandedValue, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, m.config.Workspace, m.config.APIKey, m.planMode))
 
 	case AssistantDeltaMsg:
 		m.lastAssistantText += msg.Delta
@@ -3086,6 +3095,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The decision has already been recorded server-side (e.g. from
 			// another client); make sure the overlay does not linger.
 			m.toolApproval = toolApprovalState{}
+		case "plan.approval_required":
+			var p struct {
+				Plan string `json:"plan"`
+			}
+			if err := json.Unmarshal(msg.Raw, &p); err == nil {
+				m.planApproval = planApprovalState{active: true, runID: m.RunID, content: p.Plan}
+			}
+		case "plan.approval_granted", "plan.approval_denied":
+			m.planApproval = planApprovalState{}
 		case "usage.delta":
 			var p struct {
 				CumulativeUsage struct {
@@ -3534,6 +3552,9 @@ func (m Model) View() string {
 		} else {
 			mainContent = m.vp.View()
 		}
+	} else if m.planApproval.active {
+		overlayLines := m.renderPlanApprovalOverlay()
+		mainContent = m.vp.View() + "\n" + strings.Join(overlayLines, "\n")
 	} else if m.overlayActive {
 		switch m.activeOverlay {
 		case "help":

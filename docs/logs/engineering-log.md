@@ -1,5 +1,9 @@
 # Engineering Log
 
+## 2026-07-19 (Enforced Plan Mode — Epic #740)
+
+- Added per-run plan state, central policy-wrapper gating, broker-backed plan-exit approval, SQLite plan persistence, CLI/TUI request plumbing, and a scrollable TUI approval preview. Mutations with absent or non-matching paths fail closed while planning.
+
 ## 2026-07-19 (Session Rewind — Epic #739)
 
 - Added SQLite pre-image points, non-fatal runner capture, hash-checked restore/truncation, HTTP list/restore routes, and explicit TUI confirmation. Oversized files are skipped rather than stored.

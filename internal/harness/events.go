@@ -16,11 +16,11 @@ type EventType string
 
 // Run lifecycle events.
 const (
-	EventRunStarted         EventType = "run.started"
-	EventRunCompleted       EventType = "run.completed"
-	EventRunFailed          EventType = "run.failed"
-	EventRunWaitingForUser  EventType = "run.waiting_for_user"
-	EventRunResumed         EventType = "run.resumed"
+	EventRunStarted        EventType = "run.started"
+	EventRunCompleted      EventType = "run.completed"
+	EventRunFailed         EventType = "run.failed"
+	EventRunWaitingForUser EventType = "run.waiting_for_user"
+	EventRunResumed        EventType = "run.resumed"
 	// EventRunCostLimitReached is emitted when the cumulative cost of a run
 	// reaches or exceeds the max_cost_usd ceiling specified in the RunRequest.
 	// The run is then terminated with EventRunCompleted (not EventRunFailed).
@@ -42,8 +42,8 @@ const (
 
 // LLM turn events.
 const (
-	EventLLMTurnRequested      EventType = "llm.turn.requested"
-	EventLLMTurnCompleted      EventType = "llm.turn.completed"
+	EventLLMTurnRequested       EventType = "llm.turn.requested"
+	EventLLMTurnCompleted       EventType = "llm.turn.completed"
 	EventAssistantMessageDelta  EventType = "assistant.message.delta"
 	EventAssistantThinkingDelta EventType = "assistant.thinking.delta"
 	// EventReasoningComplete is emitted after each LLM turn when
@@ -77,7 +77,10 @@ const (
 	// tool call. A permission_denied error is returned to the LLM and the run
 	// continues to the next step.
 	// Payload fields: call_id (string), tool (string).
-	EventToolApprovalDenied EventType = "tool.approval_denied"
+	EventToolApprovalDenied   EventType = "tool.approval_denied"
+	EventPlanApprovalRequired EventType = "plan.approval_required"
+	EventPlanApprovalGranted  EventType = "plan.approval_granted"
+	EventPlanApprovalDenied   EventType = "plan.approval_denied"
 )
 
 // Assistant completion events.
@@ -588,11 +591,11 @@ func ParseToolOutputDeltaPayload(payload map[string]any) (ToolOutputDeltaPayload
 // ContextWindowSnapshotBreakdown is the breakdown sub-object in a context
 // window snapshot payload.
 type ContextWindowSnapshotBreakdown struct {
-	SystemPromptTokens int  `json:"system_prompt_tokens"`
-	ConversationTokens int  `json:"conversation_tokens"`
-	ToolResultTokens   int  `json:"tool_result_tokens"`
+	SystemPromptTokens int `json:"system_prompt_tokens"`
+	ConversationTokens int `json:"conversation_tokens"`
+	ToolResultTokens   int `json:"tool_result_tokens"`
 	// Estimated is always true — all counts use the rune-count heuristic.
-	Estimated          bool `json:"estimated"`
+	Estimated bool `json:"estimated"`
 }
 
 // ContextWindowSnapshotPayload is the typed payload for EventContextWindowSnapshot.
@@ -611,7 +614,7 @@ type ContextWindowSnapshotPayload struct {
 	// UsageRatio is the fraction of the context window in use (0.0–1.0+).
 	UsageRatio float64 `json:"usage_ratio"`
 	// HeadroomTokens is the estimated remaining capacity. May be negative on overrun.
-	HeadroomTokens int `json:"headroom_tokens"`
+	HeadroomTokens int                            `json:"headroom_tokens"`
 	Breakdown      ContextWindowSnapshotBreakdown `json:"breakdown"`
 }
 

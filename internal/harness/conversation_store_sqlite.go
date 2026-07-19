@@ -65,6 +65,13 @@ CREATE TABLE IF NOT EXISTS rewind_file_snapshots (
 );
 CREATE INDEX IF NOT EXISTS idx_rewind_points_conversation ON rewind_points(conversation_id, step DESC);
 
+CREATE TABLE IF NOT EXISTS conversation_plans (
+    conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- FTS5 virtual table for full-text search on message content.
 CREATE VIRTUAL TABLE IF NOT EXISTS conversation_messages_fts
 USING fts5(conversation_id UNINDEXED, role UNINDEXED, content, content='conversation_messages', content_rowid='id');
@@ -73,6 +80,33 @@ USING fts5(conversation_id UNINDEXED, role UNINDEXED, content, content='conversa
 // SQLiteConversationStore implements ConversationStore using SQLite.
 type SQLiteConversationStore struct {
 	db *sql.DB
+}
+
+func (s *SQLiteConversationStore) SavePlanContent(ctx context.Context, conversationID, runID, content string) error {
+	if strings.TrimSpace(conversationID) == "" {
+		return fmt.Errorf("conversation id is required")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (id, created_at, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING`, conversationID, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("create plan conversation: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO conversation_plans (conversation_id, run_id, content, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET run_id=excluded.run_id, content=excluded.content, updated_at=excluded.updated_at`, conversationID, runID, content, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("save plan content: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteConversationStore) LoadPlanContent(ctx context.Context, conversationID string) (string, error) {
+	var content string
+	err := s.db.QueryRowContext(ctx, `SELECT content FROM conversation_plans WHERE conversation_id=?`, conversationID).Scan(&content)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("load plan content: %w", err)
+	}
+	return content, nil
 }
 
 // NewSQLiteConversationStore creates a new SQLite-backed conversation store.

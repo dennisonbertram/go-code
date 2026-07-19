@@ -34,6 +34,8 @@ import (
 
 type runState struct {
 	run                Run
+	planMode           PlanModeState
+	planFile           string
 	staticSystemPrompt string
 	promptResolved     *systemprompt.ResolvedPrompt
 	usageTotals        usageTotalsAccumulator
@@ -889,6 +891,8 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 
 	state := &runState{
 		run:                     run,
+		planMode:                initialPlanModeState(req.PlanMode),
+		planFile:                normalizedPlanFile(req.PlanFile),
 		staticSystemPrompt:      systemPrompt,
 		promptResolved:          resolvedPrompt,
 		usageTotals:             usageTotalsAccumulator{},

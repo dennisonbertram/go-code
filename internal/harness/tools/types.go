@@ -60,6 +60,11 @@ type Policy interface {
 	Allow(ctx context.Context, in PolicyInput) (PolicyDecision, error)
 }
 
+type PlanModeGate interface {
+	Active() bool
+	AllowMutation(def Definition, args json.RawMessage) bool
+}
+
 // ToolTier classifies a tool as core (always visible) or deferred (hidden until activated).
 type ToolTier string
 
@@ -557,6 +562,7 @@ const ContextKeyTranscriptReader contextKey = "transcript_reader"
 const ContextKeyOutputStreamer contextKey = "output_streamer"
 const ContextKeyMessageReplacer contextKey = "message_replacer"
 const ContextKeySandboxScope contextKey = "sandbox_scope"
+const ContextKeyPlanModeGate contextKey = "plan_mode_gate"
 const contextKeyForkDepth contextKey = "fork_depth"
 
 // DefaultMaxForkDepth is the maximum recursion depth for spawned subagents.
@@ -639,6 +645,14 @@ func RunIDFromContext(ctx context.Context) string {
 	}
 	v, _ := ctx.Value(ContextKeyRunID).(string)
 	return v
+}
+
+func PlanModeGateFromContext(ctx context.Context) (PlanModeGate, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	v, ok := ctx.Value(ContextKeyPlanModeGate).(PlanModeGate)
+	return v, ok
 }
 
 func ToolCallIDFromContext(ctx context.Context) string {

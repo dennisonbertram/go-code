@@ -87,6 +87,7 @@ type runCreateRequest struct {
 	PromptProfile    string                   `json:"prompt_profile,omitempty"`
 	PromptExtensions *runCreatePromptSettings `json:"prompt_extensions,omitempty"`
 	WorkspacePath    string                   `json:"workspace_path,omitempty"`
+	PlanMode         bool                     `json:"plan_mode,omitempty"`
 }
 
 type runCreatePromptSettings struct {
@@ -149,6 +150,7 @@ func run(args []string) int {
 	promptProfile := flags.String("prompt-profile", "", "prompt profile override for model routing")
 	promptCustom := flags.String("prompt-custom", "", "custom prompt extension text")
 	workspace := flags.String("workspace", "", "workspace directory for this run (defaults to current working directory)")
+	planMode := flags.Bool("plan-mode", false, "start the run in enforced read-only plan mode")
 	enableTUI := flags.Bool("tui", false, "launch interactive BubbleTea TUI (experimental)")
 	resume := flags.String("resume", "", "resume an existing conversation by ID in the TUI (implies --tui)")
 	listProfiles := flags.Bool("list-profiles", false, "list available profiles and exit")
@@ -202,6 +204,7 @@ func run(args []string) int {
 		PromptProfile:    *promptProfile,
 		PromptExtensions: extensions,
 		WorkspacePath:    workspacePath,
+		PlanMode:         *planMode,
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "harnesscli: start run: %v\n", err)

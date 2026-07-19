@@ -63,6 +63,15 @@ Wiring: `ServerOptions.ScriptWorkflows` accepts a `scriptWorkflowManager` interf
 cover CRUD, SSE streaming, resume, adversarial verify, loop-until-dry, concurrent fan-out,
 and error recovery chains.
 
+### Enforced Plan Mode
+
+`harnesscli --plan-mode` and the TUI `Ctrl+O` toggle send `plan_mode` in the
+normal run request. The runner injects live per-run state into the central
+`ApplyPolicy` wrapper: while active, mutations fail closed unless the
+permission-rule matcher accepts the designated `.harness/plan.md` plan file.
+Plan exit uses the existing approval broker and `/v1/runs/{id}/approve|deny`;
+the SQLite conversation store persists the latest plan content per conversation.
+
 ## Provider Note
 
 - OpenAI is the primary provider path.
