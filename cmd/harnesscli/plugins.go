@@ -23,8 +23,56 @@ func runPlugin(args []string) int {
 		return pluginUninstall(args[1:])
 	case "update":
 		return pluginUpdate(args[1:])
+	case "marketplace":
+		return pluginMarketplace(args[1:])
 	default:
 		fmt.Fprintf(stderr, "harnesscli plugin: unknown subcommand %q (try: install, list, uninstall, update)\n", args[0])
+		return 1
+	}
+}
+
+func pluginMarketplace(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: harnesscli plugin marketplace <add|list|update> [name path]")
+		return 1
+	}
+	_, dir, err := pluginStore()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	store := plugins.NewMarketplaceStore(filepath.Join(dir, "marketplaces.json"))
+	switch args[0] {
+	case "add":
+		if len(args) != 3 {
+			fmt.Fprintln(stderr, "harnesscli plugin marketplace add: name and path required")
+			return 1
+		}
+		if err := store.Add(plugins.MarketplaceSource{Name: args[1], URL: args[2]}); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "added marketplace %s\n", args[1])
+		return 0
+	case "list", "update":
+		items, err := store.List()
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		for _, item := range items {
+			m, e := plugins.LoadMarketplace(item)
+			if e != nil {
+				fmt.Fprintf(stderr, "marketplace %s: %v\n", item.Name, e)
+				continue
+			}
+			for _, p := range m.Plugins {
+				fmt.Fprintf(stdout, "%s %s %s\n", item.Name, p.Name, p.Source)
+			}
+		}
+		return 0
+	default:
+		fmt.Fprintln(stderr, "harnesscli plugin marketplace: unknown subcommand")
 		return 1
 	}
 }
