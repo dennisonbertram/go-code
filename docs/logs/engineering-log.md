@@ -1,5 +1,13 @@
 # Engineering Log
 
+## 2026-07-19 (Reliability Epic #644 Reconciliation)
+
+- Reconciled the 2026-06-24 15-slice long-session reliability plan against the supplied `origin/main` baseline. The code and deterministic regressions for T03–T15, plus the original T01/T02 behavior, were already present on the baseline (principally from prior harness/TUI integration work), so they were not duplicated or falsely represented as new failing-first commits.
+- Closed the two remaining plan-level correctness gaps with failing-first regressions:
+  - T01: completed run states are retained until their terminal event has actually persisted, preventing a transient store failure from silently dropping the only in-memory terminal history.
+  - T02: every event-store append now receives a five-second bounded context, preventing a wedged store from occupying a run goroutine indefinitely while preserving the existing lock-free terminal fanout path.
+- Validation: focused T01/T02 tests passed under `-race`; full `go test ./... -race`, `go vet ./...`, and `./scripts/test-regression.sh` passed (`coveragegate: PASS`, 84.4% total, zero zero-coverage functions).
+
 ## 2026-06-28 (Config-Driven Lifecycle Hooks — Epic #737)
 
 - Implemented epic #737 and all six child issues (#741, #744, #750, #755, #759, #763) in worktree branch `codex/config-hooks-epic-737`, one commit per slice, strict TDD throughout.
