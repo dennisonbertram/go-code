@@ -42,3 +42,20 @@ func TestDashboardViewGroupsRunsAndArrowKeysNavigate(t *testing.T) {
 		t.Fatalf("cursor = %d", got)
 	}
 }
+
+func TestDashboardCommandAndKeybindingOpenOverlay(t *testing.T) {
+	m := New(TUIConfig{})
+	if _, ok := m.commandRegistry.Lookup("dashboard"); !ok {
+		t.Fatal("/dashboard must be registered")
+	}
+	executeDashboardCommand(&m, Command{})
+	if !m.overlayActive || m.activeOverlay != "dashboard" {
+		t.Fatalf("overlay = %q", m.activeOverlay)
+	}
+	m.closeDashboard()
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlD})
+	m = updated.(Model)
+	if m.activeOverlay != "dashboard" {
+		t.Fatalf("keybinding overlay = %q", m.activeOverlay)
+	}
+}

@@ -1586,6 +1586,10 @@ func executeRunsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	}, false
 }
 
+func executeDashboardCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	return m.dashboardOpenCmds(), false
+}
+
 func executeCancelCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	runID := ""
 	if len(cmd.Args) > 0 {
@@ -2501,6 +2505,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return editorDoneMsg{tmpFile: tmpFile, err: err}
 				},
 			)
+
+		case key.Matches(msg, m.keys.Dashboard) && !m.overlayActive:
+			cmds = append(cmds, m.dashboardOpenCmds()...)
+			return m, tea.Batch(cmds...)
 
 		default:
 			// When model overlay is open (not config panel), intercept keys for navigation, search, and star.
