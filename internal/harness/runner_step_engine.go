@@ -590,6 +590,16 @@ func (se *stepEngine) run() {
 				"duration_ms": time.Since(stepStartTime).Milliseconds(),
 			})
 			emitCausalGraph(step)
+			approved, approvalErr := r.awaitPlanApproval(ctx, runID, result.Content)
+			if approvalErr != nil {
+				r.failRun(runID, approvalErr)
+				return
+			}
+			if !approved {
+				messages = append(messages, Message{Role: "user", Content: "The operator requested changes to the plan. Revise the designated plan file and present the updated plan."})
+				r.stepSetMessages(runID, messages)
+				continue
+			}
 			r.completeRun(runID, result.Content)
 			return
 		}
@@ -661,6 +671,16 @@ func (se *stepEngine) run() {
 				"duration_ms": time.Since(stepStartTime).Milliseconds(),
 			})
 			emitCausalGraph(step)
+			approved, approvalErr := r.awaitPlanApproval(ctx, runID, result.Content)
+			if approvalErr != nil {
+				r.failRun(runID, approvalErr)
+				return
+			}
+			if !approved {
+				messages = append(messages, Message{Role: "user", Content: "The operator requested changes to the plan. Revise the designated plan file and present the updated plan."})
+				r.stepSetMessages(runID, messages)
+				continue
+			}
 			r.completeRun(runID, result.Content)
 			return
 		}

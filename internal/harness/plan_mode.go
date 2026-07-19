@@ -1,12 +1,50 @@
 package harness
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	htools "go-agent-harness/internal/harness/tools"
 )
+
+func (r *Runner) awaitPlanApproval(ctx context.Context, runID, content string) (bool, error) {
+	r.mu.Lock()
+	st := r.runs[runID]
+	if st == nil || st.planMode != PlanModeActive {
+		r.mu.Unlock()
+		return true, nil
+	}
+	st.planMode = PlanModeExitPending
+	r.mu.Unlock()
+	if r.config.ApprovalBroker == nil {
+		return false, fmt.Errorf("plan mode requires an approval broker")
+	}
+	r.setStatus(runID, RunStatusWaitingForApproval, "", "")
+	r.emit(runID, EventPlanApprovalRequired, map[string]any{"tool": "plan_exit", "plan": content})
+	approved, err := r.config.ApprovalBroker.Ask(ctx, ApprovalRequest{RunID: runID, CallID: "plan_exit", Tool: "plan_exit", Args: content, Timeout: r.config.AskUserTimeout})
+	if err != nil {
+		return false, err
+	}
+	r.mu.Lock()
+	st = r.runs[runID]
+	if st != nil {
+		if approved {
+			st.planMode = PlanModeInactive
+		} else {
+			st.planMode = PlanModeActive
+		}
+	}
+	r.mu.Unlock()
+	r.setStatus(runID, RunStatusRunning, "", "")
+	if approved {
+		r.emit(runID, EventPlanApprovalGranted, map[string]any{"plan": content})
+	} else {
+		r.emit(runID, EventPlanApprovalDenied, map[string]any{"plan": content})
+	}
+	return approved, nil
+}
 
 // PlanModeState is the per-run lifecycle for an enforced planning phase.
 type PlanModeState string
