@@ -41,3 +41,28 @@ func TestPluginBrowserKeyboardEnablesSelectedPlugin(t *testing.T) {
 		t.Fatal("escape should close plugin browser")
 	}
 }
+
+func TestInstallableBashCommandsRequirePluginTrust(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root := filepath.Join(home, ".go-harness", "plugins", "remote", "1.0.0")
+	if err := os.MkdirAll(filepath.Join(root, "commands"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "plugin.json"), []byte(`{"schema_version":1,"name":"remote","version":"1.0.0","commands":"commands"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := plugins.NewStateStore(filepath.Join(home, ".go-harness", "plugins", "state.json"))
+	if err := store.RecordInstall(plugins.InstalledPlugin{Name: "remote", Version: "1.0.0", Remote: true}); err != nil {
+		t.Fatal(err)
+	}
+	if got := installablePluginCommandDirs(); len(got) != 0 {
+		t.Fatalf("untrusted dirs=%v", got)
+	}
+	if err := store.SetTrusted("remote", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := installablePluginCommandDirs(); len(got) != 1 {
+		t.Fatalf("trusted dirs=%v", got)
+	}
+}
