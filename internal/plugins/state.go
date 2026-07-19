@@ -43,10 +43,17 @@ func (s *StateStore) RecordInstall(plugin InstalledPlugin) error {
 	if strings.TrimSpace(plugin.Name) == "" || strings.TrimSpace(plugin.Version) == "" {
 		return fmt.Errorf("plugin name and version are required")
 	}
-	plugin.Enabled = true
-	// Remote content crosses a trust boundary. Local installs remain trusted
-	// unless a caller explicitly records otherwise through SetTrusted.
-	plugin.Trusted = !plugin.Remote
+	if existing, ok := state.Plugins[plugin.Name]; ok {
+		// Updating content must not silently broaden execution authority or make
+		// a disabled bundle visible again.
+		plugin.Enabled = existing.Enabled
+		plugin.Trusted = existing.Trusted
+	} else {
+		plugin.Enabled = true
+		// Remote content crosses a trust boundary. Local installs remain trusted
+		// unless a caller explicitly records otherwise through SetTrusted.
+		plugin.Trusted = !plugin.Remote
+	}
 	state.Plugins[plugin.Name] = plugin
 	return s.save(state)
 }
