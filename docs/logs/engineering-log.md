@@ -8,6 +8,12 @@
   - T02: every event-store append now receives a five-second bounded context, preventing a wedged store from occupying a run goroutine indefinitely while preserving the existing lock-free terminal fanout path.
 - Validation: focused T01/T02 tests passed under `-race`; full `go test ./... -race`, `go vet ./...`, and `./scripts/test-regression.sh` passed (`coveragegate: PASS`, 84.4% total, zero zero-coverage functions).
 
+## 2026-07-19 (Multi-run TUI Dashboard — Epic #738)
+
+- Implemented the six dashboard slices (#742, #745, #749, #753, #757, #762) as TUI-only changes: authenticated `/v1/runs` polling, grouped overlay navigation, `/dashboard`/`Ctrl+D`, one cancellable peek SSE bridge, selected-run steer/cancel, and isolated new-run dispatch.
+- Added focused failing-first dashboard tests for list loading, grouped navigation, command/key opening, peek close lifecycle, control routing, and dispatch. No server route or dependency changes.
+- Validation: `go test ./cmd/harnesscli/...` passes. Repository-wide formatting gate still reports pre-existing drift and a syntax-invalid training exercise; see final verification status.
+
 ## 2026-06-28 (Config-Driven Lifecycle Hooks — Epic #737)
 
 - Implemented epic #737 and all six child issues (#741, #744, #750, #755, #759, #763) in worktree branch `codex/config-hooks-epic-737`, one commit per slice, strict TDD throughout.
