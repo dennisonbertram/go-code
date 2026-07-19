@@ -218,6 +218,8 @@ const recorderDrainTimeout = 30 * time.Second
 // the model returns 0 completion_tokens with empty content.
 const maxEmptyRetries = 3
 
+const terminalEventStoreTimeout = 5 * time.Second
+
 const (
 	defaultMaxCompletedRetention    = 32
 	defaultMaxConversationRetention = 256
@@ -4966,9 +4968,9 @@ func shouldPersistWorkflowRecap(status RunStatus) bool {
 // storeAppendEvent persists a single event to the store.
 // Called from emit() after the event is appended to state.events.
 // Executed outside the lock to avoid increasing lock hold time.
-func (r *Runner) storeAppendEvent(ev Event, seq uint64) {
+func (r *Runner) storeAppendEvent(ev Event, seq uint64) bool {
 	if r.config.Store == nil {
-		return
+		return true
 	}
 	payloadJSON, err := json.Marshal(ev.Payload)
 	if err != nil {
@@ -4982,12 +4984,16 @@ func (r *Runner) storeAppendEvent(ev Event, seq uint64) {
 		Payload:   string(payloadJSON),
 		Timestamp: ev.Timestamp,
 	}
-	if err := r.config.Store.AppendEvent(context.Background(), se); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), terminalEventStoreTimeout)
+	defer cancel()
+	if err := r.config.Store.AppendEvent(ctx, se); err != nil {
 		if r.config.Logger != nil {
 			r.config.Logger.Error("store: AppendEvent failed",
 				"run_id", ev.RunID, "event_type", string(ev.Type), "seq", seq, "error", err)
 		}
+		return false
 	}
+	return true
 }
 
 // storeAppendNewMessages appends any messages in the current run state that
