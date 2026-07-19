@@ -26,15 +26,15 @@
 
 ## Implementation Checklist
 
-- [ ] Slice 1 — SQLite schema and rewind snapshot store (#743).
-- [ ] Slice 2 — pre-edit capture in the step engine (#747).
-- [ ] Slice 3 — filesystem restore and conversation truncation (#752).
-- [ ] Slice 4 — tenant-scoped HTTP list/restore routes (#756).
-- [ ] Slice 5 — confirmed `/rewind` TUI picker (#761).
-- [ ] Slice 6 — snapshot caps and retention/pruning (#770).
-- [ ] Update docs and logs.
-- [ ] Run gofmt, vet, and regression gate.
-- [ ] Push branch and open, but do not merge, PR.
+- [x] Slice 1 — SQLite schema and rewind snapshot store (#743).
+- [x] Slice 2 — pre-edit capture in the step engine (#747).
+- [x] Slice 3 — filesystem restore and conversation truncation (#752).
+- [x] Slice 4 — tenant-scoped HTTP list/restore routes (#756).
+- [x] Slice 5 — confirmed `/rewind` TUI picker (#761).
+- [x] Slice 6 — snapshot caps and retention/pruning (#770).
+- [x] Update docs and logs.
+- [x] Run gofmt, vet, and regression gate.
+- [x] Push branch and open, but do not merge, PR.
 
 ## Risks and Mitigations
 

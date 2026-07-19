@@ -498,34 +498,46 @@ func (s *SQLiteConversationStore) FinalizeRewindPoint(ctx context.Context, point
 	if err != nil {
 		return err
 	}
-	defer points.Close()
+	type snapshotPath struct {
+		path    string
+		skipped bool
+	}
+	paths := []snapshotPath{}
+	for points.Next() {
+		var path string
+		var skipped int
+		if err := points.Scan(&path, &skipped); err != nil {
+			points.Close()
+			return err
+		}
+		paths = append(paths, snapshotPath{path: path, skipped: skipped == 1})
+	}
+	if err := points.Err(); err != nil {
+		points.Close()
+		return err
+	}
+	if err := points.Close(); err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	for points.Next() {
-		var path string
-		var skipped int
-		if err := points.Scan(&path, &skipped); err != nil {
-			return err
-		}
-		if skipped == 1 {
+	for _, snapshot := range paths {
+		if snapshot.skipped {
 			continue
 		}
-		content, err := os.ReadFile(filepath.Join(workspace, path))
+		content, err := os.ReadFile(filepath.Join(workspace, snapshot.path))
 		hash := rewindAbsentHash
 		if err == nil {
 			hash = RewindContentHash(content)
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		if _, err := tx.ExecContext(ctx, `UPDATE rewind_file_snapshots SET expected_hash=? WHERE point_id=? AND path=?`, hash, pointID, path); err != nil {
+		if _, err := tx.ExecContext(ctx, `UPDATE rewind_file_snapshots SET expected_hash=? WHERE point_id=? AND path=?`, hash, pointID, snapshot.path); err != nil {
 			return err
 		}
-	}
-	if err := points.Err(); err != nil {
-		return err
 	}
 	return tx.Commit()
 }

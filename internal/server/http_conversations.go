@@ -107,7 +107,7 @@ func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// POST /v1/conversations/{id}/compact — context compaction (runs:write) (Issue #33)
+	// GET /v1/conversations/{id}/rewind-points — list file snapshots (runs:read).
 	if len(parts) == 2 && parts[1] == "rewind-points" {
 		if r.Method != http.MethodGet {
 			writeMethodNotAllowed(w, http.MethodGet)
@@ -123,6 +123,7 @@ func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
 		s.handleListRewindPoints(w, r, parts[0])
 		return
 	}
+	// POST /v1/conversations/{id}/rewind — destructive file/conversation restore (runs:write).
 	if len(parts) == 2 && parts[1] == "rewind" {
 		if r.Method != http.MethodPost {
 			writeMethodNotAllowed(w, http.MethodPost)
