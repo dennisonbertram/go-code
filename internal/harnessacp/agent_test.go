@@ -20,3 +20,18 @@ func TestAgentInitializeAdvertisesACPServerCapabilities(t *testing.T) {
 		t.Fatalf("close capability was not advertised: %#v", got.AgentCapabilities)
 	}
 }
+
+func TestNewSessionCreatesStableHarnessConversation(t *testing.T) {
+	agent := NewAgent("http://example.test")
+	got, err := agent.NewSession(context.Background(), acp.NewSessionRequest{Cwd: "/workspace", McpServers: []acp.McpServer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversationID, ok := agent.ConversationID(got.SessionId)
+	if !ok || conversationID == "" {
+		t.Fatalf("session %q has no harness conversation", got.SessionId)
+	}
+	if _, ok := agent.ConversationID(got.SessionId); !ok {
+		t.Fatal("session registry was not stable")
+	}
+}

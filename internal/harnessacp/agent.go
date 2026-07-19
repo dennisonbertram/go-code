@@ -3,6 +3,8 @@ package harnessacp
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
 	"sync"
 
@@ -11,11 +13,16 @@ import (
 
 // Agent is the ACP-facing adapter. It never embeds a harness runner.
 type Agent struct {
-	addr string
-	mu   sync.Mutex
+	addr     string
+	mu       sync.Mutex
+	sessions map[acp.SessionId]session
 }
 
-func NewAgent(addr string) *Agent { return &Agent{addr: addr} }
+type session struct{ conversationID, runID string }
+
+func NewAgent(addr string) *Agent {
+	return &Agent{addr: addr, sessions: make(map[acp.SessionId]session)}
+}
 
 func (a *Agent) SetAgentConnection(_ *acp.AgentSideConnection) {}
 
@@ -43,7 +50,34 @@ func (a *Agent) ListSessions(context.Context, acp.ListSessionsRequest) (acp.List
 	return acp.ListSessionsResponse{}, acp.NewMethodNotFound(acp.AgentMethodSessionList)
 }
 func (a *Agent) NewSession(context.Context, acp.NewSessionRequest) (acp.NewSessionResponse, error) {
-	return acp.NewSessionResponse{}, fmt.Errorf("ACP session/new is not implemented")
+	id, err := randomID()
+	if err != nil {
+		return acp.NewSessionResponse{}, err
+	}
+	conversationID, err := randomID()
+	if err != nil {
+		return acp.NewSessionResponse{}, err
+	}
+	sid := acp.SessionId(id)
+	a.mu.Lock()
+	a.sessions[sid] = session{conversationID: conversationID}
+	a.mu.Unlock()
+	return acp.NewSessionResponse{SessionId: sid}, nil
+}
+
+func (a *Agent) ConversationID(id acp.SessionId) (string, bool) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	s, ok := a.sessions[id]
+	return s.conversationID, ok
+}
+
+func randomID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("random id: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 func (a *Agent) Prompt(context.Context, acp.PromptRequest) (acp.PromptResponse, error) {
 	return acp.PromptResponse{}, fmt.Errorf("ACP session/prompt is not implemented")
