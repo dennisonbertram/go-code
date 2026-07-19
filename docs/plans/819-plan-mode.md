@@ -44,11 +44,11 @@
 
 - [x] Define acceptance criteria in tests.
 - [x] Document feature status and exact contract before code.
-- [ ] Write failing tests first (mutation-verified).
-- [ ] Document pinned semantics in `plan_mode.go` doc comments.
-- [ ] Run `go test ./internal/harness/ -run PlanMode -count=1` green.
-- [ ] gofmt + go vet clean; run touched-package tests.
-- [ ] Commit, push `epic/819-plan-mode`, open PR (no merge).
+- [x] Write failing tests first (mutation-verified).
+- [x] Document pinned semantics in `plan_mode.go` doc comments.
+- [x] Run `go test ./internal/harness/ -run PlanMode -count=1` green.
+- [x] gofmt + go vet clean; run touched-package tests.
+- [x] Commit, push `epic/819-plan-mode`, open PR (no merge).
 
 ## Risks and Mitigations
 
