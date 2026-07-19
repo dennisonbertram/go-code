@@ -24,6 +24,35 @@ func TestAgentInitializeAdvertisesACPServerCapabilities(t *testing.T) {
 	}
 }
 
+func TestRequiredACPAgentLifecycleMethodsHaveDefinedBehavior(t *testing.T) {
+	agent := NewAgent("http://example.test")
+	agent.SetAgentConnection(nil)
+	if _, err := agent.Authenticate(context.Background(), acp.AuthenticateRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.Logout(context.Background(), acp.LogoutRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.CloseSession(context.Background(), acp.CloseSessionRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.ListSessions(context.Background(), acp.ListSessionsRequest{}); err == nil {
+		t.Fatal("list sessions unexpectedly supported")
+	}
+	if _, err := agent.ResumeSession(context.Background(), acp.ResumeSessionRequest{}); err == nil {
+		t.Fatal("resume unexpectedly supported")
+	}
+	if _, err := agent.SetSessionConfigOption(context.Background(), acp.SetSessionConfigOptionRequest{}); err == nil {
+		t.Fatal("config unexpectedly supported")
+	}
+	if _, err := agent.SetSessionMode(context.Background(), acp.SetSessionModeRequest{}); err == nil {
+		t.Fatal("mode unexpectedly supported")
+	}
+	if err := agent.Cancel(context.Background(), acp.CancelNotification{SessionId: "unknown"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPromptStartsRunAndMapsTerminalStopReason(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v1/runs" {
