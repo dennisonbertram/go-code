@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -15,11 +16,24 @@ import (
 	"time"
 )
 
+// Sentinel errors for MCP HTTP transport authentication failures. They are
+// wrapped (see %w) in the returned error, so callers can use errors.Is to
+// distinguish an auth failure from other transport or protocol errors.
+var (
+	// ErrUnauthorized is returned when the server responds with HTTP 401,
+	// meaning the request lacked valid authentication credentials.
+	ErrUnauthorized = errors.New("mcp: unauthorized (authentication required)")
+	// ErrForbidden is returned when the server responds with HTTP 403,
+	// meaning the presented credentials were rejected or lack permission.
+	ErrForbidden = errors.New("mcp: forbidden (access denied)")
+)
+
 // httpConn implements Conn over HTTP using JSON-RPC 2.0.
 // It supports both application/json and text/event-stream (SSE) responses.
 type httpConn struct {
 	name     string
 	endpoint string
+	headers  map[string]string
 	client   *http.Client
 
 	idCounter         atomic.Int64
@@ -44,6 +58,7 @@ func dialHTTP(cfg ServerConfig) (Conn, error) {
 	return &httpConn{
 		name:     cfg.Name,
 		endpoint: cfg.URL,
+		headers:  cfg.Headers,
 		client:   &http.Client{Timeout: 30 * time.Second},
 	}, nil
 }
@@ -200,6 +215,11 @@ func (c *httpConn) sendRequest(ctx context.Context, method string, params any) (
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Accept", "application/json, text/event-stream")
+	// Apply configured static headers after the protocol headers so an
+	// explicitly configured value wins on collision.
+	for k, v := range c.headers {
+		httpReq.Header.Set(k, v)
+	}
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
@@ -208,6 +228,12 @@ func (c *httpConn) sendRequest(ctx context.Context, method string, params any) (
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		switch resp.StatusCode {
+		case http.StatusUnauthorized:
+			return nil, fmt.Errorf("mcp: server %q returned HTTP %d %s: %w", c.name, resp.StatusCode, resp.Status, ErrUnauthorized)
+		case http.StatusForbidden:
+			return nil, fmt.Errorf("mcp: server %q returned HTTP %d %s: %w", c.name, resp.StatusCode, resp.Status, ErrForbidden)
+		}
 		return nil, fmt.Errorf("mcp: server %q returned HTTP %d %s", c.name, resp.StatusCode, resp.Status)
 	}
 

@@ -156,6 +156,14 @@ type HooksConfig struct {
 //	[mcp_servers.remote-tool]
 //	transport = "http"
 //	url = "http://localhost:3001/mcp"
+//
+// Example TOML (http with static headers, e.g. bearer auth):
+//
+//	[mcp_servers.authed-tool]
+//	transport = "http"
+//	url = "https://mcp.example.com/mcp"
+//	[mcp_servers.authed-tool.headers]
+//	Authorization = "Bearer <token>"
 type MCPServerConfig struct {
 	// Transport must be "stdio" or "http".
 	Transport string `toml:"transport"`
@@ -168,6 +176,10 @@ type MCPServerConfig struct {
 
 	// HTTP transport: the MCP server endpoint URL.
 	URL string `toml:"url"`
+
+	// HTTP transport: static headers sent with every request, e.g.
+	// "Authorization" = "Bearer <token>". Ignored on the stdio transport.
+	Headers map[string]string `toml:"headers"`
 }
 
 // CronConfig holds cron scheduler configuration.

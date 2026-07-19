@@ -1000,3 +1000,103 @@ dirs = ["/project-hooks"]
 		t.Errorf("Hooks.Dirs: got %v, want project layer override", cfg.Hooks.Dirs)
 	}
 }
+
+// TestMCPServerHeadersLoadedFromTOML verifies that a [mcp_servers.*.headers]
+// table in TOML is decoded into MCPServerConfig.Headers.
+func TestMCPServerHeadersLoadedFromTOML(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfgPath := filepath.Join(tmpDir, "config.toml")
+	if err := os.WriteFile(cfgPath, []byte(`
+[mcp_servers.authed]
+transport = "http"
+url = "https://mcp.example.com/mcp"
+
+[mcp_servers.authed.headers]
+Authorization = "Bearer secret-token"
+X-Tenant = "acme"
+
+[mcp_servers.plain]
+transport = "http"
+url = "http://localhost:3001/mcp"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := config.LoadOptions{
+		UserConfigPath: cfgPath,
+		Getenv:         func(string) string { return "" },
+	}
+	result, err := config.Load(opts)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	authed, ok := result.MCPServers["authed"]
+	if !ok {
+		t.Fatal("MCPServers: missing key \"authed\"")
+	}
+	if len(authed.Headers) != 2 {
+		t.Fatalf("authed.Headers: got %d entries, want 2 (%v)", len(authed.Headers), authed.Headers)
+	}
+	if got := authed.Headers["Authorization"]; got != "Bearer secret-token" {
+		t.Errorf("authed.Headers[Authorization]: got %q, want %q", got, "Bearer secret-token")
+	}
+	if got := authed.Headers["X-Tenant"]; got != "acme" {
+		t.Errorf("authed.Headers[X-Tenant]: got %q, want %q", got, "acme")
+	}
+
+	plain, ok := result.MCPServers["plain"]
+	if !ok {
+		t.Fatal("MCPServers: missing key \"plain\"")
+	}
+	if len(plain.Headers) != 0 {
+		t.Errorf("plain.Headers: got %v, want empty when no headers table present", plain.Headers)
+	}
+}
+
+// TestMCPServerHeadersLayerOverride verifies that a higher-priority config
+// layer can replace a server's headers wholesale.
+func TestMCPServerHeadersLayerOverride(t *testing.T) {
+	tmpDir := t.TempDir()
+	userConfig := filepath.Join(tmpDir, "user.toml")
+	projectConfig := filepath.Join(tmpDir, "project.toml")
+
+	if err := os.WriteFile(userConfig, []byte(`
+[mcp_servers.authed]
+transport = "http"
+url = "https://mcp.example.com/mcp"
+
+[mcp_servers.authed.headers]
+Authorization = "Bearer user-token"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(projectConfig, []byte(`
+[mcp_servers.authed]
+transport = "http"
+url = "https://mcp.example.com/mcp"
+
+[mcp_servers.authed.headers]
+Authorization = "Bearer project-token"
+`), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	opts := config.LoadOptions{
+		UserConfigPath:    userConfig,
+		ProjectConfigPath: projectConfig,
+		Getenv:            func(string) string { return "" },
+	}
+	result, err := config.Load(opts)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+
+	authed, ok := result.MCPServers["authed"]
+	if !ok {
+		t.Fatal("MCPServers: missing key \"authed\"")
+	}
+	if got := authed.Headers["Authorization"]; got != "Bearer project-token" {
+		t.Errorf("authed.Headers[Authorization]: got %q, want project-layer value %q", got, "Bearer project-token")
+	}
+}

@@ -50,6 +50,12 @@ type ServerConfig struct {
 
 	// HTTP transport field.
 	URL string // HTTP endpoint, e.g. "http://localhost:3000/mcp"
+
+	// Headers are static HTTP headers sent with every request on the http
+	// transport (e.g. "Authorization": "Bearer <token>"). They are applied
+	// after the transport's own protocol headers, so an explicitly configured
+	// header wins on collision. Ignored on the stdio transport.
+	Headers map[string]string
 }
 
 // Conn represents an active connection to an MCP server.

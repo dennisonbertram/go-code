@@ -1,8 +1,13 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"sort"
 	"testing"
+	"time"
 
 	"go-agent-harness/internal/config"
 	"go-agent-harness/internal/mcp"
@@ -200,5 +205,99 @@ func TestRegisterMCPServersFromConfig_EmptyBoth(t *testing.T) {
 	servers := manager.ListServers()
 	if len(servers) != 0 {
 		t.Fatalf("expected 0 servers, got %v", servers)
+	}
+}
+
+// bearerGatedMCPServer returns a mock MCP HTTP server that responds 401 unless
+// the request carries "Authorization: Bearer x", and otherwise speaks enough
+// JSON-RPC to initialize and list one tool.
+func bearerGatedMCPServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer x" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var req struct {
+			Method string          `json:"method"`
+			ID     json.RawMessage `json:"id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		resp := map[string]any{"jsonrpc": "2.0", "id": req.ID}
+		switch req.Method {
+		case "initialize":
+			resp["result"] = map[string]any{
+				"protocolVersion": "2025-11-25",
+				"capabilities":    map[string]any{},
+				"serverInfo":      map[string]any{"name": "gated", "version": "1.0"},
+			}
+		case "tools/list":
+			resp["result"] = map[string]any{"tools": []map[string]any{
+				{"name": "gated-tool", "description": "A gated tool", "inputSchema": map[string]any{"type": "object"}},
+			}}
+		default:
+			resp["error"] = map[string]any{"code": -32601, "message": "method not found"}
+		}
+		data, _ := json.Marshal(resp)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(data)
+	}))
+}
+
+// TestRegisterMCPServersFromConfig_TOMLHeadersPassedThrough verifies that
+// headers from a TOML [mcp_servers.*] entry are wired into the registered
+// mcp.ServerConfig: a bearer-gated HTTP server registered via
+// registerMCPServersFromConfig is reachable end to end.
+func TestRegisterMCPServersFromConfig_TOMLHeadersPassedThrough(t *testing.T) {
+	srv := bearerGatedMCPServer(t)
+	defer srv.Close()
+
+	manager := mcp.NewClientManager()
+	defer manager.Close()
+
+	toml := map[string]config.MCPServerConfig{
+		"gated": {
+			Transport: "http",
+			URL:       srv.URL,
+			Headers:   map[string]string{"Authorization": "Bearer x"},
+		},
+	}
+	registerMCPServersFromConfig(manager, toml, nil, func(string, ...any) {})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tools, err := manager.DiscoverTools(ctx, "gated")
+	if err != nil {
+		t.Fatalf("DiscoverTools with TOML-configured headers: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "gated-tool" {
+		t.Fatalf("unexpected tools: %v", tools)
+	}
+}
+
+// TestRegisterMCPServersFromConfig_TOMLWithoutHeaders_Gets401 is the negative
+// companion: the same gated server registered without headers fails, proving
+// the pass-through above (not the mock) is what authorized the request.
+func TestRegisterMCPServersFromConfig_TOMLWithoutHeaders_Gets401(t *testing.T) {
+	srv := bearerGatedMCPServer(t)
+	defer srv.Close()
+
+	manager := mcp.NewClientManager()
+	defer manager.Close()
+
+	toml := map[string]config.MCPServerConfig{
+		"gated": {Transport: "http", URL: srv.URL},
+	}
+	registerMCPServersFromConfig(manager, toml, nil, func(string, ...any) {})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := manager.DiscoverTools(ctx, "gated"); err == nil {
+		t.Fatal("expected 401 error without configured headers, got nil")
 	}
 }
