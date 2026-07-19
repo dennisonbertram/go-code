@@ -5,11 +5,62 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
+
+func dashboardGroup(status string) string {
+	switch status {
+	case "running", "queued":
+		return "Running"
+	case "waiting_for_user", "waiting_for_approval":
+		return "Waiting"
+	case "completed":
+		return "Completed"
+	case "failed":
+		return "Failed"
+	case "cancelled", "cancelling":
+		return "Cancelled"
+	default:
+		return "Other"
+	}
+}
+
+func (m Model) dashboardView() string {
+	groups := map[string][]int{}
+	for i, r := range m.dashboard.runs {
+		groups[dashboardGroup(r.Status)] = append(groups[dashboardGroup(r.Status)], i)
+	}
+	order := []string{"Running", "Waiting", "Completed", "Failed", "Cancelled", "Other"}
+	lines := []string{"Dashboard — all runs", "↑/↓ navigate • p peek • s steer • x cancel • n new • esc close"}
+	for _, group := range order {
+		idxs := groups[group]
+		if len(idxs) == 0 {
+			continue
+		}
+		sort.Ints(idxs)
+		lines = append(lines, "", group)
+		for _, i := range idxs {
+			r := m.dashboard.runs[i]
+			marker := "  "
+			if i == m.dashboard.cursor {
+				marker = "> "
+			}
+			model := r.Model
+			if model == "" {
+				model = "(default)"
+			}
+			lines = append(lines, fmt.Sprintf("%s%s  %-22s  %s", marker, r.displayID(), r.Status, model))
+		}
+	}
+	if len(m.dashboard.runs) == 0 {
+		lines = append(lines, "", "No runs found.")
+	}
+	return strings.Join(lines, "\n")
+}
 
 // dashboardState is deliberately owned by the existing Model overlay; its poll
 // command is scheduled only while the dashboard is active.

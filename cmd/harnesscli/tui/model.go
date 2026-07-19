@@ -1966,6 +1966,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchSelectedIdx = 0
 				return m, tea.Batch(cmds...)
 			}
+			if m.activeOverlay == "dashboard" {
+				m.closeDashboard()
+				return m, tea.Batch(cmds...)
+			}
 			if m.overlayActive {
 				m.overlayActive = false
 				m.activeOverlay = ""
@@ -2341,6 +2345,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.permissionsPanel = m.permissionsPanel.ToggleSelected()
 			case msg.String() == "d":
 				m.permissionsPanel = m.permissionsPanel.RemoveSelected()
+			}
+			return m, tea.Batch(cmds...)
+		case m.overlayActive && m.activeOverlay == "dashboard":
+			if len(m.dashboard.runs) > 0 {
+				switch {
+				case msg.Type == tea.KeyUp || msg.String() == "k":
+					m.dashboard.cursor = (m.dashboard.cursor - 1 + len(m.dashboard.runs)) % len(m.dashboard.runs)
+				case msg.Type == tea.KeyDown || msg.String() == "j":
+					m.dashboard.cursor = (m.dashboard.cursor + 1) % len(m.dashboard.runs)
+				}
 			}
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "search" && (msg.Type == tea.KeyUp || msg.Type == tea.KeyDown || msg.String() == "k" || msg.String() == "j"):
@@ -3453,6 +3467,8 @@ func (m Model) View() string {
 			m.permissionsPanel.Height = m.layout.ViewportHeight
 			raw := m.permissionsPanel.View()
 			mainContent = boxOverlay(raw, m.width)
+		case "dashboard":
+			mainContent = boxOverlay(m.dashboardView(), m.width)
 		default:
 			// Unknown overlay kind — fall back to viewport.
 			mainContent = m.vp.View()

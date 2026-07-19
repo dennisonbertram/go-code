@@ -3,7 +3,10 @@ package tui
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestDashboardRunListCmdLoadsRunsAndModelStoresThem(t *testing.T) {
@@ -24,5 +27,18 @@ func TestDashboardRunListCmdLoadsRunsAndModelStoresThem(t *testing.T) {
 	m = updated.(Model)
 	if len(m.dashboard.runs) != 1 || m.dashboard.runs[0].displayID() != "run-1" {
 		t.Fatalf("dashboard runs = %#v", m.dashboard.runs)
+	}
+}
+
+func TestDashboardViewGroupsRunsAndArrowKeysNavigate(t *testing.T) {
+	m := New(TUIConfig{})
+	m.overlayActive, m.activeOverlay = true, "dashboard"
+	m.dashboard.runs = []tuiRunRecord{{ID: "one", Status: "running"}, {ID: "two", Status: "waiting_for_approval"}, {ID: "three", Status: "completed"}}
+	if got := m.dashboardView(); !strings.Contains(got, "Running") || !strings.Contains(got, "Waiting") || !strings.Contains(got, "Completed") {
+		t.Fatalf("missing groups: %s", got)
+	}
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	if got := updated.(Model).dashboard.cursor; got != 1 {
+		t.Fatalf("cursor = %d", got)
 	}
 }
