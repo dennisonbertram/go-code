@@ -1270,3 +1270,18 @@ Decision rule: when uncertain, default to `command intent` and `user intent` bel
 - Open questions:
   - None for this tier.
 - Next verification step: review the three-commit diff on `fix-harness-tier2-security`, then promote through the repo's normal verify-and-merge flow.
+
+## 2026-07-19 (Typed tool registration — Workstream A of the nanocodex-comparison plan)
+
+- Command intent: Land the first workstream of `docs/design/nanocodex-comparison-plan.md` on `claude/reader-cleanup-value-prop-spooyb`: a typed tool-registration helper (`tools.NewTyped`/`MustTyped`) that derives the Parameters JSON schema from a Go args struct, plus pilot migrations of `glob` and `git_status`, with exact schema parity to the previous hand-written literals.
+- User intent: Close the DX gap with nanocodex's `#[tool]` macro — a tool's schema and its decode target should be one artifact that cannot drift — while leaving the registry, `ParallelSafe`/`Mutating` flags, policy wrapping, and approval machinery untouched.
+- Success definition:
+  - `internal/harness/tools/typed.go` derives schemas by reflection (json-tag names, omitempty/pointer optionality, `desc`/`min`/`max`/`enum` tags, nested structs/slices/maps), decodes args (empty/null tolerated as zero value), and marshals results (string/RawMessage passthrough); proven by 8 `TestNewTyped*` tests including construction-error paths.
+  - Pilot migrations preserve wire-visible behavior: `typed_parity_test.go` locks the generated schemas against the pre-migration literals via canonical-JSON comparison, plus metadata (Action/ParallelSafe/Tags) and behavior tests (glob match/limit/error paths; git_status porcelain default via `*bool` since the old handler defaulted true only when the key was absent).
+  - Verification green: `go build ./internal/... ./cmd/...`, `go vet ./internal/harness/tools/`, full `./internal/harness/tools/...` suites, `./internal/server/... -run TestRunSmoke`, and harness `Registry|Catalog` tests.
+- Non-goals: migrating the remaining ~50 hand-written tools (opportunistic, both styles coexist); Workstreams B (harness split) and C (public Go client) — planned in the design doc, not started.
+- Guardrails/constraints:
+  - One deliberate error-message change: glob with empty raw args now fails "pattern is required" instead of a JSON parse error (the wrapper tolerates absent args); noted in tests.
+  - Known pre-existing failures, unrelated (verified via `git stash` on the unmodified tree): `benchmarks/terminal_bench/reference_solutions` packages don't build (no `main`), and `TestEnsureWorkspaceRootUsable/non-writable_root` fails when running as uid 0 (root writes to non-writable dirs).
+- Open questions: whether `min`/`max`/`enum` tag coverage suffices for the wider migration or a `schema:"..."` escape hatch is needed — decide when migrating a tool that needs more.
+- Next verification step: review the PR diff, then B1 (dependency-graph inventory) per the design doc's sequencing.
