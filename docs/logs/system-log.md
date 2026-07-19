@@ -1,5 +1,17 @@
 # System Log
 
+## 2026-07-19 (ACP Server Mode — Epic #746)
+
+- System/component: `cmd/harness-acp` and `internal/harnessacp`.
+- Responsibilities: ACP stdio lifecycle and wire translation only; harnessd
+  remains responsible for execution, event production, approval brokerage,
+  cancellation, and todo state.
+- Inputs/outputs: ACP JSON-RPC on stdio; harnessd REST for run commands and
+  SSE for streamed events; ACP session updates/permission requests to editor.
+- Failure modes: daemon/network failures are returned as ACP request errors;
+  session cancellation maps to the underlying run cancel route; an editor
+  permission denial maps to the existing deny route.
+
 Use this file to document systems, interfaces, and interactions as they are built.
 
 ## 2026-06-28 (Config-Driven Lifecycle Hooks — Epic #737)

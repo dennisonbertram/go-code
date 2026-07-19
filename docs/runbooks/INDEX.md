@@ -1,5 +1,7 @@
 # Runbooks Index
 
+- `acp.md` — configure and verify the `harness-acp` Agent Client Protocol stdio adapter.
+
 - `testing.md`: How to design and run meaningful tests before commit.
 - `symphony.md`: How to run OpenAI Symphony for this repository with the wrapper script.
 - `symphony-issue-authoring.md`: How to write GitHub issues that Symphony can execute autonomously with strict TDD, behavior tests, regression gates, and merge rules.

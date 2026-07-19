@@ -73,3 +73,9 @@ and error recovery chains.
 - Keep `docs/logs/long-term-thinking-log.md` in sync with any durable intent or success-criteria changes.
 - Keep `docs/runbooks/` aligned with the current CLI and server behavior.
 - For a new worktree, run `scripts/init.sh <task-slug>` first. `scripts/bootstrap-worktree.sh` is only a compatibility wrapper. `scripts/init.sh` creates the worktree, downloads dependencies, builds local binaries, writes a sourceable env file, and can start `harnessd` in tmux when requested.
+### Agent Client Protocol (ACP)
+
+`harness-acp` is the stdio ACP entrypoint for editor integrations. It proxies
+ACP session lifecycle, streamed updates, cancellation, and approvals to the
+existing harnessd HTTP/SSE API. See `docs/runbooks/acp.md` for setup and the
+manual Zed verification checklist.
