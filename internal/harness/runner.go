@@ -4757,6 +4757,12 @@ func (r *Runner) emit(runID string, eventType EventType, payload map[string]any)
 	journal.dispatch(delivery)
 }
 
+// EmitEvent publishes an additive adapter-originated event through the run's
+// canonical event journal. It is a no-op for unknown or terminal runs.
+func (r *Runner) EmitEvent(runID string, eventType EventType, payload map[string]any) {
+	r.emit(runID, eventType, payload)
+}
+
 func (r *Runner) emitCompletionDelta(runID string, step int, delta CompletionDelta) {
 	if delta.Content != "" {
 		r.emit(runID, EventAssistantMessageDelta, map[string]any{
