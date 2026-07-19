@@ -15,12 +15,13 @@ import (
 
 // Agent is the ACP-facing adapter. It never embeds a harness runner.
 type Agent struct {
-	addr     string
-	client   *harnessmcp.HarnessClient
-	conn     *acp.AgentSideConnection
-	update   func(context.Context, acp.SessionId, acp.SessionUpdate) error
-	mu       sync.Mutex
-	sessions map[acp.SessionId]session
+	addr       string
+	client     *harnessmcp.HarnessClient
+	conn       *acp.AgentSideConnection
+	update     func(context.Context, acp.SessionId, acp.SessionUpdate) error
+	permission func(context.Context, acp.SessionId, string, string) (bool, error)
+	mu         sync.Mutex
+	sessions   map[acp.SessionId]session
 }
 
 type session struct{ conversationID, runID string }
@@ -121,12 +122,38 @@ func (a *Agent) Prompt(ctx context.Context, params acp.PromptRequest) (acp.Promp
 		if event.Type == "run.cancelled" {
 			stop = acp.StopReasonCancelled
 		}
+		if event.Type == "tool.approval_required" {
+			return a.handleApproval(ctx, params.SessionId, result.RunID, event)
+		}
 		return a.projectEvent(ctx, params.SessionId, event)
 	})
 	if err != nil {
 		return acp.PromptResponse{}, err
 	}
 	return acp.PromptResponse{StopReason: stop}, nil
+}
+
+func (a *Agent) handleApproval(ctx context.Context, id acp.SessionId, runID string, event harnessmcp.RunEvent) error {
+	callID, _ := event.Data["call_id"].(string)
+	tool, _ := event.Data["tool"].(string)
+	allow := false
+	if a.permission != nil {
+		var err error
+		allow, err = a.permission(ctx, id, callID, tool)
+		if err != nil {
+			return err
+		}
+	} else if a.conn != nil {
+		response, err := a.conn.RequestPermission(ctx, acp.RequestPermissionRequest{SessionId: id, ToolCall: acp.ToolCallUpdate{ToolCallId: acp.ToolCallId(callID)}, Options: []acp.PermissionOption{{OptionId: "approve", Name: "Approve", Kind: acp.PermissionOptionKindAllowOnce}, {OptionId: "deny", Name: "Deny", Kind: acp.PermissionOptionKindRejectOnce}}})
+		if err != nil {
+			return err
+		}
+		allow = response.Outcome.Selected != nil && response.Outcome.Selected.OptionId == "approve"
+	}
+	if allow {
+		return a.client.ApproveRun(ctx, runID)
+	}
+	return a.client.DenyRun(ctx, runID)
 }
 
 func (a *Agent) projectEvent(ctx context.Context, id acp.SessionId, event harnessmcp.RunEvent) error {

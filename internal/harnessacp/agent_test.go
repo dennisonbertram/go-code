@@ -81,6 +81,27 @@ func TestProjectEventProjectsToolLifecycle(t *testing.T) {
 	}
 }
 
+func TestApprovalEventRequestsPermissionAndApprovesRun(t *testing.T) {
+	var approved bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/runs/run-1/approve" {
+			approved = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	agent := NewAgent(server.URL)
+	agent.permission = func(context.Context, acp.SessionId, string, string) (bool, error) { return true, nil }
+	if err := agent.handleApproval(context.Background(), "s", "run-1", harnessmcp.RunEvent{Data: map[string]any{"call_id": "c", "tool": "shell"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !approved {
+		t.Fatal("approval was not forwarded to harnessd")
+	}
+}
+
 func TestNewSessionCreatesStableHarnessConversation(t *testing.T) {
 	agent := NewAgent("http://example.test")
 	got, err := agent.NewSession(context.Background(), acp.NewSessionRequest{Cwd: "/workspace", McpServers: []acp.McpServer{}})
