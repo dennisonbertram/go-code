@@ -169,6 +169,82 @@ func runCancel(args []string) int {
 	return 0
 }
 
+// runSteer implements "harnesscli steer <run-id> <prompt>".
+// Sends POST /v1/runs/{id}/steer to inject a steering message into the active
+// run. The server queues the message and the harness delivers it to the agent
+// as a user message at the next step boundary; the run keeps going. Empty or
+// whitespace-only prompts are rejected client-side before any request is sent.
+func runSteer(args []string) int {
+	fs := flag.NewFlagSet("steer", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	baseURL := fs.String("base-url", "http://localhost:8080", "harness API base URL")
+
+	if err := fs.Parse(args); err != nil {
+		fmt.Fprintf(stderr, "harnesscli steer: %v\n", err)
+		return 1
+	}
+
+	if fs.NArg() == 0 {
+		fmt.Fprintln(stderr, "harnesscli steer: run ID is required")
+		return 1
+	}
+	if fs.NArg() < 2 {
+		fmt.Fprintln(stderr, "harnesscli steer: prompt is required")
+		return 1
+	}
+	runID := fs.Arg(0)
+	prompt := strings.TrimSpace(strings.Join(fs.Args()[1:], " "))
+	if prompt == "" {
+		fmt.Fprintln(stderr, "harnesscli steer: prompt is required")
+		return 1
+	}
+
+	body, err := json.Marshal(map[string]string{"prompt": prompt})
+	if err != nil {
+		fmt.Fprintf(stderr, "harnesscli steer: encode request: %v\n", err)
+		return 1
+	}
+	endpoint := strings.TrimRight(*baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/steer"
+	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		fmt.Fprintf(stderr, "harnesscli steer: build request: %v\n", err)
+		return 1
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := requestHTTPClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(stderr, "harnesscli steer: request failed: %v\n", err)
+		return 1
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
+	if err != nil {
+		fmt.Fprintf(stderr, "harnesscli steer: read response: %v\n", err)
+		return 1
+	}
+
+	switch resp.StatusCode {
+	case http.StatusNotFound:
+		fmt.Fprintf(stderr, "harnesscli steer: run %q not found\n", runID)
+		return 1
+	case http.StatusConflict:
+		fmt.Fprintf(stderr, "harnesscli steer: run %q is not active (already finished?)\n", runID)
+		return 1
+	case http.StatusTooManyRequests:
+		fmt.Fprintf(stderr, "harnesscli steer: steering buffer full for run %q — try again shortly\n", runID)
+		return 1
+	}
+	if resp.StatusCode >= 300 {
+		fmt.Fprintf(stderr, "harnesscli steer: %v\n", formatAPIError(resp.StatusCode, respBody))
+		return 1
+	}
+
+	fmt.Fprintf(stdout, "Run %s steering accepted\n", runID)
+	return 0
+}
+
 // runStatus implements "harnesscli status <run-id>".
 // Sends GET /v1/runs/{id} and prints run details.
 func runStatus(args []string) int {

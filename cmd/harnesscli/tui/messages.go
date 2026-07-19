@@ -201,6 +201,26 @@ type RunControlResultMsg struct {
 	Err    string
 }
 
+// SteerAcceptedMsg signals the server accepted a steering message for a run
+// (HTTP 202 from POST /v1/runs/{id}/steer). The steered text is injected as a
+// user message at the next step boundary; the run keeps going.
+type SteerAcceptedMsg struct{ RunID string }
+
+// SteerErrorMsg carries a failed steering attempt. Kind is a stable machine
+// string the model maps to status-bar text:
+//   - "not_found"            — HTTP 404, unknown run
+//   - "run_not_active"       — HTTP 409, run already finished
+//   - "steering_buffer_full" — HTTP 429, steering queue is full; retry shortly
+//   - "invalid_prompt"       — client-side rejection of an empty/whitespace
+//     prompt; no HTTP request was issued
+//   - "http"                 — any other non-2xx status
+//   - "transport"            — request build/send/read failure
+type SteerErrorMsg struct {
+	RunID string
+	Kind  string
+	Err   string
+}
+
 // statusTickMsg is sent after statusMsgDuration to clear the transient status bar message.
 type statusTickMsg struct{}
 
