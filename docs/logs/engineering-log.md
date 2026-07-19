@@ -1681,6 +1681,7 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
 
 - Added validated, versioned installable bundles with explicit enabled versus trusted lifecycle state, CLI/TUI management, marketplace indexes, and runtime reuse of the existing skills, profiles, MCP, and hooks paths.
 - Remote installs default untrusted; hook and MCP execution are unreachable until explicit trust.
+
 ## 2026-07-20 (Issue #846 Subscription-Auth Foundation)
 
 - Added the internal `provider.TokenSource` contract and `StaticToken` adapter, keeping static-key client construction compatible.
@@ -1717,3 +1718,12 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
 - Tests (TDD, written first and verified red as compile errors): model-only change hot-swappable; `addr` restart-only; memory split (`db_driver` restart-only vs `enabled` swappable); identical configs empty report; `mcp_servers` map change restart-only; slice field (`hooks.dirs`) detection; mixed-change determinism; reflection-based exhaustiveness guard failing any future `Config` field added without classification.
 - Validation: `go test ./internal/config/... -count=1` (green, 9 new tests); `gofmt`/`go vet` clean; every `reload.go` function at 100% statement coverage.
 - Learning: the regression coverage gate rejects any zero-coverage function repo-wide — the first `test-regression.sh` run failed solely on the untested `ReloadClass.String()` helper. Fixed by adding `TestReloadClassString` (including the defensive unknown-class branch) before re-running; the gate failure was self-inflicted, not a baseline issue.
+
+## 2026-07-19 (Epic #810 Slice 1: Theme Token Schema and JSON Loader)
+
+- Change: new `cmd/harnesscli/tui/themes.go` adds a 17-token color schema (`TokenSet`, camelCase JSON keys aligned with kimi-code: primary, accent, text, textStrong, textDim, textMuted, border, borderFocus, success, warning, error, diffAdd, diffRemove, diffHunk, roleUser, shellMode, codeBackground) plus `LoadTheme(dir, name)`, `ListThemes(dir)`, `DefaultThemesDir()` (`~/.config/harnesscli/themes`), and built-in base themes `default-dark`/`default-light`.
+- Design: token values are a string (`#rgb`/`#rrggbb` hex or ANSI-256 number, applied to both backgrounds) or an adaptive `{"light","dark"}` object. Resolution overlays each explicitly-set, valid token onto a copy of `DefaultTheme()` — omitted, empty, or unparseable values fall back per token and per side to the base palette (`tokenBaseColors`, pinned to theme.go's current colors by `TestThemesLoad_BasePaletteDerivation`). `theme.go` itself is untouched, so default rendering is byte-identical when no theme file exists; the full `go test ./cmd/harnesscli/tui/...` suite (including golden snapshots) passes unchanged.
+- Fallback semantics: missing theme file or built-in name returns `DefaultTheme()` with no error; malformed JSON returns the base palette plus an error (callers keep the current/default theme and can surface the message); invalid token shapes (numbers, arrays) and invalid colors (`"not-a-color"`, 5-digit hex, ANSI > 255) fall back without failing the load. Unsafe names (`../x`, separators, empty) are rejected with an error.
+- Mapping: every one of the 24 `Theme` style fields is bound to exactly one token (`applyToken`); `borderFocus`/`shellMode` are parsed and resolved but intentionally unbound — reserved for component-level styling in slice 2. `TestThemesLoad_TokenMappingCoversEveryThemeField` reflects over the struct so adding a `Theme` field without a binding fails the test.
+- Validation: strict TDD — 16 behavior tests written first in `cmd/harnesscli/tui/themes_test.go` (red: compile error, undefined `tui.LoadTheme` et al.), then implementation to green. `go test ./cmd/harnesscli/tui/... -count=1` green (25 packages); `gofmt`/`go vet` clean.
+- Deferred (later slices of #810, not this commit): threading resolved themes through components (slice 2), `/theme` picker (slice 3), config persistence (slice 4), website docs + example theme file (slice 5).

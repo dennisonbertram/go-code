@@ -28,6 +28,13 @@
 - Success definition: `provider.TokenSource` and `StaticToken` exist; OpenAI-compatible requests dynamically obtain bearer tokens and apply static extra headers; a provider-neutral cache single-flights refreshes and retains a still-valid token when refresh fails; the registry treats a token source as credentials and forwards it to factories; static-key behavior remains unchanged.
 - Guardrails: Never log, print, fixture, or expose token values; use obviously-fake placeholders only; no OAuth dependency, TUI edits, refresh endpoints, or credential persistence.
 
+## 2026-07-19 (Theme System Slice 1 — Epic #810)
+
+- Command intent: Implement only slice 1 of epic #810 — theme token schema and JSON loader with base-palette fallback — on branch `epic/810-theme-system`, strict TDD, then push and open a PR without merging.
+- User intent: Users can drop JSON theme files into `~/.config/harnesscli/themes/` and have them resolve into complete themes without ever breaking TUI rendering (kimi-code parity foundation for slices 2–5).
+- Success definition: 17-token schema (string or adaptive `{light,dark}` values) loads from `<name>.json`; omitted/invalid tokens fall back per token and per side to the built-in dark/light base palette; built-ins `default-dark`/`default-light` equal `DefaultTheme()`; `List` returns built-ins + sorted filename-derived names; token→style mapping covers every `Theme` field; `go test ./cmd/harnesscli/tui/... -count=1` green with zero default-appearance drift; malformed JSON errors while still returning a usable base theme.
+- Guardrails/constraints: slice 1 only — no component re-wiring (slice 2), no picker (slice 3), no persistence (slice 4), no website docs/example file (slice 5). `theme.go` untouched; overlay resolution onto `DefaultTheme()` copies; tests first per `docs/runbooks/testing.md`.
+
 ## 2026-07-19 (Agent Client Protocol Server Mode — Epic #746)
 
 - Command intent: Implement ACP server mode and all eight child slices (#751, #754, #758, #760, #771, #772, #773, #774), commit each slice, then push and open a PR without merging it.
