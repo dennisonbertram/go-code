@@ -103,6 +103,8 @@ func dispatch(args []string) int {
 		return run(args)
 	}
 	switch args[0] {
+	case "acp":
+		return runACP(args[1:])
 	case "plugin":
 		return runPlugin(args[1:])
 	case "auth":

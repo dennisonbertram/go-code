@@ -8,6 +8,34 @@
 - TDD: failing-first tests cover the warning surface (non-empty/missing/empty/JSON-free dirs) and that legacy JSON plugins still register as working slash commands while the warning surfaces.
 - Validation: `go test ./cmd/harnesscli/tui/ -run 'TestLegacyPluginsDir|TestNoLegacyPluginsDir|TestLoadAndRegisterPlugins|TestWithPluginsDir' -count=1` and the full touched-package runs below are green.
 
+## 2026-07-19 (ACP Server Mode — Epic #806, Slice 1)
+
+- Added `internal/acp`: a stdlib-only (`encoding/json`) newline-delimited
+  JSON-RPC 2.0 transport for the Agent Client Protocol — framed `Conn`
+  (partial lines, multiple messages per read, 16 MiB message cap with stream
+  realignment, goroutine-safe writer), envelope types, and spec error codes
+  (`-32700` parse, `-32600` invalid request, `-32601` method not found,
+  `-32602` invalid params).
+- `initialize` handshake negotiates protocol version (agent supports v1 only,
+  always replies 1 per spec) and returns agent capabilities:
+  `loadSession: false`, text-only `promptCapabilities`, `agentInfo`, empty
+  `authMethods`. Notifications and client→agent responses never get replies;
+  diagnostics go to a separate writer so stdout stays a pure protocol channel.
+- Wired `harness acp` (`runACP` in `cmd/harnesscli/acp.go`, dispatch case in
+  `cmd/harnesscli/auth.go`) serving the handshake over stdin/stdout.
+- Distinct from the pre-existing SDK-based `internal/harnessacp` /
+  `cmd/harness-acp` adapter (epic #746): this package is the epic-#806
+  stdlib-only implementation; session methods land in slices 2–4.
+- Bug found by TDD oversized-line test: `ReadLine` drained one line too many
+  when an over-cap message's newline arrived in the same read fragment;
+  fixed by only draining when the terminator is still unconsumed. Covered by
+  `TestConnReadLine/oversized_line...` and
+  `TestServerOversizedMessageRejectedStreamStaysAligned`.
+- Validation: `go test ./internal/acp/... -count=1` (also `-race`) and
+  `go test ./cmd/harnesscli/... -count=1` green; acceptance
+  `printf '...initialize...' | harness acp` prints a single JSON-RPC result
+  with capabilities and exits 0.
+
 ## 2026-07-19 (ACP Server Mode — Epic #746)
 
 - Added `cmd/harness-acp` and `internal/harnessacp`, using pinned
