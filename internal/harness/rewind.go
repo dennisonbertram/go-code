@@ -20,6 +20,8 @@ type RewindRestoreResult struct {
 }
 
 const rewindMaxFileBytes int64 = 1 << 20 // bounded snapshot storage: 1 MiB per file
+const rewindMaxConversationBytes int64 = 8 << 20
+const rewindAbsentHash = "absent"
 
 func RewindContentHash(content []byte) string {
 	sum := sha256.Sum256(content)
@@ -78,7 +80,14 @@ type RewindPoint struct {
 type RewindStore interface {
 	SaveRewindPoint(context.Context, RewindPoint) error
 	ListRewindPoints(context.Context, string) ([]RewindPoint, error)
+	FinalizeRewindPoint(context.Context, string, string) error
 	RestoreRewindPoint(context.Context, string, string, string, bool) (RewindRestoreResult, error)
+}
+
+// FinalizeRewindPoint records the post-tool state that restore must find. It
+// deliberately runs only after a successful tool execution.
+func FinalizeRewindPoint(ctx context.Context, store RewindStore, pointID, workspace string) error {
+	return store.FinalizeRewindPoint(ctx, pointID, workspace)
 }
 
 var rewindPatchPath = regexp.MustCompile(`(?m)^\+\+\+\s+(?:[ab]/)?([^\t\n]+)`) // unified diff destination path

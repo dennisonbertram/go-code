@@ -398,7 +398,7 @@ func TestTUI364_RegistryCompleteness(t *testing.T) {
 	knownCommands := []string{
 		"attach", "cancel", "clear", "config", "context", "cost", "dashboard", "doctor", "export", "help", "history", "hooks", "keys",
 		"model", "new", "permissions", "profiles", "quit", "replay", "resume", "runs", "search",
-		"sessions", "stats", "subagents",
+		"sessions", "stats", "subagents", "rewind",
 	}
 
 	r := tui.NewCommandRegistry()

@@ -1538,10 +1538,13 @@ func executeSessionsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 // confirmation token. The server endpoint remains the authority for file
 // restore; this command never issues a destructive request implicitly.
 func executeRewindCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
+	if len(cmd.Args) == 0 {
+		return []tea.Cmd{fetchRewindPointsCmd(m.config.BaseURL, m.conversationID, m.config.APIKey)}, false
+	}
 	if len(cmd.Args) < 2 || cmd.Args[1] != "confirm" {
 		return []tea.Cmd{m.setStatusMsg("Usage: /rewind <point-id> confirm (destructive)")}, false
 	}
-	return []tea.Cmd{m.setStatusMsg("Rewind confirmation accepted; use the session rewind endpoint to restore " + cmd.Args[0])}, false
+	return []tea.Cmd{restoreRewindCmd(m.config.BaseURL, m.conversationID, cmd.Args[0], m.config.APIKey)}, false
 }
 
 func executeNewSessionCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
@@ -3331,6 +3334,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.statusMsg != "" && time.Now().After(m.statusMsgExpiry) {
 			m.statusMsg = ""
 			m.statusMsgExpiry = time.Time{}
+		}
+	case RewindPointsLoadedMsg:
+		labels := make([]string, len(msg.Points))
+		for i, p := range msg.Points {
+			labels[i] = fmt.Sprintf("%s (step %d, %s)", p.ID, p.Step, p.Tool)
+		}
+		cmds = append(cmds, m.setStatusMsg("Rewind points: "+strings.Join(labels, ", ")))
+	case RewindResultMsg:
+		if msg.Err != "" {
+			cmds = append(cmds, m.setStatusMsg("Rewind failed: "+msg.Err))
+		} else {
+			cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Rewind complete: %d files restored, %d messages truncated", msg.FilesRestored, msg.MessagesTruncated)))
 		}
 
 	case spinner.SpinnerTickMsg:

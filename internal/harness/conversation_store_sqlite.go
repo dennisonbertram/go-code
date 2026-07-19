@@ -467,7 +467,16 @@ func (s *SQLiteConversationStore) SaveRewindPoint(ctx context.Context, point Rew
 		return fmt.Errorf("prepare rewind file: %w", err)
 	}
 	defer stmt.Close()
+	var used int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(length(content)),0) FROM rewind_file_snapshots f JOIN rewind_points p ON p.id=f.point_id WHERE p.conversation_id=?`, point.ConversationID).Scan(&used); err != nil {
+		return fmt.Errorf("rewind snapshot usage: %w", err)
+	}
 	for _, file := range point.Files {
+		if !file.Skipped && used+int64(len(file.Content)) > rewindMaxConversationBytes {
+			file.Skipped = true
+			file.SkipReason = "conversation rewind snapshot size cap reached"
+			file.Content = nil
+		}
 		existed, skipped := 0, 0
 		if file.Exists {
 			existed = 1
@@ -478,6 +487,45 @@ func (s *SQLiteConversationStore) SaveRewindPoint(ctx context.Context, point Rew
 		if _, err := stmt.ExecContext(ctx, point.ID, file.Path, file.Content, existed, skipped, file.SkipReason, file.ExpectedHash); err != nil {
 			return fmt.Errorf("insert rewind file: %w", err)
 		}
+		used += int64(len(file.Content))
+	}
+	return tx.Commit()
+}
+
+// FinalizeRewindPoint persists post-tool hashes used to guard against external edits.
+func (s *SQLiteConversationStore) FinalizeRewindPoint(ctx context.Context, pointID, workspace string) error {
+	points, err := s.db.QueryContext(ctx, `SELECT path, skipped FROM rewind_file_snapshots WHERE point_id=?`, pointID)
+	if err != nil {
+		return err
+	}
+	defer points.Close()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for points.Next() {
+		var path string
+		var skipped int
+		if err := points.Scan(&path, &skipped); err != nil {
+			return err
+		}
+		if skipped == 1 {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(workspace, path))
+		hash := rewindAbsentHash
+		if err == nil {
+			hash = RewindContentHash(content)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE rewind_file_snapshots SET expected_hash=? WHERE point_id=? AND path=?`, hash, pointID, path); err != nil {
+			return err
+		}
+	}
+	if err := points.Err(); err != nil {
+		return err
 	}
 	return tx.Commit()
 }
@@ -542,13 +590,16 @@ func (s *SQLiteConversationStore) RestoreRewindPoint(ctx context.Context, convID
 			continue
 		}
 		current, readErr := os.ReadFile(filepath.Join(workspace, file.Path))
-		actual := ""
+		actual := rewindAbsentHash
 		if readErr == nil {
 			actual = RewindContentHash(current)
 		} else if !os.IsNotExist(readErr) {
 			return RewindRestoreResult{}, fmt.Errorf("read %s: %w", file.Path, readErr)
 		}
-		if !force && file.ExpectedHash != "" && actual != file.ExpectedHash {
+		if !force && file.ExpectedHash == "" {
+			return RewindRestoreResult{}, fmt.Errorf("rewind refused: %s has no completed post-image", file.Path)
+		}
+		if !force && actual != file.ExpectedHash {
 			return RewindRestoreResult{}, fmt.Errorf("rewind refused: %s was modified outside the agent", file.Path)
 		}
 	}

@@ -76,6 +76,54 @@ func TestCaptureRewindPreImageSkipsOversizedFiles(t *testing.T) {
 	}
 }
 
+func TestCapturedAndFinalizedRewindRejectsExternalEdit(t *testing.T) {
+	ctx := context.Background()
+	store := newTestConversationStore(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(path, []byte("before"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	point := RewindPoint{ID: "real", ConversationID: "real-conv", Step: 0, Tool: "write"}
+	if err := CaptureRewindPreImage(ctx, store, point, root, []byte(`{"path":"notes.txt"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("agent"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := FinalizeRewindPoint(ctx, store, "real", root); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RestoreRewindPoint(ctx, "real-conv", "real", root, false); err != nil {
+		t.Fatalf("unchanged restore: %v", err)
+	}
+	if err := os.WriteFile(path, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RestoreRewindPoint(ctx, "real-conv", "real", root, false); err == nil {
+		t.Fatal("external edit accepted")
+	}
+}
+
+func TestConversationSnapshotCapSkipsAdditionalContent(t *testing.T) {
+	ctx := context.Background()
+	store := newTestConversationStore(t)
+	first := make([]byte, rewindMaxConversationBytes)
+	if err := store.SaveRewindPoint(ctx, RewindPoint{ID: "one", ConversationID: "cap-total", Files: []RewindFileSnapshot{{Path: "one", Content: first, Exists: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveRewindPoint(ctx, RewindPoint{ID: "two", ConversationID: "cap-total", Files: []RewindFileSnapshot{{Path: "two", Content: []byte("x"), Exists: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	points, err := store.ListRewindPoints(ctx, "cap-total")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !points[0].Files[0].Skipped {
+		t.Fatalf("expected cap skip: %#v", points[0])
+	}
+}
+
 func TestExtractRewindPathsUsesWriteEditAndPatchArguments(t *testing.T) {
 	paths := ExtractRewindPaths("apply_patch", []byte(`{"patch":"--- a/a.txt\n+++ b/a.txt\n--- a/b.txt\n+++ b/b.txt"}`))
 	if len(paths) != 2 || paths[0] != "a.txt" || paths[1] != "b.txt" {

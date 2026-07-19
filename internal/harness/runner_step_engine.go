@@ -707,6 +707,7 @@ func (se *stepEngine) run() {
 			callArgs       json.RawMessage
 			toolCtx        context.Context
 			waitingForUser bool
+			rewindPointID  string
 		}
 
 		type toolExecResult struct {
@@ -1037,10 +1038,18 @@ func (se *stepEngine) run() {
 						if err := CaptureRewindPreImage(pe.toolCtx, rewind, point, workspace, pe.callArgs); err != nil {
 							r.emit(runID, EventToolCallCompleted, map[string]any{"call_id": pe.call.ID, "tool": pe.call.Name, "rewind_warning": err.Error()})
 						}
+						if paths := ExtractRewindPaths(pe.call.Name, pe.callArgs); len(paths) > 0 {
+							pe.rewindPointID = point.ID
+						}
 					}
 				}
 				start := time.Now()
 				out, err := runTools.Execute(pe.toolCtx, pe.call.Name, pe.callArgs)
+				if err == nil && pe.rewindPointID != "" {
+					if rewind, ok := r.config.ConversationStore.(RewindStore); ok {
+						_ = FinalizeRewindPoint(pe.toolCtx, rewind, pe.rewindPointID, r.config.WorkspaceBaseOptions.RepoPath)
+					}
+				}
 				execResults[pe.origIdx] = toolExecResult{
 					output:   out,
 					err:      err,
