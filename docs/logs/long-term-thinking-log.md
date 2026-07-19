@@ -1,5 +1,12 @@
 # Long-Term Thinking Log
 
+## 2026-07-19 (Plan Mode — Epic #740)
+
+- Command intent: Implement all six plan-mode slices in this worktree, verify, push, and open a PR without merging it.
+- User intent: Make planning genuinely read-only except for a single designated plan artifact, and require the operator's approval before implementation edits can proceed.
+- Success definition: `RunRequest.PlanMode` reaches live runner state; real policy-wrapped tool dispatch rejects non-plan mutations; plan exit pauses through the existing broker/routes; plan content persists with its conversation; both CLI surfaces render and submit the state.
+- Guardrails: reuse `ApplyPolicy`, permission-rule matching, `ApprovalBroker`, and SQLite migrations; do not touch #567; six test-first commits plus a merge commit.
+
 ## 2026-07-19 (Session Rewind — Epic #739)
 
 - Command intent: Implement all six rewind slices in this worktree, push the branch, and open (without merging) a PR.

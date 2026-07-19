@@ -379,7 +379,13 @@ type WorkspaceProvisionOptions struct {
 
 type RunRequest struct {
 	Prompt string `json:"prompt"`
-	Model  string `json:"model,omitempty"`
+	// PlanMode starts the run in the read-only planning state. While active,
+	// mutation is limited to PlanFile until the operator approves the plan.
+	PlanMode bool `json:"plan_mode,omitempty"`
+	// PlanFile is the workspace-relative plan artifact allowed during PlanMode.
+	// Empty uses the stable default `.harness/plan.md`.
+	PlanFile string `json:"plan_file,omitempty"`
+	Model    string `json:"model,omitempty"`
 	// WorkspaceType selects the workspace backend for this run.
 	// When set, the runner provisions an isolated workspace and cleans it up
 	// on run completion (success, failure, or cancellation).
