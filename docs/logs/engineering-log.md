@@ -1525,3 +1525,7 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
   - Red phase (verified by stashing the fix and re-running the final tests): `OutsideRejected` failed with `expected error for workspace outside the workspace root, got nil`; `RelativeInsideAllowed` failed with `detect platform: no platform config found in app` (relative used raw); `TraversalRejected` failed with error text `no platform config found in ../sibling` instead of `escapes workspace`.
   - `go test ./internal/harness/tools/deferred/ -run 'TestDeployTool_WorkspaceOverride' -count=1` (green)
   - `go test ./internal/harness/tools/deferred/ ./internal/harness/tools/descriptions/ -count=1` (green)
+# 2026-07-19 — Installable plugin bundles (Epic #748)
+
+- Added validated, versioned installable bundles with explicit enabled versus trusted lifecycle state, CLI/TUI management, marketplace indexes, and runtime reuse of the existing skills, profiles, MCP, and hooks paths.
+- Remote installs default untrusted; hook and MCP execution are unreachable until explicit trust.
