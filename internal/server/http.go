@@ -21,6 +21,7 @@ import (
 	linearadapter "go-agent-harness/internal/linear"
 	"go-agent-harness/internal/provider/catalog"
 	"go-agent-harness/internal/relay"
+	"go-agent-harness/internal/server/viz"
 	slackadapter "go-agent-harness/internal/slack"
 	"go-agent-harness/internal/store"
 	"go-agent-harness/internal/subagents"
@@ -366,6 +367,16 @@ func (s *Server) buildMux() http.Handler {
 
 	// GET /v1/hooks — config-driven hook listing (epic #737); read scope.
 	mux.Handle("/v1/hooks", auth(read(http.HandlerFunc(s.handleHooks))))
+
+	// /viz — embedded read-only session visualizer shell (epic #812).
+	// Static assets only; served behind the same Bearer auth + runs:read
+	// scope as every other read route. /viz redirects to /viz/ only after
+	// auth and scope checks pass, so unauthenticated requests get 401 (and
+	// scope-less keys 403) instead of an unauthenticated redirect.
+	mux.Handle("/viz", auth(read(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/viz/", http.StatusMovedPermanently)
+	}))))
+	mux.Handle("/viz/", auth(read(viz.Handler())))
 
 	return s.hardenHandler(mux)
 }
