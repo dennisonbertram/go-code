@@ -21,6 +21,7 @@ Command Registry - 200x50
 /quit — Quit the TUI
 /replay — Replay a run
 /resume (aliases: continue) — Continue a completed run
+/rewind — Choose and confirm a destructive session rewind
 /runs — List recent harness runs
 /search — Search current session transcript
 /sessions — Browse and switch between past sessions

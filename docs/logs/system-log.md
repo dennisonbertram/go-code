@@ -1,5 +1,9 @@
 # System Log
 
+## 2026-07-19 (Session Rewind — Epic #739)
+
+- `SQLiteConversationStore` owns cascade-deleted rewind snapshots; restore writes/deletes captured paths after hash safety checks, then truncates messages.
+
 Use this file to document systems, interfaces, and interactions as they are built.
 
 ## 2026-07-19 (TUI Multi-run Dashboard — Epic #738)

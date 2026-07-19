@@ -300,3 +300,15 @@ type ConversationHistoryErrorMsg struct {
 	ConversationID string
 	Err            string
 }
+
+type RewindPointsLoadedMsg struct{ Points []RewindPoint }
+type RewindResultMsg struct {
+	FilesRestored     int
+	MessagesTruncated int
+	Err               string
+}
+type RewindPoint struct {
+	ID   string `json:"id"`
+	Step int    `json:"step"`
+	Tool string `json:"tool"`
+}

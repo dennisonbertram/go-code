@@ -680,6 +680,55 @@ func fetchConversationMessagesCmd(baseURL, conversationID, apiKey string) tea.Cm
 	}
 }
 
+func fetchRewindPointsCmd(baseURL, conversationID, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/conversations/" + url.PathEscape(conversationID) + "/rewind-points"
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, endpoint, nil, apiKey)
+		if err != nil {
+			return RewindResultMsg{Err: err.Error()}
+		}
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return RewindResultMsg{Err: err.Error()}
+		}
+		defer resp.Body.Close()
+		var payload struct {
+			Points []RewindPoint `json:"points"`
+		}
+		if resp.StatusCode != http.StatusOK {
+			return RewindResultMsg{Err: fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			return RewindResultMsg{Err: err.Error()}
+		}
+		return RewindPointsLoadedMsg{Points: payload.Points}
+	}
+}
+func restoreRewindCmd(baseURL, conversationID, pointID, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		b, _ := json.Marshal(map[string]string{"point_id": pointID})
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/conversations/" + url.PathEscape(conversationID) + "/rewind"
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, endpoint, bytes.NewReader(b), apiKey)
+		if err != nil {
+			return RewindResultMsg{Err: err.Error()}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return RewindResultMsg{Err: err.Error()}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return RewindResultMsg{Err: fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		}
+		var out RewindResultMsg
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			out.Err = err.Error()
+		}
+		return out
+	}
+}
+
 // sseEventsURL builds the SSE endpoint URL for a given run ID.
 func sseEventsURL(baseURL, runID string) string {
 	return strings.TrimRight(baseURL, "/") + "/v1/runs/" + runID + "/events"

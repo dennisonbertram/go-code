@@ -1,5 +1,12 @@
 # Long-Term Thinking Log
 
+## 2026-07-19 (Session Rewind — Epic #739)
+
+- Command intent: Implement all six rewind slices in this worktree, push the branch, and open (without merging) a PR.
+- User intent: Safely undo a chosen sequence of agent file edits and conversation turns without asking a model to recreate historical file contents.
+- Success definition: Mutating file tools capture bounded pre-images; restore detects external modifications, restores/deletes files, truncates the persisted conversation, is reachable through tenant-scoped HTTP and a confirmed TUI `/rewind` picker, and snapshot data follows conversation retention.
+- Guardrails: Reuse existing mutation classification and SQLite conversation store; capture failures never fail tool calls; never touch the unrelated human-checkpoint subsystem; every slice is test-first and committed separately.
+
 ## 2026-07-19 (Multi-run TUI Dashboard — Epic #738)
 
 - Command intent: Deliver the multi-run TUI dashboard and six child slices in a dedicated branch, then open (but do not merge) its PR.
