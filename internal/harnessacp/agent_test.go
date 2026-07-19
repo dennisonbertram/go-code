@@ -67,6 +67,20 @@ func TestProjectEventStreamsMessageAndThoughtChunks(t *testing.T) {
 	}
 }
 
+func TestProjectEventProjectsToolLifecycle(t *testing.T) {
+	agent := NewAgent("http://example.test")
+	var updates []acp.SessionUpdate
+	agent.update = func(_ context.Context, _ acp.SessionId, u acp.SessionUpdate) error {
+		updates = append(updates, u)
+		return nil
+	}
+	_ = agent.projectEvent(context.Background(), "s", harnessmcp.RunEvent{Type: "tool.call.started", Data: map[string]any{"call_id": "call-1", "tool": "read_file"}})
+	_ = agent.projectEvent(context.Background(), "s", harnessmcp.RunEvent{Type: "tool.call.completed", Data: map[string]any{"call_id": "call-1", "result": "done"}})
+	if len(updates) != 2 || updates[0].ToolCall == nil || updates[1].ToolCallUpdate == nil {
+		t.Fatalf("updates = %#v", updates)
+	}
+}
+
 func TestNewSessionCreatesStableHarnessConversation(t *testing.T) {
 	agent := NewAgent("http://example.test")
 	got, err := agent.NewSession(context.Background(), acp.NewSessionRequest{Cwd: "/workspace", McpServers: []acp.McpServer{}})

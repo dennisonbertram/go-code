@@ -139,6 +139,16 @@ func (a *Agent) projectEvent(ctx context.Context, id acp.SessionId, event harnes
 		return a.update(ctx, id, acp.UpdateAgentMessageText(text))
 	case "assistant.thinking.delta":
 		return a.update(ctx, id, acp.UpdateAgentThoughtText(text))
+	case "tool.call.started":
+		callID, _ := event.Data["call_id"].(string)
+		tool, _ := event.Data["tool"].(string)
+		return a.update(ctx, id, acp.StartToolCall(acp.ToolCallId(callID), tool, acp.WithStartStatus(acp.ToolCallStatusInProgress), acp.WithStartRawInput(event.Data["arguments"])))
+	case "tool.call.delta", "tool.output.delta":
+		callID, _ := event.Data["call_id"].(string)
+		return a.update(ctx, id, acp.UpdateToolCall(acp.ToolCallId(callID), acp.WithUpdateStatus(acp.ToolCallStatusInProgress)))
+	case "tool.call.completed":
+		callID, _ := event.Data["call_id"].(string)
+		return a.update(ctx, id, acp.UpdateToolCall(acp.ToolCallId(callID), acp.WithUpdateStatus(acp.ToolCallStatusCompleted)))
 	}
 	return nil
 }
