@@ -390,7 +390,7 @@ func New(cfg TUIConfig) Model {
 	if m.pluginsDir == "" {
 		m.pluginsDir = defaultPluginsDir()
 	}
-	m.pluginWarnings = LoadAndRegisterPlugins(m.commandRegistry, m.pluginsDir)
+	m.pluginWarnings = LoadAndRegisterPlugins(m.commandRegistry, append([]string{m.pluginsDir}, installablePluginCommandDirs()...)...)
 	// Wire help dialog with real command list and keybindings derived from the
 	// registered commands and the default key map.
 	m.helpDialog = buildHelpDialog(m.commandRegistry, m.keys)

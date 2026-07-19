@@ -30,6 +30,7 @@ import (
 	"go-agent-harness/internal/mcp"
 	"go-agent-harness/internal/networks"
 	om "go-agent-harness/internal/observationalmemory"
+	"go-agent-harness/internal/plugins"
 	"go-agent-harness/internal/profiles"
 	"go-agent-harness/internal/provider/catalog"
 	openai "go-agent-harness/internal/provider/openai"
@@ -548,9 +549,21 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	var skillLoader *skills.Loader     // retained for hot-reload
 	var skillRegistry *skills.Registry // retained for hot-reload
 	if skillsEnabled {
+		pluginRoot := filepath.Join(globalDir, "plugins")
+		bundles, pluginErr := plugins.EnabledBundles(pluginRoot, plugins.NewStateStore(filepath.Join(pluginRoot, "state.json")))
+		if pluginErr != nil {
+			log.Printf("warning: failed to discover enabled plugin bundles: %v", pluginErr)
+		}
+		var pluginSkillDirs []string
+		for _, bundle := range bundles {
+			if bundle.SkillsDir != "" {
+				pluginSkillDirs = append(pluginSkillDirs, bundle.SkillsDir)
+			}
+		}
 		skillLoader = skills.NewLoader(skills.LoaderConfig{
 			GlobalDir:    filepath.Join(globalDir, "skills"),
 			WorkspaceDir: filepath.Join(workspace, ".go-harness", "skills"),
+			PluginDirs:   pluginSkillDirs,
 		})
 		skillRegistry = skills.NewRegistry()
 		if err := skillRegistry.Load(skillLoader); err != nil {

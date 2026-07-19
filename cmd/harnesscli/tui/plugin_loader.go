@@ -9,22 +9,24 @@ import (
 // LoadAndRegisterPlugins loads plugin command definitions from dir and registers
 // them into the provided slash-command registry. It returns warning strings for
 // loader errors and skipped plugin registrations.
-func LoadAndRegisterPlugins(registry *CommandRegistry, dir string) []string {
+func LoadAndRegisterPlugins(registry *CommandRegistry, dirs ...string) []string {
 	if registry == nil {
 		return nil
 	}
 
-	defs, errs := tuiplugin.LoadPlugins(dir)
 	var warnings []string
-	for _, err := range errs {
-		warnings = append(warnings, err.Error())
-	}
-	for _, def := range defs {
-		if registry.IsRegistered(def.Name) {
-			warnings = append(warnings, fmt.Sprintf("plugin %q skipped: command already registered", def.Name))
-			continue
+	for _, dir := range dirs {
+		defs, errs := tuiplugin.LoadPlugins(dir)
+		for _, err := range errs {
+			warnings = append(warnings, err.Error())
 		}
-		registry.Register(pluginCommandEntry(def))
+		for _, def := range defs {
+			if registry.IsRegistered(def.Name) {
+				warnings = append(warnings, fmt.Sprintf("plugin %q skipped: command already registered", def.Name))
+				continue
+			}
+			registry.Register(pluginCommandEntry(def))
+		}
 	}
 	if len(warnings) == 0 {
 		return nil
