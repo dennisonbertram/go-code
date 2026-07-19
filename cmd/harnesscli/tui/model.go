@@ -2760,7 +2760,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendMessageBubble(messagebubble.RoleUser, msg.Value)
 		// Fire off the run against the harness API with the expanded prompt.
 		effModel, effProvider := m.effectiveModelAndProvider()
-		cmds = append(cmds, startRunCmd(m.config.BaseURL, expandedValue, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, m.config.Workspace, m.config.APIKey))
+		cmds = append(cmds, startRunCmd(m.config.BaseURL, expandedValue, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, m.config.Workspace, m.config.APIKey, m.planMode))
 
 	case AssistantDeltaMsg:
 		m.lastAssistantText += msg.Delta
