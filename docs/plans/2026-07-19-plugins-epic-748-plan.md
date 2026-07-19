@@ -13,7 +13,7 @@
 
 ## Documentation Contract
 
-- Feature status: in implementation
+- Feature status: implemented
 - Public docs affected: design documentation and CLI help.
 - Spec docs to update before code: this plan and the bundle design document.
 - Implementation notes to add after code: engineering/system logs and CLAUDE current-source-of-truth guidance.
@@ -26,16 +26,16 @@
 
 ## Implementation Checklist
 
-- [ ] #775 Define plugin bundle manifest and layout validation.
-- [ ] #776 Fetch/install local paths, git URLs, and GitHub shorthand safely.
-- [ ] #777 Persist installed state with separate enabled and trusted flags.
-- [ ] #778 Add `harnesscli plugin install|list|uninstall|update`.
-- [ ] #779 Register enabled bundle skills and commands via `internal/skills`.
-- [ ] #780 Register enabled+trusted agents and MCP configuration via profiles/MCP validation.
-- [ ] #781 Load enabled+trusted hooks through `internal/hooks`.
-- [ ] #782 Add marketplace source configuration and CLI management.
-- [ ] #783 Add TUI plugin browser modal, keyboard coverage, and local smoke.
-- [ ] Update design docs, indexes, durable logs, and CLAUDE.
+- [x] #775 Define plugin bundle manifest and layout validation.
+- [x] #776 Fetch/install local paths, git URLs, and GitHub shorthand safely.
+- [x] #777 Persist installed state with separate enable and trust flags.
+- [x] #778 Add `harnesscli plugin install|list|uninstall|update`.
+- [x] #779 Register enabled bundle skills and commands via `internal/skills`.
+- [x] #780 Register enabled+trusted agents and MCP configuration via profiles/MCP validation.
+- [x] #781 Load enabled+trusted hooks through `internal/hooks`.
+- [x] #782 Add marketplace source configuration and CLI management.
+- [x] #783 Add TUI plugin browser modal and keyboard coverage.
+- [x] Update design docs, indexes, durable logs, and CLAUDE.
 - [ ] Run full regression and open (without merging) the requested PR.
 
 ## Risks and Mitigations
