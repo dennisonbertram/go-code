@@ -60,6 +60,7 @@ type runCreateRequest struct {
 	// requested model's provider can't be resolved, instead of hard-failing
 	// the run. Always true from the TUI.
 	AllowFallback bool `json:"allow_fallback,omitempty"`
+	PlanMode      bool `json:"plan_mode,omitempty"`
 }
 
 type runCreateResponse struct {
@@ -111,7 +112,8 @@ type RemoteSubagent struct {
 // profile is the name of the capability profile to use (may be empty); it is
 // sent as the "profile" field so the server applies the profile's tool
 // restrictions and isolation.
-func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile, workspace, apiKey string) tea.Cmd {
+func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile, workspace, apiKey string, planMode ...bool) tea.Cmd {
+	enabled := len(planMode) > 0 && planMode[0]
 	return func() tea.Msg {
 		body, _ := json.Marshal(runCreateRequest{
 			Prompt:          prompt,
@@ -122,6 +124,7 @@ func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffo
 			ProfileName:     profile,
 			WorkspacePath:   workspace,
 			AllowFallback:   true,
+			PlanMode:        enabled,
 		})
 		url := strings.TrimRight(baseURL, "/") + "/v1/runs"
 		req, err := newHarnessRequest(context.Background(), http.MethodPost, url, bytes.NewReader(body), apiKey)
@@ -677,6 +680,55 @@ func fetchConversationMessagesCmd(baseURL, conversationID, apiKey string) tea.Cm
 			messages[i] = ConversationMessage{Role: msg.Role, Content: msg.Content}
 		}
 		return ConversationHistoryMsg{ConversationID: conversationID, Messages: messages}
+	}
+}
+
+func fetchRewindPointsCmd(baseURL, conversationID, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/conversations/" + url.PathEscape(conversationID) + "/rewind-points"
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, endpoint, nil, apiKey)
+		if err != nil {
+			return RewindResultMsg{Err: err.Error()}
+		}
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return RewindResultMsg{Err: err.Error()}
+		}
+		defer resp.Body.Close()
+		var payload struct {
+			Points []RewindPoint `json:"points"`
+		}
+		if resp.StatusCode != http.StatusOK {
+			return RewindResultMsg{Err: fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			return RewindResultMsg{Err: err.Error()}
+		}
+		return RewindPointsLoadedMsg{Points: payload.Points}
+	}
+}
+func restoreRewindCmd(baseURL, conversationID, pointID, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		b, _ := json.Marshal(map[string]string{"point_id": pointID})
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/conversations/" + url.PathEscape(conversationID) + "/rewind"
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, endpoint, bytes.NewReader(b), apiKey)
+		if err != nil {
+			return RewindResultMsg{Err: err.Error()}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return RewindResultMsg{Err: err.Error()}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return RewindResultMsg{Err: fmt.Sprintf("HTTP %d", resp.StatusCode)}
+		}
+		var out RewindResultMsg
+		if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+			out.Err = err.Error()
+		}
+		return out
 	}
 }
 

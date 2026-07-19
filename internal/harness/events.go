@@ -79,7 +79,10 @@ const (
 	// Payload fields: call_id (string), tool (string).
 	EventToolApprovalDenied EventType = "tool.approval_denied"
 	// EventTodosUpdated is emitted after a run's todo list changes.
-	EventTodosUpdated EventType = "todos.updated"
+	EventTodosUpdated        EventType = "todos.updated"
+	EventPlanApprovalRequired EventType = "plan.approval_required"
+	EventPlanApprovalGranted  EventType = "plan.approval_granted"
+	EventPlanApprovalDenied   EventType = "plan.approval_denied"
 )
 
 // Assistant completion events.

@@ -5,6 +5,8 @@
 - `PLAN_TEMPLATE.md`: Required template for pre-implementation planning with checklist.
 - `IMPACT_MAP_TEMPLATE.md`: One-page cross-surface impact map template for provider/model flow changes.
 - `active-plan.md`: Current active plan tracker.
+- `2026-07-19-plan-mode-epic-740-plan.md`: Enforced plan-mode epic plan covering #764–#769.
+- `2026-07-19-dashboard-epic-738-plan.md`: Multi-run TUI dashboard epic plan covering #742, #745, #749, #753, #757, and #762.
 - `2026-06-28-config-driven-hooks-epic-737-plan.md`: Active epic plan for config-driven lifecycle hooks (shell/HTTP) covering child issues #741, #744, #750, #755, #759, #763 with per-slice TDD and trust-model guardrails.
 - `2026-06-26-adapter-first-eval-harness-plan.md`: Implemented adapter-first Terminal-Bench eval harness hardening plan; full regression and real-provider smoke baseline acceptance are green.
 - `2026-06-24-harness-reliability-plan.md`: Active 15-slice TDD plan (T01–T15) hardening `harnessd` against long-session reliability failures from the 2026-06-24 audit; tracked via `.context/harness-reliability/tracker.md`.
@@ -55,3 +57,6 @@
 - `2026-03-04-toolset-read-write-edit-bash-plan.md`: Active plan for swapping default harness tools to `read`, `write`, `edit`, and `bash`.
 - `2026-03-04-openai-poc-coding-harness-plan.md`: Active implementation plan for the OpenAI-powered event-driven coding harness POC.
 - `2026-03-04-repo-bootstrap-plan.md`: Completed plan/checklist for initial repository and documentation bootstrap.
+# 2026-07-19 — Installable plugin bundles and marketplace — Epic #748
+
+Plan for user-installable plugin bundles, trust gating, marketplace management, and TUI browsing.

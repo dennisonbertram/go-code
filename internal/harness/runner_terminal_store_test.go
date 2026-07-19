@@ -74,6 +74,27 @@ func TestTerminalStoreAppendDoesNotBlockRunnerQueries(t *testing.T) {
 	waitForStatus(t, runner, holdRun.ID, RunStatusCompleted)
 }
 
+func TestTerminalStoreAppendUsesBoundedContext(t *testing.T) {
+	provider := staticContentProvider{content: "done"}
+	store := &deadlineRecordingStore{Store: runstore.NewMemoryStore(), deadline: make(chan time.Duration, 1)}
+	runner := NewRunner(provider, NewRegistry(), RunnerConfig{Store: store})
+
+	run, err := runner.StartRun(RunRequest{Prompt: "bounded terminal append"})
+	if err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	waitForStatus(t, runner, run.ID, RunStatusCompleted)
+
+	select {
+	case remaining := <-store.deadline:
+		if remaining <= 0 || remaining > 6*time.Second {
+			t.Fatalf("terminal append deadline remaining = %s, want bounded deadline near 5s", remaining)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("terminal AppendEvent did not receive a deadline")
+	}
+}
+
 type promptGateProvider struct {
 	gates map[string]<-chan struct{}
 }
@@ -107,6 +128,23 @@ type blockingTerminalAppendStore struct {
 	once       sync.Once
 	started    chan struct{}
 	release    chan struct{}
+}
+
+type deadlineRecordingStore struct {
+	runstore.Store
+	deadline chan time.Duration
+}
+
+func (s *deadlineRecordingStore) AppendEvent(ctx context.Context, event *runstore.Event) error {
+	if event.EventType == string(EventRunCompleted) {
+		if deadline, ok := ctx.Deadline(); ok {
+			select {
+			case s.deadline <- time.Until(deadline):
+			default:
+			}
+		}
+	}
+	return s.Store.AppendEvent(ctx, event)
 }
 
 func (s *blockingTerminalAppendStore) setBlockRunID(runID string) {

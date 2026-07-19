@@ -1,4 +1,6 @@
-# Plugin System
+# Compile-Time Go Plugin System
+
+This document covers developer-authored, compile-time Go plugins in `plugins/`. They are distinct from end-user **installable plugin bundles**: versioned content directories installed under `~/.go-harness/plugins/` and documented in `installable-plugin-bundles.md`. Go plugins are compiled into `harnessd`; installable bundles never replace or dynamically load Go code.
 
 This document explains how to write a plugin for go-agent-harness. The audience is a Go developer adding a new plugin from scratch.
 

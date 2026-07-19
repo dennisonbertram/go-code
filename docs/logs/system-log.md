@@ -12,7 +12,21 @@
   session cancellation maps to the underlying run cancel route; an editor
   permission denial maps to the existing deny route.
 
+## 2026-07-19 (Enforced Plan Mode — Epic #740)
+
+- `RunRequest.PlanMode` initializes `Active`; the step engine places a runner-owned gate in real tool contexts, and `ApplyPolicy` returns `plan_mode_denied` before normal approval handling for non-plan mutations. A terminal plan response transitions to `ExitPending`, emits plan approval events, uses the configured `ApprovalBroker`, and returns to `Active` on deny or `Inactive` on approve. `conversation_plans` is run/conversation scoped.
+
+## 2026-07-19 (Session Rewind — Epic #739)
+
+- `SQLiteConversationStore` owns cascade-deleted rewind snapshots; restore writes/deletes captured paths after hash safety checks, then truncates messages.
+
 Use this file to document systems, interfaces, and interactions as they are built.
+
+## 2026-07-19 (TUI Multi-run Dashboard — Epic #738)
+
+- System/component: `cmd/harnesscli/tui` dashboard overlay.
+- Responsibilities: lifecycle-bound `tea.Tick` list refreshes consume existing `GET /v1/runs`; the selected-run peek consumes the existing SSE bridge; control/dispatch consume existing run endpoints. Closing the peek or overlay cancels its bridge without affecting the attached session.
+- Failure modes: list/control failures surface in the dashboard status path; an inactive overlay does not reschedule polling; a new peek stops the previous subscription.
 
 ## 2026-06-28 (Config-Driven Lifecycle Hooks — Epic #737)
 
@@ -544,3 +558,6 @@ Use this file to document systems, interfaces, and interactions as they are buil
 - Operational notes:
   - workflow and network routes are now real but remain intentionally conservative in v1
   - sequential network execution is implemented; parallel fan-out remains deferred
+# 2026-07-19 — Plugin bundle subsystem
+
+- `internal/plugins` owns bundle validation, safe staged installation, persisted lifecycle state, marketplace index parsing, and discovery. `harnessd` loads enabled skills/commands and gates agents/MCP/hooks on trust.

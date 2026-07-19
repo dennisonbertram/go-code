@@ -85,3 +85,10 @@ type ConversationStore interface {
 	// Returns an error if the conversation does not exist or keepFromStep < 0.
 	CompactConversation(ctx context.Context, convID string, keepFromStep int, summary Message) error
 }
+
+// PlanContentStore is an optional run-scoped extension implemented by the
+// SQLite conversation store. Keeping it separate preserves other stores.
+type PlanContentStore interface {
+	SavePlanContent(ctx context.Context, conversationID, runID, content string) error
+	LoadPlanContent(ctx context.Context, conversationID string) (string, error)
+}

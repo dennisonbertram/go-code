@@ -37,6 +37,7 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/tooluse"
 	"go-agent-harness/cmd/harnesscli/tui/components/transcriptexport"
 	"go-agent-harness/cmd/harnesscli/tui/components/viewport"
+	"go-agent-harness/internal/plugins"
 )
 
 // defaultExportDir returns a runtime-safe directory for transcript exports.
@@ -197,6 +198,9 @@ type Model struct {
 	// Valid values: "", "help", "stats", "context".
 	activeOverlay string
 
+	// dashboard holds transient state for the multi-run dashboard overlay.
+	dashboard dashboardState
+
 	// statusMsg is a transient overlay message shown on the status bar.
 	statusMsg string
 	// statusMsgExpiry is when statusMsg should be cleared.
@@ -313,6 +317,7 @@ type Model struct {
 	// toolApproval holds the state for an in-progress tool-approval decision.
 	// toolApproval.active is true when the overlay is shown.
 	toolApproval toolApprovalState
+	planApproval planApprovalState
 
 	// planMode tracks whether plan mode is toggled on (ctrl+o when idle).
 	planMode bool
@@ -324,6 +329,7 @@ type Model struct {
 	// pluginWarnings collects warnings produced when loading and registering plugins
 	// (e.g. load errors, name collisions with builtins).
 	pluginWarnings []string
+	pluginBrowser  pluginBrowserState
 }
 
 // New creates a new root Model.
@@ -390,7 +396,7 @@ func New(cfg TUIConfig) Model {
 	if m.pluginsDir == "" {
 		m.pluginsDir = defaultPluginsDir()
 	}
-	m.pluginWarnings = LoadAndRegisterPlugins(m.commandRegistry, m.pluginsDir)
+	m.pluginWarnings = LoadAndRegisterPlugins(m.commandRegistry, append([]string{m.pluginsDir}, installablePluginCommandDirs()...)...)
 	// Wire help dialog with real command list and keybindings derived from the
 	// registered commands and the default key map.
 	m.helpDialog = buildHelpDialog(m.commandRegistry, m.keys)
@@ -1345,6 +1351,13 @@ func executeHelpCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	return nil, false
 }
 
+func executePluginsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	m.pluginBrowser = loadPluginBrowser()
+	m.overlayActive = true
+	m.activeOverlay = "plugins"
+	return nil, false
+}
+
 func executeContextCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.overlayActive = true
 	m.activeOverlay = "context"
@@ -1531,6 +1544,19 @@ func executeSessionsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	return nil, false
 }
 
+// executeRewindCommand intentionally requires an explicit point id and force
+// confirmation token. The server endpoint remains the authority for file
+// restore; this command never issues a destructive request implicitly.
+func executeRewindCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
+	if len(cmd.Args) == 0 {
+		return []tea.Cmd{fetchRewindPointsCmd(m.config.BaseURL, m.conversationID, m.config.APIKey)}, false
+	}
+	if len(cmd.Args) < 2 || cmd.Args[1] != "confirm" {
+		return []tea.Cmd{m.setStatusMsg("Usage: /rewind <point-id> confirm (destructive)")}, false
+	}
+	return []tea.Cmd{restoreRewindCmd(m.config.BaseURL, m.conversationID, cmd.Args[0], m.config.APIKey)}, false
+}
+
 func executeNewSessionCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.conversationID = ""
 	m.vp = viewport.New(m.width, m.layout.ViewportHeight)
@@ -1581,6 +1607,10 @@ func executeRunsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 		m.setStatusMsg("Loading runs..."),
 		fetchRunsCmd(m.config.BaseURL, m.config.APIKey),
 	}, false
+}
+
+func executeDashboardCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	return m.dashboardOpenCmds(), false
 }
 
 func executeCancelCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
@@ -1820,6 +1850,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, tea.Batch(cmds...)
 		}
+		if m.planApproval.active {
+			newState, cmd := m.handlePlanApprovalKey(msg)
+			m.planApproval = newState
+			if cmd != nil {
+				cmds = append(cmds, cmd)
+			}
+			return m, tea.Batch(cmds...)
+		}
 		switch {
 		case key.Matches(msg, m.keys.Quit):
 			// Two-stage Ctrl+C interrupt when a run is active.
@@ -1857,6 +1895,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.setStatusMsg("Copy unavailable"))
 			}
 		case key.Matches(msg, m.keys.Interrupt):
+			if m.overlayActive && m.activeOverlay == "dashboard" && m.dashboard.peekID != "" {
+				if m.dashboard.stopPeek != nil {
+					m.dashboard.stopPeek()
+				}
+				m.dashboard.peekID, m.dashboard.peekCh, m.dashboard.stopPeek = "", nil, nil
+				return m, tea.Batch(cmds...)
+			}
 			// If the interrupt banner is visible, Escape dismisses it without
 			// cancelling the run (user changed their mind).
 			if m.interruptBanner.IsVisible() {
@@ -1961,6 +2006,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.searchResults = nil
 				m.searchQuery = ""
 				m.searchSelectedIdx = 0
+				return m, tea.Batch(cmds...)
+			}
+			if m.activeOverlay == "dashboard" {
+				m.closeDashboard()
 				return m, tea.Batch(cmds...)
 			}
 			if m.overlayActive {
@@ -2275,6 +2324,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.apiKeyInput += string(msg.Runes)
 			}
 			return m, tea.Batch(cmds...)
+		case m.overlayActive && m.activeOverlay == "plugins":
+			if len(m.pluginBrowser.items) == 0 {
+				return m, tea.Batch(cmds...)
+			}
+			switch msg.Type {
+			case tea.KeyUp:
+				if m.pluginBrowser.selected > 0 {
+					m.pluginBrowser.selected--
+				}
+			case tea.KeyDown:
+				if m.pluginBrowser.selected < len(m.pluginBrowser.items)-1 {
+					m.pluginBrowser.selected++
+				}
+			case tea.KeyEnter:
+				item := &m.pluginBrowser.items[m.pluginBrowser.selected]
+				item.Enabled = !item.Enabled
+				home, _ := os.UserHomeDir()
+				root := filepath.Join(home, ".go-harness", "plugins")
+				_ = plugins.NewStateStore(filepath.Join(root, "state.json")).SetEnabled(item.Name, item.Enabled)
+			}
+			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "apikeys" && !m.apiKeyInputMode && (msg.String() == "j" || msg.String() == "k" || msg.String() == "up" || msg.String() == "down" || msg.Type == tea.KeyUp || msg.Type == tea.KeyDown):
 			// Navigation in apikeys list mode.
 			switch {
@@ -2338,6 +2408,61 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.permissionsPanel = m.permissionsPanel.ToggleSelected()
 			case msg.String() == "d":
 				m.permissionsPanel = m.permissionsPanel.RemoveSelected()
+			}
+			return m, tea.Batch(cmds...)
+		case m.overlayActive && m.activeOverlay == "dashboard":
+			if m.dashboard.inputMode != "" {
+				switch {
+				case msg.Type == tea.KeyRunes:
+					m.dashboard.input += string(msg.Runes)
+				case msg.Type == tea.KeyBackspace:
+					if len(m.dashboard.input) > 0 {
+						m.dashboard.input = m.dashboard.input[:len(m.dashboard.input)-1]
+					}
+				case msg.Type == tea.KeyEnter:
+					if m.dashboard.inputMode == "new" {
+						cmds = append(cmds, dashboardDispatchCmd(m.config.BaseURL, m.dashboard.input, m.config.APIKey))
+					} else if run, ok := m.dashboardSelected(); ok {
+						cmds = append(cmds, dashboardControlCmd(m.config.BaseURL, run.displayID(), "steer", m.dashboard.input, m.config.APIKey))
+					}
+					m.dashboard.inputMode, m.dashboard.input = "", ""
+				}
+				return m, tea.Batch(cmds...)
+			}
+			if msg.String() == "n" {
+				m.dashboard.inputMode, m.dashboard.input = "new", ""
+				return m, tea.Batch(cmds...)
+			}
+			if msg.String() == "x" {
+				if run, ok := m.dashboardSelected(); ok {
+					m.dashboard.dashboardAction = dashboardControlCmd(m.config.BaseURL, run.displayID(), "cancel", "", m.config.APIKey)
+					cmds = append(cmds, m.dashboard.dashboardAction)
+				}
+				return m, tea.Batch(cmds...)
+			}
+			if msg.String() == "s" {
+				m.dashboard.inputMode, m.dashboard.input = "steer", ""
+				return m, tea.Batch(cmds...)
+			}
+			if msg.String() == "p" || msg.Type == tea.KeyEnter {
+				if run, ok := m.dashboardSelected(); ok {
+					if m.dashboard.stopPeek != nil {
+						m.dashboard.stopPeek()
+					}
+					m.dashboard.peekID = run.displayID()
+					m.dashboard.peek = nil
+					m.dashboard.peekCh, m.dashboard.stopPeek = startSSEForRun(m.config.BaseURL, run.displayID(), m.config.APIKey)
+					cmds = append(cmds, pollSSECmd(m.dashboard.peekCh))
+				}
+				return m, tea.Batch(cmds...)
+			}
+			if len(m.dashboard.runs) > 0 {
+				switch {
+				case msg.Type == tea.KeyUp || msg.String() == "k":
+					m.dashboard.cursor = (m.dashboard.cursor - 1 + len(m.dashboard.runs)) % len(m.dashboard.runs)
+				case msg.Type == tea.KeyDown || msg.String() == "j":
+					m.dashboard.cursor = (m.dashboard.cursor + 1) % len(m.dashboard.runs)
+				}
 			}
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "search" && (msg.Type == tea.KeyUp || msg.Type == tea.KeyDown || msg.String() == "k" || msg.String() == "j"):
@@ -2484,6 +2609,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return editorDoneMsg{tmpFile: tmpFile, err: err}
 				},
 			)
+
+		case key.Matches(msg, m.keys.Dashboard) && !m.overlayActive:
+			cmds = append(cmds, m.dashboardOpenCmds()...)
+			return m, tea.Batch(cmds...)
 
 		default:
 			// When model overlay is open (not config panel), intercept keys for navigation, search, and star.
@@ -2640,7 +2769,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.appendMessageBubble(messagebubble.RoleUser, msg.Value)
 		// Fire off the run against the harness API with the expanded prompt.
 		effModel, effProvider := m.effectiveModelAndProvider()
-		cmds = append(cmds, startRunCmd(m.config.BaseURL, expandedValue, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, m.config.Workspace, m.config.APIKey))
+		cmds = append(cmds, startRunCmd(m.config.BaseURL, expandedValue, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, m.config.Workspace, m.config.APIKey, m.planMode))
 
 	case AssistantDeltaMsg:
 		m.lastAssistantText += msg.Delta
@@ -2746,6 +2875,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case OverlayCloseMsg:
+		if m.activeOverlay == "dashboard" {
+			m.closeDashboard()
+			break
+		}
 		m.overlayActive = false
 		m.activeOverlay = ""
 		m.helpDialog = m.helpDialog.Close()
@@ -2826,6 +2959,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.vp.AppendLine("")
 		cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Loaded %d run(s)", len(msg.Runs))))
 
+	case DashboardRunsLoadedMsg:
+		if msg.Err != "" {
+			cmds = append(cmds, m.setStatusMsg("Dashboard load failed: "+msg.Err))
+			break
+		}
+		m.dashboard.runs = msg.Runs
+		if m.dashboard.cursor >= len(msg.Runs) {
+			m.dashboard.cursor = len(msg.Runs) - 1
+			if m.dashboard.cursor < 0 {
+				m.dashboard.cursor = 0
+			}
+		}
+
+	case dashboardPollTickMsg:
+		if m.overlayActive && m.activeOverlay == "dashboard" {
+			cmds = append(cmds, loadDashboardRunsCmd(m.config.BaseURL, m.config.APIKey), dashboardPollCmd())
+		}
+
 	case RunControlResultMsg:
 		if msg.Err != "" {
 			cmds = append(cmds, m.setStatusMsg(msg.Kind+" failed: "+msg.Err))
@@ -2852,6 +3003,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case SSEEventMsg:
+		if m.dashboard.peekID != "" {
+			m.dashboard.peek = append(m.dashboard.peek, msg.EventType)
+			if m.dashboard.peekCh != nil {
+				cmds = append(cmds, pollSSECmd(m.dashboard.peekCh))
+			}
+			return m, tea.Batch(cmds...)
+		}
 		// Track the most recent event ID so a mid-run reconnect (see the
 		// SSEDoneMsg case below) can resume exactly here via Last-Event-ID.
 		if msg.ID != "" {
@@ -2937,6 +3095,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// The decision has already been recorded server-side (e.g. from
 			// another client); make sure the overlay does not linger.
 			m.toolApproval = toolApprovalState{}
+		case "plan.approval_required":
+			var p struct {
+				Plan string `json:"plan"`
+			}
+			if err := json.Unmarshal(msg.Raw, &p); err == nil {
+				m.planApproval = planApprovalState{active: true, runID: m.RunID, content: p.Plan}
+			}
+		case "plan.approval_granted", "plan.approval_denied":
+			m.planApproval = planApprovalState{}
 		case "usage.delta":
 			var p struct {
 				CumulativeUsage struct {
@@ -3216,6 +3383,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.statusMsg = ""
 			m.statusMsgExpiry = time.Time{}
 		}
+	case RewindPointsLoadedMsg:
+		labels := make([]string, len(msg.Points))
+		for i, p := range msg.Points {
+			labels[i] = fmt.Sprintf("%s (step %d, %s)", p.ID, p.Step, p.Tool)
+		}
+		cmds = append(cmds, m.setStatusMsg("Rewind points: "+strings.Join(labels, ", ")))
+	case RewindResultMsg:
+		if msg.Err != "" {
+			cmds = append(cmds, m.setStatusMsg("Rewind failed: "+msg.Err))
+		} else {
+			cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Rewind complete: %d files restored, %d messages truncated", msg.FilesRestored, msg.MessagesTruncated)))
+		}
 
 	case spinner.SpinnerTickMsg:
 		// Only keep animating (and rescheduling) while a run is active; this
@@ -3373,6 +3552,9 @@ func (m Model) View() string {
 		} else {
 			mainContent = m.vp.View()
 		}
+	} else if m.planApproval.active {
+		overlayLines := m.renderPlanApprovalOverlay()
+		mainContent = m.vp.View() + "\n" + strings.Join(overlayLines, "\n")
 	} else if m.overlayActive {
 		switch m.activeOverlay {
 		case "help":
@@ -3428,6 +3610,10 @@ func (m Model) View() string {
 			m.permissionsPanel.Height = m.layout.ViewportHeight
 			raw := m.permissionsPanel.View()
 			mainContent = boxOverlay(raw, m.width)
+		case "plugins":
+			mainContent = m.pluginBrowser.View(m.width)
+		case "dashboard":
+			mainContent = boxOverlay(m.dashboardView(), m.width)
 		default:
 			// Unknown overlay kind — fall back to viewport.
 			mainContent = m.vp.View()

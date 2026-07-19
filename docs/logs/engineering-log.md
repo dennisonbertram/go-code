@@ -14,6 +14,28 @@
 - Validation before PR: targeted ACP and harness MCP package tests, then the
   repository formatting, vet, and regression gates.
 
+## 2026-07-19 (Enforced Plan Mode — Epic #740)
+
+- Added per-run plan state, central policy-wrapper gating, broker-backed plan-exit approval, SQLite plan persistence, CLI/TUI request plumbing, and a scrollable TUI approval preview. Mutations with absent or non-matching paths fail closed while planning.
+
+## 2026-07-19 (Session Rewind — Epic #739)
+
+- Added SQLite pre-image points, non-fatal runner capture, hash-checked restore/truncation, HTTP list/restore routes, and explicit TUI confirmation. Oversized files are skipped rather than stored.
+
+## 2026-07-19 (Reliability Epic #644 Reconciliation)
+
+- Reconciled the 2026-06-24 15-slice long-session reliability plan against the supplied `origin/main` baseline. The code and deterministic regressions for T03–T15, plus the original T01/T02 behavior, were already present on the baseline (principally from prior harness/TUI integration work), so they were not duplicated or falsely represented as new failing-first commits.
+- Closed the two remaining plan-level correctness gaps with failing-first regressions:
+  - T01: completed run states are retained until their terminal event has actually persisted, preventing a transient store failure from silently dropping the only in-memory terminal history.
+  - T02: every event-store append now receives a five-second bounded context, preventing a wedged store from occupying a run goroutine indefinitely while preserving the existing lock-free terminal fanout path.
+- Validation: focused T01/T02 tests passed under `-race`; full `go test ./... -race`, `go vet ./...`, and `./scripts/test-regression.sh` passed (`coveragegate: PASS`, 84.4% total, zero zero-coverage functions).
+
+## 2026-07-19 (Multi-run TUI Dashboard — Epic #738)
+
+- Implemented the six dashboard slices (#742, #745, #749, #753, #757, #762) as TUI-only changes: authenticated `/v1/runs` polling, grouped overlay navigation, `/dashboard`/`Ctrl+D`, one cancellable peek SSE bridge, selected-run steer/cancel, and isolated new-run dispatch.
+- Added focused failing-first dashboard tests for list loading, grouped navigation, command/key opening, peek close lifecycle, control routing, and dispatch. No server route or dependency changes.
+- Validation: `go test ./cmd/harnesscli/...` passes. Repository-wide formatting gate still reports pre-existing drift and a syntax-invalid training exercise; see final verification status.
+
 ## 2026-06-28 (Config-Driven Lifecycle Hooks — Epic #737)
 
 - Implemented epic #737 and all six child issues (#741, #744, #750, #755, #759, #763) in worktree branch `codex/config-hooks-epic-737`, one commit per slice, strict TDD throughout.
@@ -1539,3 +1561,7 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
   - Red phase (verified by stashing the fix and re-running the final tests): `OutsideRejected` failed with `expected error for workspace outside the workspace root, got nil`; `RelativeInsideAllowed` failed with `detect platform: no platform config found in app` (relative used raw); `TraversalRejected` failed with error text `no platform config found in ../sibling` instead of `escapes workspace`.
   - `go test ./internal/harness/tools/deferred/ -run 'TestDeployTool_WorkspaceOverride' -count=1` (green)
   - `go test ./internal/harness/tools/deferred/ ./internal/harness/tools/descriptions/ -count=1` (green)
+# 2026-07-19 — Installable plugin bundles (Epic #748)
+
+- Added validated, versioned installable bundles with explicit enabled versus trusted lifecycle state, CLI/TUI management, marketplace indexes, and runtime reuse of the existing skills, profiles, MCP, and hooks paths.
+- Remote installs default untrusted; hook and MCP execution are unreachable until explicit trust.

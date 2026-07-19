@@ -7,6 +7,27 @@
 - Success definition: `harness-acp` completes ACP initialize over stdio; session/new and session/prompt map to existing harnessd APIs; SSE is projected as ACP updates; approval/cancel/todos map to their existing APIs; fake-provider integration is key-free; docs include a Zed checklist.
 - Guardrails/constraints: SDK v0.13.5 is compatible with Go 1.25 (requires Go 1.21+); use it rather than hand-rolling transport. The adapter owns wire translation only and must reuse harnessd HTTP/SSE, approval broker routes, and todo state.
 
+## 2026-07-19 (Plan Mode — Epic #740)
+
+- Command intent: Implement all six plan-mode slices in this worktree, verify, push, and open a PR without merging it.
+- User intent: Make planning genuinely read-only except for a single designated plan artifact, and require the operator's approval before implementation edits can proceed.
+- Success definition: `RunRequest.PlanMode` reaches live runner state; real policy-wrapped tool dispatch rejects non-plan mutations; plan exit pauses through the existing broker/routes; plan content persists with its conversation; both CLI surfaces render and submit the state.
+- Guardrails: reuse `ApplyPolicy`, permission-rule matching, `ApprovalBroker`, and SQLite migrations; do not touch #567; six test-first commits plus a merge commit.
+
+## 2026-07-19 (Session Rewind — Epic #739)
+
+- Command intent: Implement all six rewind slices in this worktree, push the branch, and open (without merging) a PR.
+- User intent: Safely undo a chosen sequence of agent file edits and conversation turns without asking a model to recreate historical file contents.
+- Success definition: Mutating file tools capture bounded pre-images; restore detects external modifications, restores/deletes files, truncates the persisted conversation, is reachable through tenant-scoped HTTP and a confirmed TUI `/rewind` picker, and snapshot data follows conversation retention.
+- Guardrails: Reuse existing mutation classification and SQLite conversation store; capture failures never fail tool calls; never touch the unrelated human-checkpoint subsystem; every slice is test-first and committed separately.
+
+## 2026-07-19 (Multi-run TUI Dashboard — Epic #738)
+
+- Command intent: Deliver the multi-run TUI dashboard and six child slices in a dedicated branch, then open (but do not merge) its PR.
+- User intent: Let an operator monitor and control concurrent harness runs without leaving the current TUI session.
+- Success definition: `/dashboard` offers lifecycle-bound polling grouped by run state, selected-run SSE peek, steer/cancel, and new-run dispatch solely through existing run routes; focused TDD coverage and project gates remain green.
+- Guardrails: TUI-only, no new server endpoints or Go dependencies, and no more than one dashboard peek bridge at a time.
+
 ## 2026-06-28 (Config-Driven Lifecycle Hooks — Epic #737)
 
 - Command intent: Implement epic #737 and all six child issues (#741, #744, #750, #755, #759, #763) in a dedicated worktree, landing config-driven shell/HTTP lifecycle hooks end to end, then open a PR.

@@ -6,6 +6,7 @@ Command Registry - 120x40
 /config — View current session configuration
 /context — View context window usage
 /cost — Show running cost and token usage
+/dashboard — View and control all runs
 /doctor — Show local harness diagnostic commands
 /export — Export conversation to markdown
 /help — Show help dialog
@@ -15,10 +16,12 @@ Command Registry - 120x40
 /model — Select AI model
 /new — Start a new session (resets conversation)
 /permissions — View session tool permissions
+/plugins — Browse installed plugin bundles
 /profiles — View and select a profile for next run
 /quit — Quit the TUI
 /replay — Replay a run
 /resume (aliases: continue) — Continue a completed run
+/rewind — Choose and confirm a destructive session rewind
 /runs — List recent harness runs
 /search — Search current session transcript
 /sessions — Browse and switch between past sessions

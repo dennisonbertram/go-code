@@ -590,6 +590,16 @@ func (se *stepEngine) run() {
 				"duration_ms": time.Since(stepStartTime).Milliseconds(),
 			})
 			emitCausalGraph(step)
+			approved, approvalErr := r.awaitPlanApproval(ctx, runID, result.Content)
+			if approvalErr != nil {
+				r.failRun(runID, approvalErr)
+				return
+			}
+			if !approved {
+				messages = append(messages, Message{Role: "user", Content: "The operator requested changes to the plan. Revise the designated plan file and present the updated plan."})
+				r.stepSetMessages(runID, messages)
+				continue
+			}
 			r.completeRun(runID, result.Content)
 			return
 		}
@@ -661,6 +671,16 @@ func (se *stepEngine) run() {
 				"duration_ms": time.Since(stepStartTime).Milliseconds(),
 			})
 			emitCausalGraph(step)
+			approved, approvalErr := r.awaitPlanApproval(ctx, runID, result.Content)
+			if approvalErr != nil {
+				r.failRun(runID, approvalErr)
+				return
+			}
+			if !approved {
+				messages = append(messages, Message{Role: "user", Content: "The operator requested changes to the plan. Revise the designated plan file and present the updated plan."})
+				r.stepSetMessages(runID, messages)
+				continue
+			}
 			r.completeRun(runID, result.Content)
 			return
 		}
@@ -707,6 +727,7 @@ func (se *stepEngine) run() {
 			callArgs       json.RawMessage
 			toolCtx        context.Context
 			waitingForUser bool
+			rewindPointID  string
 		}
 
 		type toolExecResult struct {
@@ -963,6 +984,7 @@ func (se *stepEngine) run() {
 
 			meta := r.runMetadata(runID)
 			toolCtx := context.WithValue(ctx, htools.ContextKeyRunID, runID)
+			toolCtx = context.WithValue(toolCtx, htools.ContextKeyPlanModeGate, runPlanModeGate{runner: r, runID: runID})
 			toolCtx = context.WithValue(toolCtx, htools.ContextKeyToolCallID, call.ID)
 			toolCtx = context.WithValue(toolCtx, htools.ContextKeyRunMetadata, meta)
 			toolCtx = htools.WithSandboxScope(toolCtx, effectiveSandboxScope)
@@ -1029,8 +1051,26 @@ func (se *stepEngine) run() {
 			isSafe := runTools.IsParallelSafe(pe.call.Name) && !pe.waitingForUser
 
 			if !isSafe {
+				if rewind, ok := r.config.ConversationStore.(RewindStore); ok && runTools.IsMutating(pe.call.Name) {
+					meta := r.runMetadata(runID)
+					workspace := r.config.WorkspaceBaseOptions.RepoPath
+					if workspace != "" {
+						point := RewindPoint{ID: fmt.Sprintf("%s-%d-%s", runID, step, pe.call.ID), ConversationID: meta.ConversationID, Step: step, Tool: pe.call.Name}
+						if err := CaptureRewindPreImage(pe.toolCtx, rewind, point, workspace, pe.callArgs); err != nil {
+							r.emit(runID, EventToolCallCompleted, map[string]any{"call_id": pe.call.ID, "tool": pe.call.Name, "rewind_warning": err.Error()})
+						}
+						if paths := ExtractRewindPaths(pe.call.Name, pe.callArgs); len(paths) > 0 {
+							pe.rewindPointID = point.ID
+						}
+					}
+				}
 				start := time.Now()
 				out, err := runTools.Execute(pe.toolCtx, pe.call.Name, pe.callArgs)
+				if err == nil && pe.rewindPointID != "" {
+					if rewind, ok := r.config.ConversationStore.(RewindStore); ok {
+						_ = FinalizeRewindPoint(pe.toolCtx, rewind, pe.rewindPointID, r.config.WorkspaceBaseOptions.RepoPath)
+					}
+				}
 				execResults[pe.origIdx] = toolExecResult{
 					output:   out,
 					err:      err,

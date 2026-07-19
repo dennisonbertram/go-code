@@ -46,6 +46,32 @@ CREATE TABLE IF NOT EXISTS conversation_messages (
 CREATE INDEX IF NOT EXISTS idx_conv_msgs_conv_id ON conversation_messages(conversation_id);
 CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at);
 
+CREATE TABLE IF NOT EXISTS rewind_points (
+    id              TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    step            INTEGER NOT NULL,
+    tool            TEXT NOT NULL,
+    created_at      TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS rewind_file_snapshots (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    point_id        TEXT NOT NULL REFERENCES rewind_points(id) ON DELETE CASCADE,
+    path            TEXT NOT NULL,
+    content         BLOB,
+    existed         INTEGER NOT NULL,
+    skipped         INTEGER NOT NULL DEFAULT 0,
+    skip_reason     TEXT NOT NULL DEFAULT '',
+    expected_hash   TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_rewind_points_conversation ON rewind_points(conversation_id, step DESC);
+
+CREATE TABLE IF NOT EXISTS conversation_plans (
+    conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+    run_id TEXT NOT NULL,
+    content TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
 -- FTS5 virtual table for full-text search on message content.
 CREATE VIRTUAL TABLE IF NOT EXISTS conversation_messages_fts
 USING fts5(conversation_id UNINDEXED, role UNINDEXED, content, content='conversation_messages', content_rowid='id');
@@ -54,6 +80,33 @@ USING fts5(conversation_id UNINDEXED, role UNINDEXED, content, content='conversa
 // SQLiteConversationStore implements ConversationStore using SQLite.
 type SQLiteConversationStore struct {
 	db *sql.DB
+}
+
+func (s *SQLiteConversationStore) SavePlanContent(ctx context.Context, conversationID, runID, content string) error {
+	if strings.TrimSpace(conversationID) == "" {
+		return fmt.Errorf("conversation id is required")
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO conversations (id, created_at, updated_at) VALUES (?, ?, ?) ON CONFLICT(id) DO NOTHING`, conversationID, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("create plan conversation: %w", err)
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO conversation_plans (conversation_id, run_id, content, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(conversation_id) DO UPDATE SET run_id=excluded.run_id, content=excluded.content, updated_at=excluded.updated_at`, conversationID, runID, content, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("save plan content: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteConversationStore) LoadPlanContent(ctx context.Context, conversationID string) (string, error) {
+	var content string
+	err := s.db.QueryRowContext(ctx, `SELECT content FROM conversation_plans WHERE conversation_id=?`, conversationID).Scan(&content)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("load plan content: %w", err)
+	}
+	return content, nil
 }
 
 // NewSQLiteConversationStore creates a new SQLite-backed conversation store.
@@ -419,6 +472,222 @@ func (s *SQLiteConversationStore) DeleteConversation(ctx context.Context, convID
 		return fmt.Errorf("delete conversation: %w", err)
 	}
 	return nil
+}
+
+// SaveRewindPoint persists a pre-tool snapshot atomically with its files.
+func (s *SQLiteConversationStore) SaveRewindPoint(ctx context.Context, point RewindPoint) error {
+	if point.ID == "" || point.ConversationID == "" {
+		return fmt.Errorf("rewind point id and conversation id are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("rewind begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	created := point.CreatedAt
+	if created.IsZero() {
+		created = time.Now().UTC()
+	}
+	// Tool snapshots can arrive before the run's normal terminal persistence.
+	// Create the minimal conversation row first so the foreign key remains real.
+	if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO conversations (id, created_at, updated_at) VALUES (?, ?, ?)`, point.ConversationID, created.Format(time.RFC3339Nano), created.Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("create rewind conversation: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO rewind_points (id, conversation_id, step, tool, created_at) VALUES (?, ?, ?, ?, ?)`, point.ID, point.ConversationID, point.Step, point.Tool, created.Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("insert rewind point: %w", err)
+	}
+	stmt, err := tx.PrepareContext(ctx, `INSERT INTO rewind_file_snapshots (point_id, path, content, existed, skipped, skip_reason, expected_hash) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare rewind file: %w", err)
+	}
+	defer stmt.Close()
+	var used int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(SUM(length(content)),0) FROM rewind_file_snapshots f JOIN rewind_points p ON p.id=f.point_id WHERE p.conversation_id=?`, point.ConversationID).Scan(&used); err != nil {
+		return fmt.Errorf("rewind snapshot usage: %w", err)
+	}
+	for _, file := range point.Files {
+		if !file.Skipped && used+int64(len(file.Content)) > rewindMaxConversationBytes {
+			file.Skipped = true
+			file.SkipReason = "conversation rewind snapshot size cap reached"
+			file.Content = nil
+		}
+		existed, skipped := 0, 0
+		if file.Exists {
+			existed = 1
+		}
+		if file.Skipped {
+			skipped = 1
+		}
+		if _, err := stmt.ExecContext(ctx, point.ID, file.Path, file.Content, existed, skipped, file.SkipReason, file.ExpectedHash); err != nil {
+			return fmt.Errorf("insert rewind file: %w", err)
+		}
+		used += int64(len(file.Content))
+	}
+	return tx.Commit()
+}
+
+// FinalizeRewindPoint persists post-tool hashes used to guard against external edits.
+func (s *SQLiteConversationStore) FinalizeRewindPoint(ctx context.Context, pointID, workspace string) error {
+	points, err := s.db.QueryContext(ctx, `SELECT path, skipped FROM rewind_file_snapshots WHERE point_id=?`, pointID)
+	if err != nil {
+		return err
+	}
+	type snapshotPath struct {
+		path    string
+		skipped bool
+	}
+	paths := []snapshotPath{}
+	for points.Next() {
+		var path string
+		var skipped int
+		if err := points.Scan(&path, &skipped); err != nil {
+			points.Close()
+			return err
+		}
+		paths = append(paths, snapshotPath{path: path, skipped: skipped == 1})
+	}
+	if err := points.Err(); err != nil {
+		points.Close()
+		return err
+	}
+	if err := points.Close(); err != nil {
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, snapshot := range paths {
+		if snapshot.skipped {
+			continue
+		}
+		content, err := os.ReadFile(filepath.Join(workspace, snapshot.path))
+		hash := rewindAbsentHash
+		if err == nil {
+			hash = RewindContentHash(content)
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE rewind_file_snapshots SET expected_hash=? WHERE point_id=? AND path=?`, hash, pointID, snapshot.path); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// ListRewindPoints returns newest rewind points first with their captured files.
+func (s *SQLiteConversationStore) ListRewindPoints(ctx context.Context, convID string) ([]RewindPoint, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT p.id, p.step, p.tool, p.created_at, f.path, f.content, COALESCE(f.existed,0), COALESCE(f.skipped,0), COALESCE(f.skip_reason,''), COALESCE(f.expected_hash,'') FROM rewind_points p LEFT JOIN rewind_file_snapshots f ON f.point_id=p.id WHERE p.conversation_id=? ORDER BY p.step DESC, p.created_at DESC, f.id ASC`, convID)
+	if err != nil {
+		return nil, fmt.Errorf("list rewind points: %w", err)
+	}
+	defer rows.Close()
+	byID := map[string]int{}
+	points := []RewindPoint{}
+	for rows.Next() {
+		var id, tool, created, reason, expected string
+		var path sql.NullString
+		var step, existed, skipped int
+		var content []byte
+		if err := rows.Scan(&id, &step, &tool, &created, &path, &content, &existed, &skipped, &reason, &expected); err != nil {
+			return nil, fmt.Errorf("scan rewind point: %w", err)
+		}
+		i, ok := byID[id]
+		if !ok {
+			t, _ := time.Parse(time.RFC3339Nano, created)
+			i = len(points)
+			byID[id] = i
+			points = append(points, RewindPoint{ID: id, ConversationID: convID, Step: step, Tool: tool, CreatedAt: t})
+		}
+		if path.Valid && path.String != "" {
+			points[i].Files = append(points[i].Files, RewindFileSnapshot{Path: path.String, Content: content, Exists: existed == 1, Skipped: skipped == 1, SkipReason: reason, ExpectedHash: expected})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list rewind points rows: %w", err)
+	}
+	return points, nil
+}
+
+// RestoreRewindPoint restores captured pre-images and then truncates messages
+// after the point in one database transaction. Files are checked before any
+// write, so external changes refuse the whole restore unless force is true.
+func (s *SQLiteConversationStore) RestoreRewindPoint(ctx context.Context, convID, pointID, workspace string, force bool) (RewindRestoreResult, error) {
+	points, err := s.ListRewindPoints(ctx, convID)
+	if err != nil {
+		return RewindRestoreResult{}, err
+	}
+	var point *RewindPoint
+	for i := range points {
+		if points[i].ID == pointID {
+			point = &points[i]
+			break
+		}
+	}
+	if point == nil {
+		return RewindRestoreResult{}, fmt.Errorf("rewind point %q not found", pointID)
+	}
+	if workspace == "" {
+		return RewindRestoreResult{}, fmt.Errorf("workspace is required")
+	}
+	for _, file := range point.Files {
+		if file.Skipped {
+			continue
+		}
+		current, readErr := os.ReadFile(filepath.Join(workspace, file.Path))
+		actual := rewindAbsentHash
+		if readErr == nil {
+			actual = RewindContentHash(current)
+		} else if !os.IsNotExist(readErr) {
+			return RewindRestoreResult{}, fmt.Errorf("read %s: %w", file.Path, readErr)
+		}
+		if !force && file.ExpectedHash == "" {
+			return RewindRestoreResult{}, fmt.Errorf("rewind refused: %s has no completed post-image", file.Path)
+		}
+		if !force && actual != file.ExpectedHash {
+			return RewindRestoreResult{}, fmt.Errorf("rewind refused: %s was modified outside the agent", file.Path)
+		}
+	}
+	result := RewindRestoreResult{}
+	for _, file := range point.Files {
+		if file.Skipped {
+			continue
+		}
+		path := filepath.Join(workspace, file.Path)
+		if file.Exists {
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return result, err
+			}
+			if err := os.WriteFile(path, file.Content, 0o644); err != nil {
+				return result, err
+			}
+		} else if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return result, err
+		}
+		result.FilesRestored++
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, fmt.Errorf("rewind begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `DELETE FROM conversation_messages WHERE conversation_id=? AND step>?`, convID, point.Step)
+	if err != nil {
+		return result, fmt.Errorf("rewind truncate messages: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	result.MessagesTruncated = int(n)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM rewind_points WHERE conversation_id=? AND (step>? OR (step=? AND id<>?))`, convID, point.Step, point.Step, point.ID); err != nil {
+		return result, fmt.Errorf("rewind delete future points: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET msg_count=(SELECT COUNT(*) FROM conversation_messages WHERE conversation_id=?), updated_at=? WHERE id=?`, convID, time.Now().UTC().Format(time.RFC3339Nano), convID); err != nil {
+		return result, err
+	}
+	if err := tx.Commit(); err != nil {
+		return result, fmt.Errorf("rewind commit: %w", err)
+	}
+	return result, nil
 }
 
 // DeleteOldConversations removes all non-pinned conversations whose updated_at is

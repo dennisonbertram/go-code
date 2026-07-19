@@ -78,6 +78,7 @@ func newEmptyCommandRegistry() *CommandRegistry {
 
 func builtinCommandEntries() []CommandEntry {
 	return []CommandEntry{
+		{Name: "plugins", Description: "Browse installed plugin bundles", Handler: func(Command) CommandResult { return CommandResult{Status: CmdOK} }, Execute: executePluginsCommand},
 		{
 			Name:        "clear",
 			Description: "Clear conversation history",
@@ -191,6 +192,12 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeSessionsCommand,
 		},
 		{
+			Name:        "rewind",
+			Description: "Choose and confirm a destructive session rewind",
+			Handler:     func(cmd Command) CommandResult { return CommandResult{Status: CmdOK} },
+			Execute:     executeRewindCommand,
+		},
+		{
 			Name:        "new",
 			Description: "Start a new session (resets conversation)",
 			Handler: func(cmd Command) CommandResult {
@@ -254,6 +261,12 @@ func builtinCommandEntries() []CommandEntry {
 				return CommandResult{Status: CmdOK}
 			},
 			Execute: executeResumeCommand,
+		},
+		{
+			Name:        "dashboard",
+			Description: "View and control all runs",
+			Handler:     func(cmd Command) CommandResult { return CommandResult{Status: CmdOK} },
+			Execute:     executeDashboardCommand,
 		},
 		{
 			Name:        "doctor",
