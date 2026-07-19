@@ -102,6 +102,56 @@ func TestApprovalEventRequestsPermissionAndApprovesRun(t *testing.T) {
 	}
 }
 
+func TestApprovalEventRequestsPermissionAndDeniesRun(t *testing.T) {
+	var denied bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/runs/run-1/deny" {
+			denied = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	agent := NewAgent(server.URL)
+	agent.permission = func(context.Context, acp.SessionId, string, string) (bool, error) { return false, nil }
+	if err := agent.handleApproval(context.Background(), "s", "run-1", harnessmcp.RunEvent{Data: map[string]any{"call_id": "c", "tool": "shell"}}); err != nil {
+		t.Fatal(err)
+	}
+	if !denied {
+		t.Fatal("denial was not forwarded to harnessd")
+	}
+}
+
+func TestCancelForwardsActiveSessionRunToHarnessd(t *testing.T) {
+	var cancelled bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/runs/run-1/cancel" && r.Method == http.MethodPost {
+			cancelled = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	agent := NewAgent(server.URL)
+	session, err := agent.NewSession(context.Background(), acp.NewSessionRequest{Cwd: "/workspace", McpServers: []acp.McpServer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	agent.mu.Lock()
+	s := agent.sessions[session.SessionId]
+	s.runID = "run-1"
+	agent.sessions[session.SessionId] = s
+	agent.mu.Unlock()
+	if err := agent.Cancel(context.Background(), acp.CancelNotification{SessionId: session.SessionId}); err != nil {
+		t.Fatal(err)
+	}
+	if !cancelled {
+		t.Fatal("cancel was not forwarded to harnessd")
+	}
+}
+
 func TestProjectEventProjectsTodosAsPlan(t *testing.T) {
 	agent := NewAgent("http://example.test")
 	var got acp.SessionUpdate

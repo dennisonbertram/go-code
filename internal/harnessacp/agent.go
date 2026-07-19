@@ -53,7 +53,15 @@ func (a *Agent) Authenticate(context.Context, acp.AuthenticateRequest) (acp.Auth
 func (a *Agent) Logout(context.Context, acp.LogoutRequest) (acp.LogoutResponse, error) {
 	return acp.LogoutResponse{}, nil
 }
-func (a *Agent) Cancel(context.Context, acp.CancelNotification) error { return nil }
+func (a *Agent) Cancel(ctx context.Context, params acp.CancelNotification) error {
+	a.mu.Lock()
+	session, ok := a.sessions[params.SessionId]
+	a.mu.Unlock()
+	if !ok || session.runID == "" {
+		return nil
+	}
+	return a.client.CancelRun(ctx, session.runID)
+}
 func (a *Agent) CloseSession(context.Context, acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
 	return acp.CloseSessionResponse{}, nil
 }
