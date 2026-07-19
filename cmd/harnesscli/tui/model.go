@@ -197,6 +197,9 @@ type Model struct {
 	// Valid values: "", "help", "stats", "context".
 	activeOverlay string
 
+	// dashboard holds transient state for the multi-run dashboard overlay.
+	dashboard dashboardState
+
 	// statusMsg is a transient overlay message shown on the status bar.
 	statusMsg string
 	// statusMsgExpiry is when statusMsg should be cleared.
@@ -2746,6 +2749,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case OverlayCloseMsg:
+		if m.activeOverlay == "dashboard" {
+			m.closeDashboard()
+			break
+		}
 		m.overlayActive = false
 		m.activeOverlay = ""
 		m.helpDialog = m.helpDialog.Close()
@@ -2825,6 +2832,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.vp.AppendLine("")
 		cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Loaded %d run(s)", len(msg.Runs))))
+
+	case DashboardRunsLoadedMsg:
+		if msg.Err != "" {
+			cmds = append(cmds, m.setStatusMsg("Dashboard load failed: "+msg.Err))
+			break
+		}
+		m.dashboard.runs = msg.Runs
+		if m.dashboard.cursor >= len(msg.Runs) {
+			m.dashboard.cursor = len(msg.Runs) - 1
+			if m.dashboard.cursor < 0 {
+				m.dashboard.cursor = 0
+			}
+		}
+
+	case dashboardPollTickMsg:
+		if m.overlayActive && m.activeOverlay == "dashboard" {
+			cmds = append(cmds, loadDashboardRunsCmd(m.config.BaseURL, m.config.APIKey), dashboardPollCmd())
+		}
 
 	case RunControlResultMsg:
 		if msg.Err != "" {
