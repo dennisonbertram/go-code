@@ -2,6 +2,8 @@ package harness
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -21,6 +23,40 @@ func TestSQLiteConversationStoreRewindPointRoundTrip(t *testing.T) {
 	}
 	if len(points) != 1 || points[0].ID != point.ID || points[0].Files[0].Path != "notes.txt" || string(points[0].Files[0].Content) != "before" {
 		t.Fatalf("points = %#v", points)
+	}
+}
+
+func TestSQLiteConversationStoreRestoreRewindRefusesExternalModification(t *testing.T) {
+	ctx := context.Background()
+	store := newTestConversationStore(t)
+	root := t.TempDir()
+	path := filepath.Join(root, "notes.txt")
+	if err := os.WriteFile(path, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveConversation(ctx, "restore-conv", []Message{{Role: "user", Content: "keep"}, {Role: "assistant", Content: "drop"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SaveRewindPoint(ctx, RewindPoint{ID: "restore-point", ConversationID: "restore-conv", Step: 0, Tool: "write", Files: []RewindFileSnapshot{{Path: "notes.txt", Content: []byte("before"), Exists: true, ExpectedHash: RewindContentHash([]byte("agent"))}}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.RestoreRewindPoint(ctx, "restore-conv", "restore-point", root, false); err == nil {
+		t.Fatal("RestoreRewindPoint accepted externally modified file")
+	}
+	result, err := store.RestoreRewindPoint(ctx, "restore-conv", "restore-point", root, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.FilesRestored != 1 {
+		t.Fatalf("result=%+v", result)
+	}
+	got, _ := os.ReadFile(path)
+	if string(got) != "before" {
+		t.Fatalf("file=%q", got)
+	}
+	msgs, err := store.LoadMessages(ctx, "restore-conv")
+	if err != nil || len(msgs) != 1 || msgs[0].Content != "keep" {
+		t.Fatalf("msgs=%#v err=%v", msgs, err)
 	}
 }
 

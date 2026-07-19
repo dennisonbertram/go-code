@@ -2,7 +2,9 @@ package harness
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,6 +12,17 @@ import (
 	"strings"
 	"time"
 )
+
+// RewindRestoreResult describes the destructive restore that completed.
+type RewindRestoreResult struct {
+	FilesRestored     int `json:"files_restored"`
+	MessagesTruncated int `json:"messages_truncated"`
+}
+
+func RewindContentHash(content []byte) string {
+	sum := sha256.Sum256(content)
+	return fmt.Sprintf("%x", sum[:])
+}
 
 // RewindFileSnapshot is the pre-edit state of one workspace file. Exists=false
 // records that the agent created the file, so rewinding removes it.

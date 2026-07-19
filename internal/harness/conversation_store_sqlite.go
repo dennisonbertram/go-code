@@ -515,6 +515,83 @@ func (s *SQLiteConversationStore) ListRewindPoints(ctx context.Context, convID s
 	return points, nil
 }
 
+// RestoreRewindPoint restores captured pre-images and then truncates messages
+// after the point in one database transaction. Files are checked before any
+// write, so external changes refuse the whole restore unless force is true.
+func (s *SQLiteConversationStore) RestoreRewindPoint(ctx context.Context, convID, pointID, workspace string, force bool) (RewindRestoreResult, error) {
+	points, err := s.ListRewindPoints(ctx, convID)
+	if err != nil {
+		return RewindRestoreResult{}, err
+	}
+	var point *RewindPoint
+	for i := range points {
+		if points[i].ID == pointID {
+			point = &points[i]
+			break
+		}
+	}
+	if point == nil {
+		return RewindRestoreResult{}, fmt.Errorf("rewind point %q not found", pointID)
+	}
+	if workspace == "" {
+		return RewindRestoreResult{}, fmt.Errorf("workspace is required")
+	}
+	for _, file := range point.Files {
+		if file.Skipped {
+			continue
+		}
+		current, readErr := os.ReadFile(filepath.Join(workspace, file.Path))
+		actual := ""
+		if readErr == nil {
+			actual = RewindContentHash(current)
+		} else if !os.IsNotExist(readErr) {
+			return RewindRestoreResult{}, fmt.Errorf("read %s: %w", file.Path, readErr)
+		}
+		if !force && file.ExpectedHash != "" && actual != file.ExpectedHash {
+			return RewindRestoreResult{}, fmt.Errorf("rewind refused: %s was modified outside the agent", file.Path)
+		}
+	}
+	result := RewindRestoreResult{}
+	for _, file := range point.Files {
+		if file.Skipped {
+			continue
+		}
+		path := filepath.Join(workspace, file.Path)
+		if file.Exists {
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				return result, err
+			}
+			if err := os.WriteFile(path, file.Content, 0o644); err != nil {
+				return result, err
+			}
+		} else if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return result, err
+		}
+		result.FilesRestored++
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return result, fmt.Errorf("rewind begin tx: %w", err)
+	}
+	defer tx.Rollback()
+	res, err := tx.ExecContext(ctx, `DELETE FROM conversation_messages WHERE conversation_id=? AND step>?`, convID, point.Step)
+	if err != nil {
+		return result, fmt.Errorf("rewind truncate messages: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	result.MessagesTruncated = int(n)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM rewind_points WHERE conversation_id=? AND (step>? OR (step=? AND id<>?))`, convID, point.Step, point.Step, point.ID); err != nil {
+		return result, fmt.Errorf("rewind delete future points: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET msg_count=(SELECT COUNT(*) FROM conversation_messages WHERE conversation_id=?), updated_at=? WHERE id=?`, convID, time.Now().UTC().Format(time.RFC3339Nano), convID); err != nil {
+		return result, err
+	}
+	if err := tx.Commit(); err != nil {
+		return result, fmt.Errorf("rewind commit: %w", err)
+	}
+	return result, nil
+}
+
 // DeleteOldConversations removes all non-pinned conversations whose updated_at is
 // before olderThan. A zero olderThan is a no-op. Returns the number deleted.
 func (s *SQLiteConversationStore) DeleteOldConversations(ctx context.Context, olderThan time.Time) (int, error) {
