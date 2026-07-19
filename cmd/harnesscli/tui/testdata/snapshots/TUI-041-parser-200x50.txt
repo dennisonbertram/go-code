@@ -6,6 +6,7 @@ Command Registry - 200x50
 /config — View current session configuration
 /context — View context window usage
 /cost — Show running cost and token usage
+/dashboard — View and control all runs
 /doctor — Show local harness diagnostic commands
 /export — Export conversation to markdown
 /help — Show help dialog

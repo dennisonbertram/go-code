@@ -256,6 +256,12 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeResumeCommand,
 		},
 		{
+			Name:        "dashboard",
+			Description: "View and control all runs",
+			Handler:     func(cmd Command) CommandResult { return CommandResult{Status: CmdOK} },
+			Execute:     executeDashboardCommand,
+		},
+		{
 			Name:        "doctor",
 			Description: "Show local harness diagnostic commands",
 			Handler: func(cmd Command) CommandResult {
