@@ -2,6 +2,10 @@
 
 This repository is a Go coding harness with a streamed run API, a CLI smoke-test client, and a growing catalog of local and optional remote tools.
 
+## Session rewind
+
+`GET /v1/conversations/{id}/rewind-points` lists snapshot points. `POST /v1/conversations/{id}/rewind` restores a `point_id` (and accepts `force`). This is destructive: it writes files and truncates later conversation history; normal restore refuses externally modified files. The TUI command is `/rewind <point-id> confirm`.
+
 ## Git & Merge Discipline
 
 - **Merge at the end of a unit of work — do not leave branches sitting.** This repo's `main` moves fast (many concurrent squash-merged PRs) and subsystems get reimplemented in parallel, so a branch left unmerged drifts behind quickly and turns into a conflict-heavy, duplicated-work mess to reconcile. It gets messy if you don't.

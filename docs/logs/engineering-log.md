@@ -1,5 +1,9 @@
 # Engineering Log
 
+## 2026-07-19 (Session Rewind — Epic #739)
+
+- Added SQLite pre-image points, non-fatal runner capture, hash-checked restore/truncation, HTTP list/restore routes, and explicit TUI confirmation. Oversized files are skipped rather than stored.
+
 ## 2026-07-19 (Reliability Epic #644 Reconciliation)
 
 - Reconciled the 2026-06-24 15-slice long-session reliability plan against the supplied `origin/main` baseline. The code and deterministic regressions for T03–T15, plus the original T01/T02 behavior, were already present on the baseline (principally from prior harness/TUI integration work), so they were not duplicated or falsely represented as new failing-first commits.
