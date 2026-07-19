@@ -347,3 +347,51 @@ func TestBuildVars_NoArgs(t *testing.T) {
 		t.Errorf("expected empty $1, got %q", vars["$1"])
 	}
 }
+
+func TestBuildVars_QuotedArgs(t *testing.T) {
+	skill := &Skill{
+		FilePath: "/skills/test/SKILL.md",
+	}
+
+	vars := buildVars(skill, `run "hello world" --fast`, "")
+
+	tests := []struct {
+		key  string
+		want string
+	}{
+		{"$ARGUMENTS", `run "hello world" --fast`}, // raw args preserved untokenized
+		{"$1", "run"},
+		{"$2", "hello world"}, // quoted multi-word token stays one token
+		{"$3", "--fast"},
+		{"$4", ""},
+	}
+
+	for _, tt := range tests {
+		got := vars[tt.key]
+		if got != tt.want {
+			t.Errorf("buildVars[%s] = %q, want %q", tt.key, got, tt.want)
+		}
+	}
+}
+
+func TestAutoInvokeHook_ExplicitWithQuotedArgs(t *testing.T) {
+	reg := NewRegistry()
+	reg.skills["deploy"] = &Skill{
+		Name:       "deploy",
+		Body:       "Deploy $1 to $2. Full: $ARGUMENTS",
+		FilePath:   "/skills/deploy/SKILL.md",
+		AutoInvoke: true,
+		Context:    ContextConversation,
+	}
+
+	hook := AutoInvokeHook(reg)
+	activation := hook(`/deploy "staging eu" fast`)
+
+	if activation == nil {
+		t.Fatal("expected non-nil activation")
+	}
+	want := `Deploy staging eu to fast. Full: "staging eu" fast`
+	if activation.Content != want {
+		t.Errorf("expected content %q, got %q", want, activation.Content)
+	}
+}

@@ -90,7 +90,13 @@ func buildVars(skill *Skill, args, workspace string) map[string]string {
 		"$WORKSPACE": workspace,
 		"$SKILL_DIR": filepath.Dir(skill.FilePath),
 	}
-	fields := strings.Fields(args)
+	fields, err := SplitArgs(args)
+	if err != nil {
+		// SplitArgs never returns an error today (unterminated quotes are
+		// not an error); if a future error path appears, degrade to no
+		// positional vars rather than mangling tokens.
+		fields = nil
+	}
 	for i := 1; i <= 9; i++ {
 		key := fmt.Sprintf("$%d", i)
 		if i-1 < len(fields) {
