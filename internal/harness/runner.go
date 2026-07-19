@@ -91,7 +91,8 @@ type runState struct {
 	// run.failed) has been emitted. Any subsequent emit() call returns
 	// immediately to prevent post-terminal streaming callbacks from appending
 	// events after the forensic record is closed.
-	terminated bool
+	terminated             bool
+	terminalEventPersisted bool
 	// compactMu serializes auto-compact and manual CompactRun calls.
 	compactMu sync.RWMutex
 	// resetIndex increments each time the agent calls reset_context.
@@ -423,7 +424,7 @@ func (r *Runner) pruneCompletedRunsLocked() {
 	terminalCount := 0
 	candidates := make([]retainedRunCandidate, 0)
 	for runID, state := range r.runs {
-		if state == nil || !isTerminalRunStatus(state.run.Status) {
+		if state == nil || !isTerminalRunStatus(state.run.Status) || !state.terminalEventPersisted {
 			continue
 		}
 		terminalCount++
@@ -4994,6 +4995,14 @@ func (r *Runner) storeAppendEvent(ev Event, seq uint64) bool {
 		return false
 	}
 	return true
+}
+
+func (r *Runner) markTerminalEventPersisted(runID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if state := r.runs[runID]; state != nil {
+		state.terminalEventPersisted = true
+	}
 }
 
 // storeAppendNewMessages appends any messages in the current run state that

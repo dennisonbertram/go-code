@@ -2,6 +2,7 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -35,6 +36,38 @@ func TestRunner_PruneCompletedRunsFromMemory(t *testing.T) {
 		defer runner.mu.RUnlock()
 		return len(runner.runs) <= 3
 	})
+}
+
+func TestRunner_PruneWaitsForTerminalEventPersistence(t *testing.T) {
+	runner := NewRunner(staticContentProvider{content: "done"}, NewRegistry(), RunnerConfig{
+		DefaultModel:          "test-model",
+		MaxSteps:              1,
+		MaxCompletedRetention: 1,
+		Store:                 &terminalAppendFailStore{Store: runstore.NewMemoryStore()},
+	})
+
+	for i := 0; i < 3; i++ {
+		run, err := runner.StartRun(RunRequest{Prompt: fmt.Sprintf("unpersisted %d", i)})
+		if err != nil {
+			t.Fatalf("StartRun: %v", err)
+		}
+		waitForStatus(t, runner, run.ID, RunStatusCompleted)
+	}
+
+	runner.mu.RLock()
+	defer runner.mu.RUnlock()
+	if got := len(runner.runs); got != 3 {
+		t.Fatalf("pruned terminal runs before terminal events persisted: got %d, want 3", got)
+	}
+}
+
+type terminalAppendFailStore struct{ runstore.Store }
+
+func (s *terminalAppendFailStore) AppendEvent(_ context.Context, event *runstore.Event) error {
+	if event.EventType == string(EventRunCompleted) {
+		return errors.New("terminal event store unavailable")
+	}
+	return s.Store.AppendEvent(context.Background(), event)
 }
 
 func TestRunner_PruneKeepsCompletedRunWithActiveSubscriber(t *testing.T) {
