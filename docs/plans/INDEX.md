@@ -2,6 +2,7 @@
 
 - `823-exit-codes.md` — Epic #823 Slice 1 (docs-only): ratify the headless CLI exit-code contract page for runs and goals.
 - `821-plugin-system.md` — Epic #821 slice 1: plugin home decision and `plugin.json` manifest v1 contract docs, plus legacy-dir startup warning (in implementation).
+- `813-skill-args.md` — Epic #813 slice 1: quote-aware argument tokenizer (`SplitArgs`) for skill argument paths (in implementation).
 - `2026-07-19-acp-epic-746-plan.md` — ACP server mode epic #746 (in implementation).
 
 - `PLAN_TEMPLATE.md`: Required template for pre-implementation planning with checklist.
