@@ -4,34 +4,23 @@
 
 # go-code
 
-`go-code` is a local-first coding agent for working inside real repositories. It gives you an installable terminal command, a TUI for interactive development, a streamed HTTP runtime, provider and model routing, workspace-aware tool calls, and enough visibility to understand what the agent is doing while it works.
+`go-code` is a local-first coding agent written in Go. One installed command gives you the same agent three ways: an interactive TUI for daily development, a single-shot CLI for scripting, and a streamed HTTP API for building on top of — all running in the repository where you launched it, against the model provider you choose.
 
-The project is implemented in Go. The public command is `go-code`; the internal module name is still `go-agent-harness` while the product surface settles.
+There is no hosted service or separate control plane. The TUI and CLI are thin clients over one public HTTP/SSE API: `go-code` auto-starts the local `harnessd` daemon when needed, streams every model turn, tool call, and approval as events, and records runs so you can inspect, continue, replay, and search them later.
 
-## What You Get
+## Use the TUI
 
-- `go-code`: launch the TUI from any repository.
-- `go-code "prompt"`: run one coding prompt and stream the result.
-- `go-code --server`: start the local `harnessd` daemon and leave it running.
-- A streamed event API for runs, tool calls, model usage, approvals, subagents, conversations, and replay.
-- Provider catalog support for OpenAI, Anthropic, Google, DeepSeek, Z.ai, OpenRouter-style routes, and local catalog pricing.
-- Workspace-aware execution so the agent works in the project directory where you launched it.
-
-## Install
-
-Install the latest `main` build with Homebrew:
+Install the latest `main` build with Homebrew and launch it from any repository:
 
 ```bash
 brew install --HEAD dennisonbertram/go-code/go-code
-```
-
-Then run it from any repository:
-
-```bash
+export OPENAI_API_KEY="..."
 go-code
 ```
 
-Source install is still available if you do not use Homebrew:
+The TUI runs the agent in the project directory where you launched it, streaming assistant output and tool activity as it works. A daemon is started automatically if one is not already running; a pre-existing server is left alone.
+
+If you do not use Homebrew, install from source:
 
 ```bash
 git clone https://github.com/dennisonbertram/go-code.git
@@ -39,15 +28,15 @@ cd go-code
 ./scripts/install.sh --add-to-path
 ```
 
-Open a new shell, or add the printed PATH line for your current shell.
+Then open a new shell, or add the printed PATH line to your current one.
 
-Common modes:
+## Script it from the shell
+
+For one-shot prompts and run management, the same command works headlessly:
 
 ```bash
-go-code                         # interactive TUI in the current project
-go-code "summarize this repo"    # single-shot prompt
-go-code --server                # persistent local daemon
-go-code runs                    # list known runs
+go-code "summarize this repo"    # single-shot prompt, streamed to stdout
+go-code runs                     # list known runs
 go-code show <run-id>            # inspect one run
 go-code continue <run-id> "..."  # continue and stream a completed run
 go-code replay <run-id>          # replay a recorded run when rollout capture is enabled
@@ -55,66 +44,17 @@ go-code search <query>           # search run metadata
 go-code improve --dry-run        # plan the self-improvement test loop
 ```
 
-Completed runs also keep a searchable workflow recap when persistence is enabled:
-goal, changed files, tests run, failure cause, fix pattern, useful commands, and
-a continuation prompt. `go-code search <query>` matches those recap fields.
+When persistence is enabled, completed runs keep a searchable workflow recap — goal, changed files, tests run, failure cause, fix pattern, useful commands, and a continuation prompt. `go-code search <query>` matches those recap fields.
 
-## API Keys
+## Build on the API
 
-Set the provider keys you plan to use before starting a run:
+Everything the TUI does goes through the daemon's streamed run API, which you can use directly:
 
 ```bash
-export OPENAI_API_KEY="..."
-export ANTHROPIC_API_KEY="..."
-export GOOGLE_API_KEY="..."
-export DEEPSEEK_API_KEY="..."
-export ZAI_API_KEY="..."
+go-code --server                 # start harnessd in the background and print its URL
 ```
 
-You only need keys for the providers you use. You can also configure provider keys through the TUI and server APIs as the harness evolves.
-
-## Running From Source
-
-For development or debugging, run the server and CLI directly:
-
-```bash
-go run ./cmd/harnessd
-go run ./cmd/harnesscli -base-url http://127.0.0.1:8080 -prompt "Summarize the repository"
-```
-
-Long-running local servers should be started in tmux:
-
-```bash
-tmux new-session -d -s go-code-server 'cd /path/to/go-code && go run ./cmd/harnessd'
-tmux attach-session -t go-code-server
-```
-
-## Repository Map
-
-- `cmd/harnesscli`: command-line client and terminal UI.
-- `cmd/harnessd`: local HTTP daemon and runtime bootstrap.
-- `internal/harness`: run loop, tools, event emission, and conversation behavior.
-- `internal/server`: HTTP API handlers.
-- `internal/provider`: provider clients, model catalogs, pricing, and routing.
-- `internal/workspace`: local, container, VM, and worktree workspace implementations.
-- `catalog/`: model and pricing catalogs used at runtime.
-- `prompts/`: bundled prompt assets installed with `go-code`.
-- `apps/`: experimental apps that integrate with the harness.
-- `benchmarks/`: Terminal Bench and overnight benchmark harnesses.
-- `harness_agent/`: Python adapter used by benchmark runners.
-- `skills/`: bundled skill fixtures and validation coverage.
-- `demo/`: small static demos and smoke-test pages.
-- `build/`: container/build packaging assets.
-- `testdata/`: shared test fixtures.
-- `playground/`: separate-module experiments and training exercises.
-- `docs/`: runbooks, design notes, logs, Pages source, and project context.
-- `scripts/`: install, development, Symphony, and regression helpers.
-
-The repo root is kept for product entrypoints and project metadata. Scratch snippets and exercises should live under `playground/` or a dedicated test fixture.
-
-## HTTP Surface
-
-The server exposes a streamed coding-agent API. The most commonly used endpoints are:
+The most commonly used endpoints:
 
 ```text
 GET  /healthz
@@ -134,7 +74,54 @@ POST /v1/subagents
 
 Run requests support prompt, model, provider, workspace, sandbox, approval, tool, profile, reasoning, and budget fields. Canonical event names live in `internal/harness/events.go`.
 
-## Testing
+## Pick your providers
+
+Set keys for the providers you plan to use — only those:
+
+```bash
+export OPENAI_API_KEY="..."
+export ANTHROPIC_API_KEY="..."
+export GOOGLE_API_KEY="..."
+export DEEPSEEK_API_KEY="..."
+export ZAI_API_KEY="..."
+```
+
+The provider catalog covers OpenAI, Anthropic, Google, DeepSeek, Z.ai, and OpenRouter-style routes, with local catalog pricing for cost tracking. Keys can also be configured through the TUI and server APIs.
+
+## Develop this repository
+
+The public command is `go-code`; the internal Go module is still named `go-agent-harness` while the product surface settles.
+
+For development or debugging, run the server and CLI directly:
+
+```bash
+go run ./cmd/harnessd
+go run ./cmd/harnesscli -base-url http://127.0.0.1:8080 -prompt "Summarize the repository"
+```
+
+Long-running local servers should be started in tmux:
+
+```bash
+tmux new-session -d -s go-code-server 'cd /path/to/go-code && go run ./cmd/harnessd'
+tmux attach-session -t go-code-server
+```
+
+### Layout
+
+The core of the system:
+
+- `cmd/harnesscli`: command-line client and terminal UI.
+- `cmd/harnessd`: local HTTP daemon and runtime bootstrap.
+- `internal/harness`: run loop, tools, event emission, and conversation behavior.
+- `internal/server`: HTTP API handlers.
+- `internal/provider`: provider clients, model catalogs, pricing, and routing.
+- `internal/workspace`: local, container, VM, and worktree workspace implementations.
+- `catalog/`: model and pricing catalogs used at runtime.
+- `docs/`: runbooks, design notes, logs, Pages source, and project context.
+
+Supporting directories: `prompts/` (bundled prompt assets), `apps/` (experimental integrations), `benchmarks/` and `harness_agent/` (Terminal Bench harnesses; Python), `skills/` (bundled skill fixtures), `demo/` (static demos), `build/` (packaging assets), `testdata/` (shared fixtures), `playground/` (separate-module experiments), and `scripts/` (install, development, Symphony, and regression helpers). The repo root is kept for product entrypoints and project metadata; scratch snippets belong under `playground/` or a dedicated test fixture.
+
+### Testing
 
 Focused checks for the install and TUI path:
 
@@ -151,7 +138,7 @@ GOCACHE=/tmp/go-build ./scripts/test-regression.sh
 
 Follow `docs/runbooks/testing.md` for strict TDD expectations, behavior tests, regression tests, and merge gates.
 
-## Documentation
+### Documentation
 
 - Public page source: `docs/site/`
 - Distribution runbook: `docs/runbooks/distribution.md`
