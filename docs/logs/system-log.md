@@ -2,6 +2,26 @@
 
 Use this file to document systems, interfaces, and interactions as they are built.
 
+## 2026-06-28 (Config-Driven Lifecycle Hooks — Epic #737)
+
+- System/component: `internal/hooks` (schema, loader, adapters, trust store, builder), `internal/config` `[hooks]` section, `cmd/harnessd` bootstrap wiring, `internal/server` `GET /v1/hooks`, `cmd/harnesscli` `hooks` subcommand + TUI `/hooks`.
+- Responsibilities:
+  - `internal/hooks` owns the hook-file JSON schema, discovery (`Load`/`LoadWithOptions`), the JSON wire protocol (`wire.go`, shared verbatim by both transports), command/HTTP adapters onto the existing `harness` hook interfaces, the content-hash trust store, and the def→adapter `Build` plus startup `Summary`.
+  - `internal/config` owns `[hooks] enabled/dirs` via the existing rawLayer merge.
+  - `cmd/harnessd` owns startup-time loading (trust-aware), adapter registration onto existing `RunnerConfig` slices (after compiled-in plugins), and startup logging; it keeps no hook logic of its own.
+  - The runner owns all failure policy (`HookFailureMode`) and hook event emission; adapters only return decisions/errors.
+  - `internal/server` serves the startup summary read-only; `harnesscli hooks trust|revoke|list` owns trust management offline; the TUI renders server truth.
+- Inputs/outputs:
+  - Input: `*.json` hook files in `~/.harness/hooks/` (implicit trust) and `<workspace>/.harness/hooks/` + `[hooks] dirs` (trust-required); stdin/stdout JSON for command hooks; POST/response JSON for HTTP hooks.
+  - Output: hook decisions (allow/deny/block + reason, modified args/results) into the runner's existing hook loops; structured startup logs; `{"hooks": [...], "skipped": [...]}` listing.
+- Dependencies: stdlib only in `internal/hooks` (`os/exec`, `net/http`, `crypto/sha256`); `internal/harness` interfaces unchanged; trust store at `~/.harness/hooks-trust.json` (never the project tree).
+- Failure modes:
+  - Hook process/HTTP failure → adapter error → runner `HookFailureMode` (fail_closed default: deny/abort; fail_open: continue).
+  - Hung hook → per-hook timeout kills the whole process group / aborts the request.
+  - Untrusted or modified project hook file → skipped with structured reason (`untrusted` / `modified_since_trusted`), surfaced in startup logs and `/v1/hooks`.
+  - Unreadable trust store → fail closed: project hooks disabled, startup continues.
+  - Oversized hook output → 1 MiB cap fails the hook call.
+
 ## 2026-06-26 (Terminal-Bench Artifact Boundary)
 
 - System/component: `benchmarks/terminal_bench/agent.py`, `scripts/run-terminal-bench.sh`, and `scripts/terminal_bench_artifacts.py`.

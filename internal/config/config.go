@@ -122,6 +122,19 @@ type ForensicsConfig struct {
 	RolloutDir string `toml:"rollout_dir"`
 }
 
+// HooksConfig holds config-driven lifecycle hook settings.
+// Hook files themselves are JSON definitions discovered from
+// ~/.harness/hooks/ and <workspace>/.harness/hooks/ — see internal/hooks.
+type HooksConfig struct {
+	// Enabled controls whether config-driven hooks are discovered and
+	// registered at startup. Default true.
+	Enabled bool `toml:"enabled"`
+	// Dirs lists extra hook discovery directories beyond the two defaults.
+	// Extra dirs classify as project-level: files in them require explicit
+	// trust before they load.
+	Dirs []string `toml:"dirs"`
+}
+
 // MCPServerConfig holds the configuration for a single external MCP server.
 // The transport field controls how the harness connects to the server.
 //
@@ -192,6 +205,9 @@ type Config struct {
 	// ConclusionWatcher holds conclusion-jumping detector plugin settings.
 	ConclusionWatcher ConclusionWatcherConfig `toml:"conclusion_watcher"`
 
+	// Hooks holds config-driven lifecycle hook settings.
+	Hooks HooksConfig `toml:"hooks"`
+
 	// Cron holds cron scheduler configuration.
 	Cron CronConfig `toml:"cron"`
 
@@ -232,6 +248,9 @@ func Defaults() Config {
 			InterventionMode: "inject_validation_prompt",
 			EvaluatorEnabled: false,
 			EvaluatorModel:   "gpt-4o-mini",
+		},
+		Hooks: HooksConfig{
+			Enabled: true,
 		},
 		Cron: CronConfig{
 			JitterEnabled:    true,
@@ -282,6 +301,7 @@ type rawLayer struct {
 	AutoCompact       *rawAutoCompact            `toml:"auto_compact"`
 	Forensics         *rawForensics              `toml:"forensics"`
 	ConclusionWatcher *rawConclusionWatcher      `toml:"conclusion_watcher"`
+	Hooks             *rawHooks                  `toml:"hooks"`
 	Cron              *rawCron                   `toml:"cron"`
 	MCPServers        map[string]MCPServerConfig `toml:"mcp_servers"`
 }
@@ -340,12 +360,17 @@ type rawConclusionWatcher struct {
 	EvaluatorAPIKey  *string `toml:"evaluator_api_key"`
 }
 
+type rawHooks struct {
+	Enabled *bool    `toml:"enabled"`
+	Dirs    []string `toml:"dirs"`
+}
+
 type rawCron struct {
-	JitterEnabled    *bool  `toml:"jitter_enabled"`
-	JitterMinSec     *int   `toml:"jitter_min_sec"`
-	JitterMaxSec     *int   `toml:"jitter_max_sec"`
-	AvoidMinuteMarks []int  `toml:"avoid_minute_marks"`
-	LogJitteredTimes *bool  `toml:"log_jittered_times"`
+	JitterEnabled    *bool `toml:"jitter_enabled"`
+	JitterMinSec     *int  `toml:"jitter_min_sec"`
+	JitterMaxSec     *int  `toml:"jitter_max_sec"`
+	AvoidMinuteMarks []int `toml:"avoid_minute_marks"`
+	LogJitteredTimes *bool `toml:"log_jittered_times"`
 }
 
 // Load builds the merged Config by walking through all layers in priority
@@ -566,6 +591,15 @@ func applyLayer(cfg *Config, layer rawLayer) {
 		}
 		if cw.EvaluatorAPIKey != nil {
 			cfg.ConclusionWatcher.EvaluatorAPIKey = *cw.EvaluatorAPIKey
+		}
+	}
+	if layer.Hooks != nil {
+		h := layer.Hooks
+		if h.Enabled != nil {
+			cfg.Hooks.Enabled = *h.Enabled
+		}
+		if len(h.Dirs) > 0 {
+			cfg.Hooks.Dirs = append([]string(nil), h.Dirs...)
 		}
 	}
 	if layer.Cron != nil {

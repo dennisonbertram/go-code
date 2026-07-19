@@ -1478,6 +1478,41 @@ func executeSubagentsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	}, false
 }
 
+// executeHooksCommand fetches the /v1/hooks listing and renders it into the
+// viewport when HooksLoadedMsg arrives (epic #737).
+func executeHooksCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	return []tea.Cmd{
+		m.setStatusMsg("Loading hooks..."),
+		loadHooksCmd(m.config.BaseURL, m.config.APIKey),
+	}, false
+}
+
+// formatHooksLines renders the /v1/hooks listing as plain viewport lines:
+// a loaded-hooks table (name, event, kind, source, matcher) followed by a
+// skipped section with reasons. The empty state says no hooks loaded.
+func formatHooksLines(msg HooksLoadedMsg) []string {
+	lines := []string{}
+	if len(msg.Hooks) == 0 {
+		lines = append(lines, "No hooks loaded.")
+	} else {
+		lines = append(lines, "Loaded hooks:")
+		for _, h := range msg.Hooks {
+			entry := fmt.Sprintf("  %-24s %-14s %-8s %s", h.Name, h.Event, h.Kind, h.Source)
+			if h.Matcher != "" {
+				entry += fmt.Sprintf("  matcher=%s", h.Matcher)
+			}
+			lines = append(lines, entry)
+		}
+	}
+	if len(msg.Skipped) > 0 {
+		lines = append(lines, "Skipped hook files:")
+		for _, s := range msg.Skipped {
+			lines = append(lines, fmt.Sprintf("  %s (%s)", s.File, s.Reason))
+		}
+	}
+	return lines
+}
+
 func executeProfilesCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.overlayActive = true
 	m.activeOverlay = "profiles"
@@ -2769,6 +2804,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SubagentsLoadFailedMsg:
 		cmds = append(cmds, m.setStatusMsg("Load subagents failed: "+msg.Err))
+
+	case HooksLoadedMsg:
+		for _, line := range formatHooksLines(msg) {
+			m.vp.AppendLine(line)
+		}
+		m.vp.AppendLine("")
+		cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Loaded %d hook(s), %d skipped", len(msg.Hooks), len(msg.Skipped))))
+
+	case HooksLoadFailedMsg:
+		cmds = append(cmds, m.setStatusMsg("Load hooks failed: "+msg.Err))
 
 	case RunsFetchedMsg:
 		if msg.Err != "" {

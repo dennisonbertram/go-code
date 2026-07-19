@@ -359,3 +359,234 @@ A plugin must **not** import:
 **Hook ordering.** Hooks run in slice order. A plugin that needs to run before another plugin must be registered first. Document ordering dependencies in the plugin's package comment.
 
 **Nil returns from tool hooks.** `PreToolUseHook.PreToolUse` and `PostToolUseHook.PostToolUse` return `(*PreToolUseResult, error)` and `(*PostToolUseResult, error)` respectively. Returning `nil, nil` is explicitly documented as "allow with no modification" — use this as the no-op path.
+
+## Config-driven hooks
+
+Config-driven hooks let end users attach shell commands or HTTP calls to the
+four lifecycle events — `pre_message`, `post_message`, `pre_tool_use`,
+`post_tool_use` — by dropping JSON hook files into a discovery directory, with
+zero Go code. They are an additive layer on top of the hook model above: each
+hook file becomes an adapter that implements the existing hook interfaces and
+is appended to the same `RunnerConfig` hook slices compiled-in plugins use.
+
+### Hook files
+
+Hook files are `*.json` files discovered from:
+
+- **User-global**: `~/.harness/hooks/` — trusted implicitly (the user wrote
+  them into their own config directory).
+- **Project**: `<workspace>/.harness/hooks/` — requires explicit trust before
+  loading (a cloned repository must not execute commands on your machine).
+
+Extra discovery directories can be added with the `[hooks]` config section:
+
+```toml
+[hooks]
+enabled = true                 # default true
+dirs = ["/opt/team-hooks"]     # extra dirs; classify as project (trust required)
+```
+
+### Hook-file schema
+
+```json
+{
+  "name": "deny-rm",                   // optional; defaults to the file base name
+  "event": "pre_tool_use",             // required: pre_message | post_message | pre_tool_use | post_tool_use
+  "kind": "command",                   // required: command | http
+  "command": ["/path/to/script.sh"],   // required for kind=command (argv)
+  "url": "https://example.com/hook",   // required for kind=http (http/https only)
+  "matcher": "bash",                   // optional: exact or glob tool-name matcher (tool-use events only)
+  "timeout_seconds": 5,                // optional: per-hook timeout (default 10s)
+  "include_messages": false            // optional: include full messages in message-event payloads
+}
+```
+
+Unknown fields are rejected. One invalid file never aborts loading — it is
+recorded as a structured skip (file + reason) and surfaced in startup logs and
+the `/hooks` listing.
+
+### Wire protocol (command hooks)
+
+A `command` hook executes its argv once per matching lifecycle event. The
+event arrives as one JSON object on **stdin**; the decision is read as one
+JSON object from **stdout**.
+
+`pre_tool_use` stdin payload:
+
+```json
+{
+  "event": "pre_tool_use",
+  "run_id": "run_...",
+  "hook_name": "deny-rm",
+  "tool_name": "bash",
+  "call_id": "call_...",
+  "args": { "command": "rm -rf /" }
+}
+```
+
+`post_tool_use` adds `"result"` (string), `"duration_ms"` (int), and
+`"error"` (string, empty when the tool succeeded).
+
+The hook replies on **stdout**:
+
+- `pre_tool_use`: `{"decision":"allow"}` (default),
+  `{"decision":"deny","reason":"..."}` blocks the tool and the reason is
+  returned to the LLM as the tool result, or
+  `{"decision":"allow","modified_args":{...}}` replaces the call arguments.
+- `post_tool_use`: `{"modified_result":"..."}` replaces the tool output
+  shown to the LLM.
+
+Semantics:
+
+- Exit 0 with **empty stdout** = allow / no modification.
+- **Non-zero exit, timeout, or unparseable stdout = hook error**, never a
+  deny. The runner's `HookFailureMode` decides: `fail_closed` (default)
+  blocks the tool call, `fail_open` ignores the hook and continues.
+- Every exec is bounded by the hook's timeout (`timeout_seconds`, default
+  10s); on expiry the whole process tree is killed — a hung hook cannot hang
+  a run.
+- Hooks whose `matcher` does not match the event's tool name are not
+  executed at all.
+- Each execution emits runner events (`tool_hook.started/completed/failed`)
+  carrying the hook name, decision, and `duration_ms`; failures additionally
+  log `hook_name`, `event`, `tool_name`, `duration_ms`, `exit_code`, `error`.
+
+Example deny script (`~/.harness/hooks/deny-rm.json` points at it):
+
+```sh
+#!/bin/sh
+# deny destructive rm commands
+payload=$(cat)
+case "$payload" in
+  *"rm -rf"*) echo '{"decision":"deny","reason":"rm -rf is not allowed"}' ;;
+  *)          echo '{"decision":"allow"}' ;;
+esac
+```
+
+The trust model is documented in the section below.
+
+### Trust model
+
+A cloned repository must never execute commands on your machine just because
+it contains a hooks directory. The trust rules:
+
+- **User-global hooks** (`~/.harness/hooks/`) run without any trust step —
+  you wrote them into your own config directory.
+- **Project hooks** (`<workspace>/.harness/hooks/`, plus any extra `[hooks]
+  dirs`) are skipped at load time until you explicitly trust them. Extra
+  dirs classify as project-level on purpose: a malicious project config
+  must not bypass trust by naming a directory.
+
+Trust is keyed by **(file path, SHA-256 of file content)** and recorded in
+`~/.harness/hooks-trust.json` — inside the user-global directory, never the
+project tree, so a project cannot trust itself. Editing a trusted file
+changes its hash, which automatically un-trusts it: a skipped hook shows
+reason `untrusted` (no record) or `modified_since_trusted` (content changed)
+in startup logs and the `/hooks` listing.
+
+Manage trust with the CLI:
+
+```sh
+harnesscli hooks trust .harness/hooks/deny-rm.json   # record content hash
+harnesscli hooks list                                # show trusted files
+harnesscli hooks revoke .harness/hooks/deny-rm.json  # remove record
+```
+
+**Explicit non-goals**: trusting a hook runs it with your full user
+privileges — there is no sandboxing, no command allowlist, and no signature
+scheme. Only trust hook files you have read.
+
+### Wire protocol (HTTP hooks)
+
+An `http` hook POSTs the same JSON event payload to its `url` with
+`Content-Type: application/json` and reads the same decision JSON from the
+response body:
+
+- **2xx with a decision body** = the decision.
+- **2xx with an empty body** = allow / no-op.
+- **Non-2xx, network error, timeout, or unparseable body = hook error** —
+  the runner's `HookFailureMode` decides the outcome, exactly like command
+  hook failures. A hook-endpoint outage is therefore distinguishable from an
+  explicit deny (error vs decision) in both logs and run events.
+- Requests are bounded by the hook's `timeout_seconds` (default 10s) and
+  response bodies are capped at 1 MiB.
+- Retries, custom auth headers, and mTLS are **not supported** in this
+  iteration — put a local relay in front of endpoints that need them.
+
+### Message events (pre_message / post_message)
+
+Both transports also serve the two message events. The payload carries
+`event`, `run_id`, `hook_name`, `step`, `model`, and `message_count`;
+`post_message` adds `response_text` and `tool_call_count`. Full `messages`
+are included **only** when the hook file sets `"include_messages": true`
+(payload-size guard — hooks that only need counts never see prompt content).
+
+The reply is `{"action":"continue"}` (default) or
+`{"action":"block","reason":"..."}` — a block on `pre_message` stops the
+run before the provider call; a block on `post_message` stops it before the
+tool calls execute. **Mutation of message requests/responses via config
+hooks is not supported** — action + reason only (use a compiled-in plugin
+for mutation).
+
+
+### Runtime semantics (startup wiring)
+
+At `harnessd` startup, when `[hooks] enabled` is true (the default), the
+daemon loads hook files trust-aware from `~/.harness/hooks/`,
+`<workspace>/.harness/hooks/`, and any `[hooks] dirs`, builds one adapter per
+definition, and appends them to the same `RunnerConfig` hook slices used by
+compiled-in plugins. **Compiled-in plugins register first** (e.g.
+conclusion-watcher), config-driven hooks after — hook execution order is
+slice order.
+
+Startup logs name every loaded hook (`hook_name`, `event`, `kind`, `source`,
+`file`) and every skipped file (`hook_file`, `skip_reason`), so "why didn't
+my hook fire?" is answerable from startup logs alone. The same summary backs
+`GET /v1/hooks` and the TUI `/hooks` command.
+
+Hook errors during a run honor the runner's existing `HookFailureMode`
+(fail-closed by default): adapters only return errors and decisions; the
+runner applies policy once, at its existing hook call sites. A config-hook
+deny is attributable in the SSE stream via the existing
+`tool_hook.completed` event (hook name, decision, reason, `duration_ms`) —
+no new event types were needed.
+
+**Reload limitation**: hook files are read once at startup. Restart
+`harnessd` after adding, editing, or trusting hook files.
+
+### End-to-end example
+
+```sh
+# 1. Write the hook script (deny destructive rm via bash tool)
+mkdir -p ~/.local/bin
+cat > ~/.local/bin/deny-rm.sh <<'SH'
+#!/bin/sh
+payload=$(cat)
+case "$payload" in
+  *"rm -rf"*) echo '{"decision":"deny","reason":"rm -rf is not allowed"}' ;;
+  *)          echo '{"decision":"allow"}' ;;
+esac
+SH
+chmod +x ~/.local/bin/deny-rm.sh
+
+# 2. Register it as a project hook for pre_tool_use on the bash tool.
+#    Hook argv is exec'd directly — no shell expansion — so use absolute paths.
+mkdir -p .harness/hooks
+cat > .harness/hooks/deny-rm.json <<JSON
+{
+  "name": "deny-rm",
+  "event": "pre_tool_use",
+  "kind": "command",
+  "command": ["$HOME/.local/bin/deny-rm.sh"],
+  "matcher": "bash"
+}
+JSON
+
+# 3. Trust it (project hooks never run untrusted)
+harnesscli hooks trust .harness/hooks/deny-rm.json
+
+# 4. Restart harnessd, then run — a `rm -rf` bash call is denied and the LLM
+#    sees "rm -rf is not allowed" as the tool result.
+
+# 5. Inspect what loaded: GET /v1/hooks, or /hooks in the TUI.
+```

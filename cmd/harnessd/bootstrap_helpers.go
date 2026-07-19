@@ -14,6 +14,7 @@ import (
 	"go-agent-harness/internal/harness"
 	htools "go-agent-harness/internal/harness/tools"
 	"go-agent-harness/internal/harness/tools/deferred"
+	"go-agent-harness/internal/hooks"
 	linearadapter "go-agent-harness/internal/linear"
 	"go-agent-harness/internal/networks"
 	"go-agent-harness/internal/provider/anthropic"
@@ -393,6 +394,7 @@ type serverBootstrapOptions struct {
 	todos            deferred.TodoManager
 	triggers         triggerRuntime
 	rolloutDir       string
+	hooksSummary     hooks.Summary
 }
 
 func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
@@ -419,5 +421,6 @@ func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
 		SlackAdapter:     opts.triggers.slack,
 		LinearAdapter:    opts.triggers.linear,
 		RolloutDir:       opts.rolloutDir,
+		HooksSummary:     opts.hooksSummary,
 	}
 }

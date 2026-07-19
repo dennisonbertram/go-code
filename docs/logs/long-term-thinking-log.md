@@ -1,5 +1,25 @@
 # Long-Term Thinking Log
 
+## 2026-06-28 (Config-Driven Lifecycle Hooks — Epic #737)
+
+- Command intent: Implement epic #737 and all six child issues (#741, #744, #750, #755, #759, #763) in a dedicated worktree, landing config-driven shell/HTTP lifecycle hooks end to end, then open a PR.
+- User intent: Let end users attach shell commands or HTTP calls to the four runner lifecycle events (PreMessage, PostMessage, PreToolUse, PostToolUse) — with PreToolUse deny support — without writing Go code, while keeping cloned-repo project hooks opt-in via explicit trust.
+- Success definition:
+  - `internal/hooks` package: hook-file schema, trust-aware loader with structured skip records, command + HTTP adapters implementing the four existing `internal/harness` hook interfaces unchanged, content-hash trust store in the user-global dir.
+  - `[hooks]` TOML section in `internal/config` following the raw-layer merge pattern.
+  - `harnessd` startup appends config-driven adapters to existing `RunnerConfig` hook slices after compiled-in plugins (conclusion-watcher pattern), with structured startup logs per loaded/skipped hook.
+  - `harnesscli hooks trust|revoke|list` manages project-hook trust; `GET /v1/hooks` and TUI `/hooks` render the startup-computed loaded/skipped summary.
+  - A command PreToolUse hook returning deny blocks the tool and the LLM sees the reason; hook errors honor `HookFailureMode` (both modes tested).
+  - Strict TDD per slice; fast PR gate and `./scripts/test-regression.sh` green before PR.
+- Non-goals: SessionStart/Stop events (no runner call sites), hook retries/auth/mTLS, interactive TUI trust flows, hook file hot-reload, hook sandboxing, message request/response mutation via config hooks.
+- Guardrails/constraints:
+  - No changes to the four hook interface signatures; no parallel hook system; adapters only return errors/decisions (failure policy stays in the runner).
+  - Trust decisions keyed by (path, SHA-256 of content); store lives under `~/.harness/`, never the project tree.
+  - Per-hook timeout bounds every subprocess/HTTP call; timeouts kill the child process.
+  - Plan: `docs/plans/2026-06-28-config-driven-hooks-epic-737-plan.md`.
+- Open questions: none blocking — SSE recon confirmed the runner already emits hook-name-attributed started/completed/failed events, so no new run-event types are needed for #759.
+- Next verification step: implement slices in dependency order with failing tests first, then run `go test ./internal/... ./cmd/...` and `./scripts/test-regression.sh` before opening the PR.
+
 ## 2026-06-27 (Go-Authored Custom Workflows)
 
 - Command intent: Implement custom workflows that agents can create, save, run, and monitor as Go source without restarting `harnessd`.

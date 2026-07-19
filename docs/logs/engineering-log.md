@@ -1,5 +1,36 @@
 # Engineering Log
 
+## 2026-06-28 (Config-Driven Lifecycle Hooks — Epic #737)
+
+- Implemented epic #737 and all six child issues (#741, #744, #750, #755, #759, #763) in worktree branch `codex/config-hooks-epic-737`, one commit per slice, strict TDD throughout.
+- New package `internal/hooks`:
+  - Hook-file schema + loader with strict JSON decoding (unknown fields rejected), structured per-file skip records, deterministic ordering, and user/project source classification.
+  - Command + HTTP adapters implementing the four existing `internal/harness` hook interfaces unchanged; JSON wire types defined once in `wire.go` and shared by both adapters (pinned by golden tests).
+  - Content-hash trust store (`~/.harness/hooks-trust.json`) gating project-level hook files; user-global files trusted implicitly; atomic temp+rename writes; corrupt/missing store fails closed (empty).
+  - `Build` (def → adapter routed by event) and `Summary` (startup-computed listing, non-nil empty slices so JSON marshals `[]`).
+- `internal/config`: `[hooks]` TOML section (`enabled`, `dirs`) following the existing rawLayer pointer-merge pattern.
+- `cmd/harnessd`: `registerConfigDrivenHooks` appends adapters to existing `RunnerConfig` hook slices after compiled-in plugins; structured startup logs per loaded/skipped hook; summary flows through `runtime_container` → `buildServerOptions` → `ServerOptions.HooksSummary`.
+- `internal/server`: `GET /v1/hooks` serves the startup summary (read scope); never re-derives per request.
+- `cmd/harnesscli`: `hooks trust|revoke|list` maintenance subcommand; TUI `/hooks` command rendering the server listing (loaded table + skipped section + empty state) through the existing registry/API-client/viewport paths.
+- `internal/harness/runner.go` (additive only): `duration_ms` on `tool_hook.completed`/`tool_hook.failed` events, matching the message-hook observability contract. No interface-signature changes anywhere.
+- Bugs found during implementation (each got a permanent regression guard):
+  - **Parallel test file collision**: table-driven command-adapter subtests shared one `hook.sh` path in one temp dir, so parallel subtests overwrote each other's scripts and every case saw the same script. Symptom: incoherent failures (deny results on allow cases). Cause: shared mutable file across `t.Parallel()` subtests. Fix: per-subtest `t.TempDir()` — the fixed table structure is the regression guard.
+  - **httptest timeout test hung 30s**: the server handler blocked on `r.Context().Done()` but the Go server only cancels the request context on client disconnect after the handler has consumed the request body. Symptom: package suite took 30s. Cause: handler never read the body, so disconnect went undetected and the `time.After(30s)` backstop fired. Fix: consume the body first, then block on `r.Context().Done()`; suite back to ~1s.
+  - **Timeout-kill test flake under race/parallel load**: the orphan assertion checked `kill(pid, 0)` once immediately after the kill; the background grandchild is reparented to init and reaped asynchronously, so a single instantaneous check raced reaping. Fix: poll for process death with a 5s deadline — assertion strength unchanged (processes must die), timing tolerance added.
+  - **Same test, second flake mode (found by the fast PR gate)**: with a 1s hook timeout, full-suite CPU contention could fire the timeout before the just-exec'd script wrote its pid files — the orphan assertion then failed on missing files. Root cause: the test's pid discovery assumed script startup < hook timeout. Deterministic redesign: the hook runs in a goroutine, the test waits for pid files to appear (4s budget) before the 5s hook timeout fires, then asserts the timeout error and polls for process death; under pathological startup latency it degrades (with a `t.Logf`) to the timeout-error assertion only. Verified with `go test -race -count=3 ./internal/hooks/` under concurrent CPU load.
+  - **Linux ETXTBSY (found by PR CI, invisible on macOS)**: `TestCommandHook_PostToolUse/empty_stdout_is_no_modification` failed in CI with `fork/exec .../post-empty.sh: text file busy` — the known overlayfs/Linux pattern of exec'ing a file written milliseconds earlier. Fix: all script-exec test sites (unit, integration, server e2e) run scripts through `/bin/sh <script>` — reading a just-written file never hits ETXTBSY. Adapter behavior unchanged (production hooks are exec'd directly; the window only exists for just-written files). PR CI then passed on both jobs.
+- Observability: adapters log structured failure fields (`hook_name`, `event`, `tool_name`/`url`, `duration_ms`, `exit_code`/`status_code`, `error`) through the runner's `harness.Logger`; every exec emits existing `tool_hook.*`/`hook.*` SSE events with hook name, decision, and `duration_ms` — recon confirmed no new SSE event types were needed for config-hook deny attribution (documented in plugins.md).
+- Docs: `docs/design/plugins.md` gained the full "Config-driven hooks" chapter (schema, discovery, command + HTTP wire protocols, message events, trust model, runtime semantics, end-to-end example); CLAUDE.md gained the Lifecycle Hooks HTTP API section; `docs/ux-paths.md` slash-command table gained `/hooks`; plans/design indexes updated.
+- Note: no dedicated TOML config-reference doc exists (grepped docs/ for `conclusion_watcher` — only investigations/plans matched); the `[hooks]` section is documented in plugins.md instead, per the #741 fallback instruction.
+- Validation:
+  - Red phase per slice: new tests failed to compile/run before implementation (undefined `Load`, `NewCommandHook`, `NewHTTPHook`, `LoadTrustStore`, `Build`, `registerConfigDrivenHooks`, `loadHooksCmd`).
+  - Green phase per slice: `go test ./internal/hooks/ ./internal/config/ ./cmd/harnessd/ ./internal/server/ ./cmd/harnesscli/...` all pass.
+  - `go test -race -count=5 ./internal/hooks/` passes consecutively (post flake-fix).
+  - Fast PR gate `go test ./internal/... ./cmd/...`: 95 packages ok, exit 0.
+  - `./scripts/test-regression.sh`: PASS, `coveragegate: PASS (total=84.4%, min=80.0%, zero-functions=0)`.
+  - PR #784 CI: both `test` jobs pass on the final head (`09569df8`).
+  - `gofmt -l` clean on all touched files; `go vet` clean on all touched packages. (Pre-existing repo-wide gofmt drift on untouched files verified identical on `main`.)
+
 ## 2026-06-26 (Reliability T01 Memory Retention)
 
 - Implemented reliability plan slice T01 locally:

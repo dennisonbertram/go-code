@@ -39,6 +39,15 @@ The workflow engine is exposed via HTTP routes in the server (`internal/server/h
 - `GET /v1/script-workflow-runs/{id}/events` — SSE event stream
 - `POST /v1/script-workflow-runs/{id}/resume` — resume a failed run
 
+### Lifecycle Hooks HTTP API
+
+Config-driven lifecycle hooks (shell/HTTP, epic #737) are listed via:
+
+- `GET /v1/hooks` — startup-computed listing of loaded hooks (name, event, kind, source, matcher)
+  and skipped hook files (file, reason: untrusted / modified_since_trusted / invalid).
+  Read-only; trust is managed offline with `harnesscli hooks trust|revoke|list`.
+  See `docs/design/plugins.md` → "Config-driven hooks" for the hook-file schema and wire protocol.
+
 Wiring: `ServerOptions.ScriptWorkflows` accepts a `scriptWorkflowManager` interface.
 15 POC tests in `internal/server/http_script_workflows_test.go` and `*_advanced_test.go`
 cover CRUD, SSE streaming, resume, adversarial verify, loop-until-dry, concurrent fan-out,

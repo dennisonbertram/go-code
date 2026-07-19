@@ -17,6 +17,7 @@ import (
 	"go-agent-harness/internal/harness/tools"
 	"go-agent-harness/internal/harness/tools/deferred"
 	"go-agent-harness/internal/harness/tools/recipe"
+	"go-agent-harness/internal/hooks"
 	linearadapter "go-agent-harness/internal/linear"
 	"go-agent-harness/internal/provider/catalog"
 	"go-agent-harness/internal/relay"
@@ -170,6 +171,11 @@ type ServerOptions struct {
 	//     to a per-tenant subdirectory.
 	// When empty (or auth disabled), replay path handling is unrestricted (legacy).
 	RolloutDir string
+	// HooksSummary is the startup-computed config-driven hook listing served
+	// by GET /v1/hooks (epic #737). It is computed once at harnessd startup —
+	// never re-derived per request — so the listing always matches what the
+	// runner actually registered. The zero value serves empty lists.
+	HooksSummary hooks.Summary
 	// MaxRequestBodyBytes caps non-replay request bodies. Values <= 0 use the default.
 	MaxRequestBodyBytes int64
 	// ReplayMaxRequestBodyBytes caps POST /v1/runs/replay bodies. Values <= 0 use the default.
@@ -219,6 +225,7 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		relayControl:      opts.RelayControl,
 		toolCatalog:       opts.Tools,
 		rolloutDir:        opts.RolloutDir,
+		hooksSummary:      opts.HooksSummary,
 		maxBodyBytes:      opts.MaxRequestBodyBytes,
 		replayBodyBytes:   opts.ReplayMaxRequestBodyBytes,
 		handlerTimeout:    opts.HandlerTimeout,
@@ -347,6 +354,9 @@ func (s *Server) buildMux() http.Handler {
 	// /v1/tools — enumerate the registered tool catalog (runs:read).
 	mux.Handle("/v1/tools", auth(http.HandlerFunc(s.handleTools)))
 
+	// GET /v1/hooks — config-driven hook listing (epic #737); read scope.
+	mux.Handle("/v1/hooks", auth(read(http.HandlerFunc(s.handleHooks))))
+
 	return s.hardenHandler(mux)
 }
 
@@ -456,6 +466,11 @@ type Server struct {
 	// evaluation) and content-based tenant ownership verification (owning
 	// tenant_id in the rollout must match the caller's authenticated tenant).
 	rolloutDir string
+
+	// hooksSummary is the startup-computed config-driven hook listing served
+	// by GET /v1/hooks. Zero value = hooks disabled or none loaded; the route
+	// still serves empty arrays rather than null.
+	hooksSummary hooks.Summary
 
 	maxBodyBytes    int64
 	replayBodyBytes int64

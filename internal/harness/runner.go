@@ -2373,22 +2373,25 @@ func (r *Runner) applyPreToolUseHooks(ctx context.Context, runID string, call To
 			argsBefore = string(*callArgs)
 		}
 
+		hookStart := time.Now()
 		result, err := safeCallPreToolUseHook(hook, ctx, PreToolUseEvent{
 			ToolName: call.Name,
 			CallID:   call.ID,
 			Args:     append(json.RawMessage(nil), *callArgs...),
 			RunID:    runID,
 		})
+		hookDuration := time.Since(hookStart)
 
 		if err != nil {
 			ignored := r.config.HookFailureMode == HookFailureModeFailOpen
 			r.emit(runID, EventToolHookFailed, map[string]any{
-				"stage":   "pre_tool_use",
-				"hook":    hookName,
-				"tool":    call.Name,
-				"call_id": call.ID,
-				"error":   err.Error(),
-				"ignored": ignored,
+				"stage":       "pre_tool_use",
+				"hook":        hookName,
+				"tool":        call.Name,
+				"call_id":     call.ID,
+				"error":       err.Error(),
+				"ignored":     ignored,
+				"duration_ms": hookDuration.Milliseconds(),
 			})
 			if r.config.TraceHookMutations {
 				// Hook error in fail_closed mode counts as an implicit block.
@@ -2420,12 +2423,13 @@ func (r *Runner) applyPreToolUseHooks(ctx context.Context, runID string, call To
 		// nil result is treated as allow with no modification
 		if result == nil {
 			r.emit(runID, EventToolHookCompleted, map[string]any{
-				"stage":    "pre_tool_use",
-				"hook":     hookName,
-				"tool":     call.Name,
-				"call_id":  call.ID,
-				"decision": "allow",
-				"mutated":  false,
+				"stage":       "pre_tool_use",
+				"hook":        hookName,
+				"tool":        call.Name,
+				"call_id":     call.ID,
+				"decision":    "allow",
+				"mutated":     false,
+				"duration_ms": hookDuration.Milliseconds(),
 			})
 			continue
 		}
@@ -2442,13 +2446,14 @@ func (r *Runner) applyPreToolUseHooks(ctx context.Context, runID string, call To
 		}
 
 		r.emit(runID, EventToolHookCompleted, map[string]any{
-			"stage":    "pre_tool_use",
-			"hook":     hookName,
-			"tool":     call.Name,
-			"call_id":  call.ID,
-			"decision": decision,
-			"reason":   result.Reason,
-			"mutated":  mutated,
+			"stage":       "pre_tool_use",
+			"hook":        hookName,
+			"tool":        call.Name,
+			"call_id":     call.ID,
+			"decision":    decision,
+			"reason":      result.Reason,
+			"mutated":     mutated,
+			"duration_ms": hookDuration.Milliseconds(),
 		})
 
 		// Forensics Part 3: emit hook mutation event when tracing is enabled.
@@ -2518,6 +2523,7 @@ func (r *Runner) applyPostToolUseHooks(ctx context.Context, runID string, call T
 			"call_id": call.ID,
 		})
 
+		hookStart := time.Now()
 		result, err := safeCallPostToolUseHook(hook, ctx, PostToolUseEvent{
 			ToolName: call.Name,
 			CallID:   call.ID,
@@ -2527,16 +2533,18 @@ func (r *Runner) applyPostToolUseHooks(ctx context.Context, runID string, call T
 			Error:    toolErr,
 			RunID:    runID,
 		})
+		hookDuration := time.Since(hookStart)
 
 		if err != nil {
 			ignored := r.config.HookFailureMode == HookFailureModeFailOpen
 			r.emit(runID, EventToolHookFailed, map[string]any{
-				"stage":   "post_tool_use",
-				"hook":    hookName,
-				"tool":    call.Name,
-				"call_id": call.ID,
-				"error":   err.Error(),
-				"ignored": ignored,
+				"stage":       "post_tool_use",
+				"hook":        hookName,
+				"tool":        call.Name,
+				"call_id":     call.ID,
+				"error":       err.Error(),
+				"ignored":     ignored,
+				"duration_ms": hookDuration.Milliseconds(),
 			})
 			if !ignored {
 				// fail_closed: stop the chain and return current output unchanged
@@ -2553,11 +2561,12 @@ func (r *Runner) applyPostToolUseHooks(ctx context.Context, runID string, call T
 		}
 
 		r.emit(runID, EventToolHookCompleted, map[string]any{
-			"stage":   "post_tool_use",
-			"hook":    hookName,
-			"tool":    call.Name,
-			"call_id": call.ID,
-			"mutated": mutated,
+			"stage":       "post_tool_use",
+			"hook":        hookName,
+			"tool":        call.Name,
+			"call_id":     call.ID,
+			"mutated":     mutated,
+			"duration_ms": hookDuration.Milliseconds(),
 		})
 	}
 	return current

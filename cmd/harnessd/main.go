@@ -819,6 +819,11 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		cw.Register(&runnerCfg)
 	}
 
+	// Config-driven lifecycle hooks (epic #737): load hook files trust-aware
+	// and append adapters to the existing hook slices. Runs AFTER compiled-in
+	// plugins so plugin hooks keep their leading slice position.
+	hooksSummary := registerConfigDrivenHooks(harnessCfg, workspace, home, &runnerCfg)
+
 	subagentConfigTOML, err := config.WorkspaceRunnerConfigFromConfig(harnessCfg).ToTOML()
 	if err != nil {
 		return fmt.Errorf("serialize subagent config: %w", err)
@@ -905,6 +910,7 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		callbackBridge:       callbackBridge,
 		msgSummarizer:        msgSummarizer,
 		skillManager:         skillManager,
+		hooksSummary:         hooksSummary,
 		subagentBaseRef:      subagentBaseRef,
 		subagentWorktreeRoot: subagentWorktreeRoot,
 		subagentConfigTOML:   subagentConfigTOML,
