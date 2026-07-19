@@ -91,7 +91,8 @@ type runState struct {
 	// run.failed) has been emitted. Any subsequent emit() call returns
 	// immediately to prevent post-terminal streaming callbacks from appending
 	// events after the forensic record is closed.
-	terminated bool
+	terminated             bool
+	terminalEventPersisted bool
 	// compactMu serializes auto-compact and manual CompactRun calls.
 	compactMu sync.RWMutex
 	// resetIndex increments each time the agent calls reset_context.
@@ -217,6 +218,8 @@ const recorderDrainTimeout = 30 * time.Second
 // fails the run explicitly. Handles Gemini 2.5 Flash thinking mode where
 // the model returns 0 completion_tokens with empty content.
 const maxEmptyRetries = 3
+
+const terminalEventStoreTimeout = 5 * time.Second
 
 const (
 	defaultMaxCompletedRetention    = 32
@@ -421,7 +424,7 @@ func (r *Runner) pruneCompletedRunsLocked() {
 	terminalCount := 0
 	candidates := make([]retainedRunCandidate, 0)
 	for runID, state := range r.runs {
-		if state == nil || !isTerminalRunStatus(state.run.Status) {
+		if state == nil || !isTerminalRunStatus(state.run.Status) || !state.terminalEventPersisted {
 			continue
 		}
 		terminalCount++
@@ -4966,9 +4969,9 @@ func shouldPersistWorkflowRecap(status RunStatus) bool {
 // storeAppendEvent persists a single event to the store.
 // Called from emit() after the event is appended to state.events.
 // Executed outside the lock to avoid increasing lock hold time.
-func (r *Runner) storeAppendEvent(ev Event, seq uint64) {
+func (r *Runner) storeAppendEvent(ev Event, seq uint64) bool {
 	if r.config.Store == nil {
-		return
+		return true
 	}
 	payloadJSON, err := json.Marshal(ev.Payload)
 	if err != nil {
@@ -4982,11 +4985,23 @@ func (r *Runner) storeAppendEvent(ev Event, seq uint64) {
 		Payload:   string(payloadJSON),
 		Timestamp: ev.Timestamp,
 	}
-	if err := r.config.Store.AppendEvent(context.Background(), se); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), terminalEventStoreTimeout)
+	defer cancel()
+	if err := r.config.Store.AppendEvent(ctx, se); err != nil {
 		if r.config.Logger != nil {
 			r.config.Logger.Error("store: AppendEvent failed",
 				"run_id", ev.RunID, "event_type", string(ev.Type), "seq", seq, "error", err)
 		}
+		return false
+	}
+	return true
+}
+
+func (r *Runner) markTerminalEventPersisted(runID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if state := r.runs[runID]; state != nil {
+		state.terminalEventPersisted = true
 	}
 }
 
