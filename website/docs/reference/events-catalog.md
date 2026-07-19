@@ -66,6 +66,8 @@ Three events signal the end of the stream. Clients MUST stop reading after recei
 
 `IsTerminalEvent(et EventType) bool` returns `true` for exactly these three types (source: `internal/harness/events.go:466–468`).
 
+In headless mode (`harnesscli -prompt ...` or streaming `harnesscli continue`) the terminal event also determines the process exit code — see [Exit Codes](/docs/reference/exit-codes) for the mapping.
+
 ---
 
 ## Run lifecycle

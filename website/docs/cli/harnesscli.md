@@ -42,6 +42,8 @@ When you invoke `harnesscli` with no recognized subcommand — typically just `-
 
 Terminal events are `run.completed`, `run.failed`, and `run.cancelled`. Every non-terminal event is printed as a single line: `<event_type> <full_event_json>`.
 
+The process exit code reports the run's outcome for scripts and CI — see [Exit Codes](/docs/reference/exit-codes) for the headless exit-code contract (which terminal event maps to which code, plus blocked and interrupted runs).
+
 ### Flags
 
 | Flag | Default | Description |
@@ -177,7 +179,7 @@ The continuation prompt is everything after the run ID, joined with spaces.
 | `-base-url` | `http://localhost:8080` | Harness API base URL |
 | `-no-stream` | `false` | Print only `run_id=<id>` and exit without streaming events |
 
-When `-no-stream` is false (the default), the new run's events are streamed and `terminal_event=<type>` is printed on completion. When `-no-stream` is true, only `run_id=<id>` is printed.
+When `-no-stream` is false (the default), the new run's events are streamed and `terminal_event=<type>` is printed on completion; the same [exit-code contract](/docs/reference/exit-codes) as the one-shot mode applies. When `-no-stream` is true, only `run_id=<id>` is printed and the exit code stays `0`/`1` (no terminal event is observed).
 
 ---
 
@@ -453,6 +455,7 @@ harnesscli auth login -server http://myserver:9090 -tenant myteam
 ## Next steps
 
 - **Server setup** — See [harnessd Reference](/docs/server/harnessd) to learn how to configure and start the server `harnesscli` connects to.
+- **Exit codes** — See [Exit Codes](/docs/reference/exit-codes) for the headless exit-code contract used when scripting runs from shell or CI.
 - **Event reference** — See [Events](/docs/concepts/events) for the full list of SSE event types and their payloads.
 - **Rollout & replay** — See [Rollout & Replay](/docs/operations/rollout-replay-forensics) for the underlying replay, fork, and drift-detection semantics.
 - **Configuration** — See [Environment Variables](/docs/reference/environment-variables) for `HARNESS_PROVIDER`, `HARNESS_FAKE_TURNS`, and the full `HARNESS_*` env var reference.

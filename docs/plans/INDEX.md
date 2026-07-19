@@ -1,5 +1,6 @@
 # Plans Index
 
+- `823-exit-codes.md` — Epic #823 Slice 1 (docs-only): ratify the headless CLI exit-code contract page for runs and goals.
 - `2026-07-19-acp-epic-746-plan.md` — ACP server mode epic #746 (in implementation).
 
 - `PLAN_TEMPLATE.md`: Required template for pre-implementation planning with checklist.
