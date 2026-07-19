@@ -71,6 +71,11 @@
   covering validation, ramp timing via an injected ticker, env cap,
   cancellation propagation, per-member failure capture, and an acceptance
   test through a real `Manager` + `InlineManager`.
+- Coverage-gate lesson: the zero-coverage-function gate caught an unused
+  speculative option (`WithSwarmRamp`) after the first full regression run.
+  The epic fixes the ramp at 5/+1-per-700ms with only the env cap as a knob,
+  so the option was removed (dead code) rather than padded with a test for
+  behavior nothing calls. Keep slice API surface to what the epic specifies.
 - Validation: `go test ./internal/subagents/... -count=1` and `-race` green;
   new tests repeated 5x without flakes.
 - Note: epic-level docs (`agent_swarm` tool description, swarm design doc)

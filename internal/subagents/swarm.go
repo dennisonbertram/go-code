@@ -120,11 +120,9 @@ func (r realSwarmTicker) Stop()                  { r.t.Stop() }
 // allowance, propagates caller cancellation to every member, and aggregates
 // the per-member results into one report.
 type Swarm struct {
-	manager            tools.SubagentManager
-	maxConcurrency     int
-	initialConcurrency int
-	rampInterval       time.Duration
-	newTicker          func(time.Duration) swarmTicker
+	manager        tools.SubagentManager
+	maxConcurrency int
+	newTicker      func(time.Duration) swarmTicker
 }
 
 // SwarmOption customizes a Swarm; options are applied after the environment
@@ -137,19 +135,6 @@ func WithSwarmMaxConcurrency(n int) SwarmOption {
 	return func(s *Swarm) {
 		if n >= 1 {
 			s.maxConcurrency = n
-		}
-	}
-}
-
-// WithSwarmRamp overrides the initial burst size and the ramp interval.
-// Non-positive values are ignored.
-func WithSwarmRamp(initial int, interval time.Duration) SwarmOption {
-	return func(s *Swarm) {
-		if initial >= 1 {
-			s.initialConcurrency = initial
-		}
-		if interval > 0 {
-			s.rampInterval = interval
 		}
 	}
 }
@@ -169,10 +154,8 @@ func withSwarmTickerFactory(f func(time.Duration) swarmTicker) SwarmOption {
 // HARNESS_SWARM_MAX_CONCURRENCY unless overridden by an option.
 func NewSwarm(manager tools.SubagentManager, opts ...SwarmOption) *Swarm {
 	s := &Swarm{
-		manager:            manager,
-		maxConcurrency:     resolveSwarmMaxConcurrency(os.Getenv),
-		initialConcurrency: defaultSwarmInitialConcurrency,
-		rampInterval:       defaultSwarmRampInterval,
+		manager:        manager,
+		maxConcurrency: resolveSwarmMaxConcurrency(os.Getenv),
 		newTicker: func(d time.Duration) swarmTicker {
 			return realSwarmTicker{t: time.NewTicker(d)}
 		},
@@ -185,17 +168,6 @@ func NewSwarm(manager tools.SubagentManager, opts ...SwarmOption) *Swarm {
 	}
 	if s.maxConcurrency < 1 {
 		s.maxConcurrency = 1
-	}
-	if s.initialConcurrency < 1 {
-		s.initialConcurrency = 1
-	}
-	if s.rampInterval <= 0 {
-		s.rampInterval = defaultSwarmRampInterval
-	}
-	if s.newTicker == nil {
-		s.newTicker = func(d time.Duration) swarmTicker {
-			return realSwarmTicker{t: time.NewTicker(d)}
-		}
 	}
 	return s
 }
@@ -298,7 +270,7 @@ func (s *Swarm) Run(ctx context.Context, req SwarmRequest) (SwarmReport, error) 
 	swarmCtx, stopSwarm := context.WithCancel(context.Background())
 	defer stopSwarm()
 
-	ticker := s.newTicker(s.rampInterval)
+	ticker := s.newTicker(defaultSwarmRampInterval)
 	defer ticker.Stop()
 
 	type outcome struct {
@@ -328,15 +300,12 @@ func (s *Swarm) Run(ctx context.Context, req SwarmRequest) (SwarmReport, error) 
 	inFlight := 0
 	started := 0
 	finished := 0
-	allowance := s.initialConcurrency
+	allowance := defaultSwarmInitialConcurrency
 	if allowance > s.maxConcurrency {
 		allowance = s.maxConcurrency
 	}
 	if allowance > n {
 		allowance = n
-	}
-	if allowance < 1 {
-		allowance = 1
 	}
 
 	launch := func(idx int) {
