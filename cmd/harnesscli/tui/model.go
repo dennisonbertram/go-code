@@ -392,11 +392,16 @@ func New(cfg TUIConfig) Model {
 	m.commandRegistry = m.buildCommandRegistry()
 	// Set default plugins directory (~/.config/harnesscli/plugins) and load any
 	// custom slash-command plugins from it. Errors and collisions are stored as
-	// warnings and shown to the user via a status message in Init().
+	// warnings and shown to the user via a status message in Init(). A non-empty
+	// legacy directory also adds a deprecation warning pointing at the
+	// installable bundle format.
 	if m.pluginsDir == "" {
 		m.pluginsDir = defaultPluginsDir()
 	}
 	m.pluginWarnings = LoadAndRegisterPlugins(m.commandRegistry, append([]string{m.pluginsDir}, installablePluginCommandDirs()...)...)
+	if warning := legacyPluginsDirWarning(m.pluginsDir); warning != "" {
+		m.pluginWarnings = append(m.pluginWarnings, warning)
+	}
 	// Wire help dialog with real command list and keybindings derived from the
 	// registered commands and the default key map.
 	m.helpDialog = buildHelpDialog(m.commandRegistry, m.keys)
@@ -1760,7 +1765,7 @@ func (m Model) Init() tea.Cmd {
 	}
 	// Schedule a status message when plugin warnings were collected at startup.
 	if len(m.pluginWarnings) > 0 {
-		msg := fmt.Sprintf("%d plugin(s) had errors loading", len(m.pluginWarnings))
+		msg := fmt.Sprintf("%d plugin warning(s) at startup", len(m.pluginWarnings))
 		cmds = append(cmds, func() tea.Msg {
 			return pluginWarningMsg{text: msg}
 		})

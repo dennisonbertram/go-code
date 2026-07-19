@@ -72,3 +72,64 @@ func TestLoadAndRegisterPlugins_SkipsCommandCollisions(t *testing.T) {
 		t.Fatalf("expected built-in help command to remain intact, got status %v", result.Status)
 	}
 }
+
+func TestLegacyPluginsDirWarning_NonEmptyLegacyDir(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	pluginJSON := `{
+		"name": "summarize",
+		"description": "Summarize the current topic",
+		"handler": "prompt",
+		"prompt_template": "Summarize: {args}"
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "summarize.json"), []byte(pluginJSON), 0o644); err != nil {
+		t.Fatalf("write plugin file: %v", err)
+	}
+
+	warning := legacyPluginsDirWarning(dir)
+	if warning == "" {
+		t.Fatal("expected a deprecation warning for a legacy dir containing JSON plugins")
+	}
+	if !strings.Contains(warning, dir) {
+		t.Fatalf("expected warning to name the legacy dir %q, got %q", dir, warning)
+	}
+	if !strings.Contains(warning, "deprecated") {
+		t.Fatalf("expected warning to mark the legacy format deprecated, got %q", warning)
+	}
+	if !strings.Contains(warning, ".go-harness/plugins") {
+		t.Fatalf("expected warning to point at the bundle home, got %q", warning)
+	}
+	if !strings.Contains(warning, "plugin.json") {
+		t.Fatalf("expected warning to point at the bundle manifest, got %q", warning)
+	}
+}
+
+func TestLegacyPluginsDirWarning_NoWarningCases(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing dir", func(t *testing.T) {
+		t.Parallel()
+		if warning := legacyPluginsDirWarning(filepath.Join(t.TempDir(), "does-not-exist")); warning != "" {
+			t.Fatalf("expected no warning for a missing dir, got %q", warning)
+		}
+	})
+
+	t.Run("empty dir", func(t *testing.T) {
+		t.Parallel()
+		if warning := legacyPluginsDirWarning(t.TempDir()); warning != "" {
+			t.Fatalf("expected no warning for an empty dir, got %q", warning)
+		}
+	})
+
+	t.Run("no json files", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "notes.md"), []byte("hi"), 0o644); err != nil {
+			t.Fatalf("write file: %v", err)
+		}
+		if warning := legacyPluginsDirWarning(dir); warning != "" {
+			t.Fatalf("expected no warning for a dir without JSON plugins, got %q", warning)
+		}
+	})
+}
