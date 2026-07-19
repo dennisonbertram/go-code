@@ -2,7 +2,19 @@ package harness
 
 import (
 	"context"
+	"errors"
 	"time"
+)
+
+// Typed errors returned by ConversationStore.UndoPrompts so transport layers
+// can map them to precise status codes (e.g. 400 vs 409).
+var (
+	// ErrUndoCountOutOfRange is returned when count is less than 1 or the
+	// conversation holds fewer than count non-meta user prompts.
+	ErrUndoCountOutOfRange = errors.New("undo count out of range")
+	// ErrUndoCrossesCompaction is returned when the undo target prompt sits at
+	// or below the most recent compaction summary, where undo is forbidden.
+	ErrUndoCrossesCompaction = errors.New("undo crosses compaction boundary")
 )
 
 // Conversation holds metadata for a conversation.
@@ -84,6 +96,19 @@ type ConversationStore interface {
 	// keepFromStep > max_step keeps no existing messages (only the summary remains).
 	// Returns an error if the conversation does not exist or keepFromStep < 0.
 	CompactConversation(ctx context.Context, convID string, keepFromStep int, summary Message) error
+	// UndoPrompts removes the last count non-meta user prompts and every message
+	// after them from the conversation, transactionally. It locates the
+	// Nth-from-last user prompt (count=1 is the most recent), deletes it and all
+	// messages with a higher step, and persists an is_meta undo-boundary marker
+	// at the removed step so the truncation round-trips through LoadMessages and
+	// export. It returns the step from which messages were removed.
+	//
+	// Returns ErrUndoCountOutOfRange when count < 1 or fewer than count non-meta
+	// user prompts exist, and ErrUndoCrossesCompaction when the target prompt's
+	// step is at or below the most recent is_compact_summary message. A failed
+	// undo leaves the conversation unchanged. Returns an error if the
+	// conversation does not exist.
+	UndoPrompts(ctx context.Context, convID string, count int) (removedFromStep int, err error)
 }
 
 // PlanContentStore is an optional run-scoped extension implemented by the

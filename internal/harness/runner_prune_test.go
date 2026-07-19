@@ -304,3 +304,7 @@ func (s *memoryConversationStore) PinConversation(context.Context, string, bool)
 func (s *memoryConversationStore) CompactConversation(context.Context, string, int, Message) error {
 	return nil
 }
+
+func (s *memoryConversationStore) UndoPrompts(context.Context, string, int) (int, error) {
+	return 0, nil
+}

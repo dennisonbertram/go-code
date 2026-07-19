@@ -846,6 +846,88 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 	return tx.Commit()
 }
 
+// UndoPrompts removes the last count non-meta user prompts and all messages
+// after them in one transaction, then persists an is_meta undo-boundary marker
+// at the step the target prompt occupied. The target is the Nth-from-last
+// message with role 'user' and is_meta = 0 (count=1 is the most recent prompt).
+// The undo is refused with ErrUndoCrossesCompaction when the target step is at
+// or below the most recent is_compact_summary message, and with
+// ErrUndoCountOutOfRange when count is invalid or too few prompts exist.
+func (s *SQLiteConversationStore) UndoPrompts(ctx context.Context, convID string, count int) (int, error) {
+	if count < 1 {
+		return 0, fmt.Errorf("%w: count must be >= 1, got %d", ErrUndoCountOutOfRange, count)
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("undo: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Verify the conversation exists.
+	var exists int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM conversations WHERE id = ?`, convID).Scan(&exists); err != nil {
+		return 0, fmt.Errorf("undo: check conversation: %w", err)
+	}
+	if exists == 0 {
+		return 0, fmt.Errorf("undo: conversation %q not found", convID)
+	}
+
+	// Locate the Nth-from-last non-meta user prompt: newest-first, the row at
+	// OFFSET count-1. Meta messages (skill injections, prior undo markers) are
+	// not prompts and are never counted.
+	var targetStep int
+	err = tx.QueryRowContext(ctx, `
+SELECT step FROM conversation_messages
+WHERE conversation_id = ? AND role = 'user' AND is_meta = 0
+ORDER BY step DESC
+LIMIT 1 OFFSET ?
+`, convID, count-1).Scan(&targetStep)
+	if err == sql.ErrNoRows {
+		return 0, fmt.Errorf("%w: conversation %q has fewer than %d non-meta user prompt(s)", ErrUndoCountOutOfRange, convID, count)
+	}
+	if err != nil {
+		return 0, fmt.Errorf("undo: locate target prompt: %w", err)
+	}
+
+	// Compaction-boundary guard: prompts at or below the most recent compaction
+	// summary cannot be undone (kimi-code semantics).
+	var boundary int
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(step), -1) FROM conversation_messages WHERE conversation_id = ? AND is_compact_summary = 1`, convID).Scan(&boundary); err != nil {
+		return 0, fmt.Errorf("undo: compaction boundary: %w", err)
+	}
+	if targetStep <= boundary {
+		return 0, fmt.Errorf("%w: target prompt at step %d is at or below compaction summary at step %d", ErrUndoCrossesCompaction, targetStep, boundary)
+	}
+
+	// Delete the target prompt and everything after it.
+	if _, err := tx.ExecContext(ctx, `DELETE FROM conversation_messages WHERE conversation_id = ? AND step >= ?`, convID, targetStep); err != nil {
+		return 0, fmt.Errorf("undo: delete messages: %w", err)
+	}
+
+	// Persist an undo-boundary marker so the truncation is visible to reload,
+	// export, and forensics. The marker is meta, so the target query above
+	// skips it and repeated undos keep walking real prompts.
+	marker := fmt.Sprintf("undo boundary: removed %d prompt(s); conversation truncated from step %d", count, targetStep)
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO conversation_messages (conversation_id, step, role, content, is_meta)
+VALUES (?, ?, 'system', ?, 1)
+`, convID, targetStep, marker); err != nil {
+		return 0, fmt.Errorf("undo: insert boundary marker: %w", err)
+	}
+
+	// Keep conversation metadata consistent with the truncated history.
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `UPDATE conversations SET msg_count=(SELECT COUNT(*) FROM conversation_messages WHERE conversation_id=?), updated_at=? WHERE id=?`, convID, now, convID); err != nil {
+		return 0, fmt.Errorf("undo: update conversation: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("undo: commit: %w", err)
+	}
+	return targetStep, nil
+}
+
 // SearchMessages performs a full-text search over message content using the FTS5 index.
 // When tenantID is non-empty, results are restricted to conversations owned by that
 // tenant by joining the FTS hits against the conversations table on conversation_id.

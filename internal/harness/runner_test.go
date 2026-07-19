@@ -2368,6 +2368,9 @@ func (f *failingConversationStore) PinConversation(_ context.Context, _ string, 
 func (f *failingConversationStore) CompactConversation(_ context.Context, _ string, _ int, _ Message) error {
 	return fmt.Errorf("store compact failed")
 }
+func (f *failingConversationStore) UndoPrompts(_ context.Context, _ string, _ int) (int, error) {
+	return 0, fmt.Errorf("store undo failed")
+}
 func (f *failingConversationStore) UpdateConversationMeta(_ context.Context, _, _, _ string) error {
 	return fmt.Errorf("store update meta failed")
 }
@@ -2416,6 +2419,9 @@ func (c *capturingConversationStore) PinConversation(_ context.Context, _ string
 }
 func (c *capturingConversationStore) CompactConversation(_ context.Context, _ string, _ int, _ Message) error {
 	return nil
+}
+func (c *capturingConversationStore) UndoPrompts(_ context.Context, _ string, _ int) (int, error) {
+	return 0, nil
 }
 func (c *capturingConversationStore) UpdateConversationMeta(_ context.Context, _, _, _ string) error {
 	return nil

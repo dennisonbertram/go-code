@@ -91,6 +91,9 @@ func (f *forkHistoryConvStore) PinConversation(_ context.Context, _ string, _ bo
 func (f *forkHistoryConvStore) CompactConversation(_ context.Context, _ string, _ int, _ harness.Message) error {
 	return nil
 }
+func (f *forkHistoryConvStore) UndoPrompts(_ context.Context, _ string, _ int) (int, error) {
+	return 0, nil
+}
 
 // multiTurnForkRollout is a hand-authored rollout with two user turns
 // (run.started's prompt, then a steering.received turn) so that forking at

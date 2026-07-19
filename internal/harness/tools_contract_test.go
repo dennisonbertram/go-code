@@ -212,6 +212,9 @@ func (m *contractMockConversationStore) PinConversation(_ context.Context, _ str
 func (m *contractMockConversationStore) CompactConversation(_ context.Context, _ string, _ int, _ Message) error {
 	return nil
 }
+func (m *contractMockConversationStore) UndoPrompts(_ context.Context, _ string, _ int) (int, error) {
+	return 0, nil
+}
 func (m *contractMockConversationStore) GetConversationOwner(_ context.Context, _ string) (*Conversation, error) {
 	return nil, nil
 }

@@ -713,6 +713,9 @@ func (m *mockConversationStore) PinConversation(_ context.Context, _ string, _ b
 func (m *mockConversationStore) CompactConversation(_ context.Context, _ string, _ int, _ harness.Message) error {
 	return nil
 }
+func (m *mockConversationStore) UndoPrompts(_ context.Context, _ string, _ int) (int, error) {
+	return 0, nil
+}
 func (m *mockConversationStore) UpdateConversationMeta(_ context.Context, _, _, _ string) error {
 	return nil
 }
