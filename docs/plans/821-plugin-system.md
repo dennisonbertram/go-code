@@ -41,8 +41,16 @@
 - [x] Implement minimal code changes (warning func + wiring + status message wording).
 - [x] Update docs, status ledgers, and indexes.
 - [x] Update engineering log.
-- [ ] Run `go test ./cmd/harnesscli/... ./internal/plugins/... -count=1`; gofmt + go vet clean.
-- [ ] Push `epic/821-plugin-system` and open PR (no merge; worktree flow hands merge to maintainer).
+- [x] Run `go test ./cmd/harnesscli/... ./internal/plugins/... -count=1`; gofmt + go vet clean. **Green (28 packages ok).**
+- [x] Push `epic/821-plugin-system` and open PR (no merge; worktree flow hands merge to maintainer). **PR #832.**
+
+## Verification Results
+
+- `GOCACHE=/tmp/go-build go test ./cmd/harnesscli/... ./internal/plugins/... -count=1` — PASS, all 28 packages `ok`.
+- `gofmt -l` on changed Go files — clean; `go vet ./cmd/harnesscli/tui/ ./internal/plugins/` — clean.
+- `GOCACHE=/tmp/go-build ./scripts/test-regression.sh` — FAIL at the `go test ./...` stage in 3 packages, all unrelated to this slice (no TUI/plugin/doc coupling):
+  - `internal/harness/tools` `TestJobManagerRunForegroundStreamingOverlongLineReturnsPromptly` — reproduced red on the clean `main` checkout in isolation (`go test ./internal/harness/tools/ -run TestJobManagerRunForegroundStreamingOverlongLineReturnsPromptly -count=1`), pre-existing.
+  - `internal/provider/openai` (4 retry-budget tests) and `internal/watcher` `TestMultipleWatchedDirs` — pass on `main` in isolation, fail only under full-suite parallel load; flaky, pre-existing.
 
 ## Risks and Mitigations
 
