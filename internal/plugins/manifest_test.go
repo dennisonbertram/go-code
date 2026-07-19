@@ -63,3 +63,11 @@ func TestLoadBundle_RejectsTraversalAndMissingDeclaredContent(t *testing.T) {
 		t.Fatal("LoadBundle() succeeded for a missing declared directory")
 	}
 }
+
+func TestManifestValidateRejectsTraversalNameAndVersion(t *testing.T) {
+	for _, manifest := range []Manifest{{SchemaVersion: 1, Name: "../bad", Version: "1"}, {SchemaVersion: 1, Name: "good", Version: "../bad"}} {
+		if err := manifest.Validate(); err == nil {
+			t.Fatalf("Validate accepted %#v", manifest)
+		}
+	}
+}

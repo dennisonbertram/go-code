@@ -15,6 +15,7 @@ import (
 const ManifestFilename = "plugin.json"
 
 var pluginNameRE = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+var pluginVersionRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]*$`)
 
 // Manifest describes an installable bundle. Declared paths are relative to the
 // bundle root and are checked before their contents are used.
@@ -90,6 +91,9 @@ func (m Manifest) Validate() error {
 	}
 	if strings.TrimSpace(m.Version) == "" {
 		return fmt.Errorf("plugin manifest version is required")
+	}
+	if !pluginVersionRE.MatchString(m.Version) || m.Version == "." || m.Version == ".." || filepath.IsAbs(m.Version) {
+		return fmt.Errorf("plugin manifest version %q must be a safe path segment", m.Version)
 	}
 	return nil
 }

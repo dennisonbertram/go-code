@@ -51,6 +51,21 @@ func TestInstaller_RejectsSymlinksBeforePromotion(t *testing.T) {
 	}
 }
 
+func TestInstaller_RejectsTraversalVersionWithoutEscapingRoot(t *testing.T) {
+	source := writeTestBundle(t, "safe", "../../../evil")
+	root := filepath.Join(t.TempDir(), "plugins")
+	outside := filepath.Join(filepath.Dir(root), "evil")
+	if err := os.WriteFile(outside, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewInstaller(root).Install(source); err == nil {
+		t.Fatal("Install accepted traversal version")
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "keep" {
+		t.Fatalf("outside changed: %q %v", data, err)
+	}
+}
+
 func writeTestBundle(t *testing.T, name, version string) string {
 	t.Helper()
 	dir := t.TempDir()

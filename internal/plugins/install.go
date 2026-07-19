@@ -89,6 +89,9 @@ func (i *Installer) Install(rawSource string) (*InstalledBundle, error) {
 		return nil, fmt.Errorf("validate plugin bundle: %w", err)
 	}
 	destination := filepath.Join(i.Dir, bundle.Manifest.Name, bundle.Manifest.Version)
+	if err := containedPath(i.Dir, destination); err != nil {
+		return nil, fmt.Errorf("plugin destination: %w", err)
+	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return nil, fmt.Errorf("create plugin destination: %w", err)
 	}
@@ -103,6 +106,14 @@ func (i *Installer) Install(rawSource string) (*InstalledBundle, error) {
 		return nil, fmt.Errorf("re-read installed plugin: %w", err)
 	}
 	return &InstalledBundle{Bundle: installed, Source: source, Remote: source.Remote}, nil
+}
+
+func containedPath(root, path string) error {
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || filepath.IsAbs(rel) || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path escapes plugins root")
+	}
+	return nil
 }
 
 func copyTree(source, destination string) error {
