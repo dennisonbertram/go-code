@@ -632,6 +632,15 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		} else {
 			envServers = mcpConfigs
 		}
+		pluginRoot := filepath.Join(globalDir, "plugins")
+		trustedBundles, pluginErr := plugins.TrustedBundles(pluginRoot, plugins.NewStateStore(filepath.Join(pluginRoot, "state.json")))
+		if pluginErr != nil {
+			log.Printf("warning: failed to discover trusted plugin bundles: %v", pluginErr)
+		} else if pluginServers, err := plugins.MCPServers(trustedBundles); err != nil {
+			log.Printf("warning: failed to load trusted plugin MCP config: %v", err)
+		} else {
+			envServers = append(envServers, pluginServers...)
+		}
 
 		registerMCPServersFromConfig(mcpManager, globalCfg.MCPServers, envServers, log.Printf)
 	}
@@ -1155,7 +1164,16 @@ func loadStartupProfile(profileName, projectProfilesDir, userProfilesDir string)
 	if profileName == "" {
 		return nil, nil
 	}
-	profile, err := profiles.LoadProfileWithDirs(profileName, projectProfilesDir, userProfilesDir)
+	home, _ := os.UserHomeDir()
+	pluginRoot := filepath.Join(home, ".go-harness", "plugins")
+	trustedBundles, _ := plugins.TrustedBundles(pluginRoot, plugins.NewStateStore(filepath.Join(pluginRoot, "state.json")))
+	var agentDirs []string
+	for _, bundle := range trustedBundles {
+		if bundle.AgentsDir != "" {
+			agentDirs = append(agentDirs, bundle.AgentsDir)
+		}
+	}
+	profile, err := profiles.LoadProfileWithExtraDirs(profileName, projectProfilesDir, userProfilesDir, agentDirs)
 	if err != nil {
 		return nil, err
 	}
