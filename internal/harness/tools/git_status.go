@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -11,54 +10,45 @@ import (
 	"go-agent-harness/internal/harness/tools/descriptions"
 )
 
+type gitStatusArgs struct {
+	// Porcelain is a pointer so an absent key keeps the porcelain default
+	// while an explicit false switches to human-readable output.
+	Porcelain *bool `json:"porcelain,omitempty"`
+}
+
 func gitStatusTool(workspaceRoot string) Tool {
-	def := Definition{
+	return MustTyped(TypedSpec{
 		Name:         "git_status",
 		Description:  descriptions.Load("git_status"),
 		Action:       ActionRead,
 		ParallelSafe: true,
 		Tags:         []string{"git", "status", "repository", "staged", "modified"},
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"porcelain": map[string]any{"type": "boolean"},
-			},
-		},
-	}
-
-	handler := func(ctx context.Context, raw json.RawMessage) (string, error) {
-		args := struct {
-			Porcelain bool `json:"porcelain"`
-		}{Porcelain: true}
-		if len(raw) > 0 {
-			if err := json.Unmarshal(raw, &args); err != nil {
-				return "", fmt.Errorf("parse git_status args: %w", err)
-			}
+	}, func(ctx context.Context, args gitStatusArgs) (any, error) {
+		porcelain := true
+		if args.Porcelain != nil {
+			porcelain = *args.Porcelain
 		}
 
 		absRoot, err := filepath.Abs(workspaceRoot)
 		if err != nil {
-			return "", fmt.Errorf("resolve workspace root: %w", err)
+			return nil, fmt.Errorf("resolve workspace root: %w", err)
 		}
 
 		cmdArgs := []string{"-C", absRoot, "status"}
-		if args.Porcelain {
+		if porcelain {
 			cmdArgs = append(cmdArgs, "--porcelain=v1")
 		}
 		output, exitCode, timedOut, err := runCommand(ctx, 30*time.Second, "git", cmdArgs...)
 		if err != nil {
-			return "", fmt.Errorf("git status failed: %w", err)
+			return nil, fmt.Errorf("git status failed: %w", err)
 		}
 
 		trimmed := strings.TrimSpace(output)
-		result := map[string]any{
+		return map[string]any{
 			"clean":     trimmed == "",
 			"output":    trimmed,
 			"exit_code": exitCode,
 			"timed_out": timedOut,
-		}
-		return MarshalToolResult(result)
-	}
-
-	return Tool{Definition: def, Handler: handler}
+		}, nil
+	})
 }
