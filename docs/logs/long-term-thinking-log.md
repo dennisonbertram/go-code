@@ -1,5 +1,12 @@
 # Long-Term Thinking Log
 
+## 2026-07-19 (Multi-run TUI Dashboard — Epic #738)
+
+- Command intent: Deliver the multi-run TUI dashboard and six child slices in a dedicated branch, then open (but do not merge) its PR.
+- User intent: Let an operator monitor and control concurrent harness runs without leaving the current TUI session.
+- Success definition: `/dashboard` offers lifecycle-bound polling grouped by run state, selected-run SSE peek, steer/cancel, and new-run dispatch solely through existing run routes; focused TDD coverage and project gates remain green.
+- Guardrails: TUI-only, no new server endpoints or Go dependencies, and no more than one dashboard peek bridge at a time.
+
 ## 2026-06-28 (Config-Driven Lifecycle Hooks — Epic #737)
 
 - Command intent: Implement epic #737 and all six child issues (#741, #744, #750, #755, #759, #763) in a dedicated worktree, landing config-driven shell/HTTP lifecycle hooks end to end, then open a PR.
