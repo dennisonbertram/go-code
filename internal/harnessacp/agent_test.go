@@ -78,6 +78,38 @@ func TestPromptStartsRunAndMapsTerminalStopReason(t *testing.T) {
 	}
 }
 
+func TestPromptContinuesExistingRunOnSecondTurn(t *testing.T) {
+	started, continued := 0, 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/runs":
+			started++
+			_, _ = w.Write([]byte(`{"run_id":"run-1"}`))
+		case "/v1/runs/run-1/continue":
+			continued++
+			_, _ = w.Write([]byte(`{"run_id":"run-1"}`))
+		case "/v1/runs/run-1/events":
+			_, _ = w.Write([]byte("event: run.completed\ndata: {}\n\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	agent := NewAgent(server.URL)
+	session, err := agent.NewSession(context.Background(), acp.NewSessionRequest{Cwd: "/workspace", McpServers: []acp.McpServer{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, text := range []string{"first", "second"} {
+		if _, err := agent.Prompt(context.Background(), acp.PromptRequest{SessionId: session.SessionId, Prompt: []acp.ContentBlock{acp.TextBlock(text)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if started != 1 || continued != 1 {
+		t.Fatalf("starts=%d continues=%d", started, continued)
+	}
+}
+
 func TestProjectEventStreamsMessageAndThoughtChunks(t *testing.T) {
 	agent := NewAgent("http://example.test")
 	var updates []acp.SessionUpdate

@@ -14,19 +14,23 @@ import (
 	"go-agent-harness/internal/harnessacp"
 )
 
-var stdinReader io.Reader = os.Stdin
-var stdoutWriter io.Writer = os.Stdout
-var getenv = os.Getenv
+var (
+	runMain                = run
+	exitFunc               = os.Exit
+	stdinReader  io.Reader = os.Stdin
+	stdoutWriter io.Writer = os.Stdout
+	getenvFunc             = os.Getenv
+)
 
 func main() {
-	if err := run(); err != nil && !errors.Is(err, io.EOF) {
+	if err := runMain(); err != nil && !errors.Is(err, io.EOF) {
 		fmt.Fprintf(os.Stderr, "harness-acp: %v\\n", err)
-		os.Exit(1)
+		exitFunc(1)
 	}
 }
 
 func run() error {
-	addr := getenv("HARNESS_ADDR")
+	addr := getenvFunc("HARNESS_ADDR")
 	if addr == "" {
 		addr = "http://localhost:8080"
 	}
