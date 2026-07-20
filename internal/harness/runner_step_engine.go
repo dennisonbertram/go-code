@@ -93,6 +93,11 @@ func (se *stepEngine) run() {
 	effectiveApprovalPolicy := se.effectiveApprovalPolicy
 	effectiveSandboxScope := se.effectiveSandboxScope
 
+	// rc is this run's config snapshot, captured at run creation. It is
+	// immutable for the run's lifetime, so per-step reads stay stable even
+	// if ApplyConfig swaps the runner's live config mid-run.
+	rc := r.configForRun(runID)
+
 	// runTools is the tool registry for this run. When workspace_type
 	// provisioning created a per-run workspace, this points to a registry
 	// rooted at the provisioned path so that file/shell tools see the right
@@ -110,23 +115,23 @@ func (se *stepEngine) run() {
 
 	callSeq := 0
 	var antiPatternCounts map[string]int
-	if r.config.DetectAntiPatterns {
+	if rc.DetectAntiPatterns {
 		antiPatternCounts = make(map[string]int)
 	}
 	var alreadyAlerted map[string]bool
-	if r.config.DetectAntiPatterns {
+	if rc.DetectAntiPatterns {
 		alreadyAlerted = make(map[string]bool)
 	}
 	var costAnomalyDetector *costanomaly.Detector
-	if r.config.CostAnomalyDetectionEnabled {
-		multiplier := r.config.CostAnomalyStepMultiplier
+	if rc.CostAnomalyDetectionEnabled {
+		multiplier := rc.CostAnomalyStepMultiplier
 		if multiplier <= 0 {
 			multiplier = 2.0
 		}
 		costAnomalyDetector = costanomaly.NewDetector(multiplier)
 	}
 	var causalBuilder *causalgraph.Builder
-	if r.config.CausalGraphEnabled {
+	if rc.CausalGraphEnabled {
 		causalBuilder = causalgraph.NewBuilder()
 	}
 	consecutiveEmptyResponses := 0
@@ -220,14 +225,14 @@ func (se *stepEngine) run() {
 
 		var memorySnippetForSnapshot string
 		var workingMemorySnippet string
-		if r.config.WorkingMemoryStore != nil {
-			snippet, err := r.config.WorkingMemoryStore.Snippet(context.Background(), r.scopeKey(runID))
+		if rc.WorkingMemoryStore != nil {
+			snippet, err := rc.WorkingMemoryStore.Snippet(context.Background(), r.scopeKey(runID))
 			if err == nil && strings.TrimSpace(snippet) != "" {
 				workingMemorySnippet = snippet
 			}
 		}
-		if r.config.MemoryManager != nil && r.config.MemoryManager.Mode() != om.ModeOff {
-			snippet, _, err := r.config.MemoryManager.Snippet(context.Background(), r.scopeKey(runID))
+		if rc.MemoryManager != nil && rc.MemoryManager.Mode() != om.ModeOff {
+			snippet, _, err := rc.MemoryManager.Snippet(context.Background(), r.scopeKey(runID))
 			if err != nil {
 				r.emit(runID, EventMemoryObserveFailed, map[string]any{"step": step, "error": err.Error()})
 			} else if strings.TrimSpace(snippet) != "" {
@@ -235,7 +240,7 @@ func (se *stepEngine) run() {
 			}
 		}
 		var runtimeContext string
-		if resolvedPrompt != nil && r.config.PromptEngine != nil {
+		if resolvedPrompt != nil && rc.PromptEngine != nil {
 			usageTotals, costTotals := r.accountingTotals(runID)
 
 			estimatedCtxTokens := 0
@@ -260,7 +265,7 @@ func (se *stepEngine) run() {
 					}
 				}
 			}
-			runtimeContext = strings.TrimSpace(r.config.PromptEngine.RuntimeContext(systemprompt.RuntimeContextInput{
+			runtimeContext = strings.TrimSpace(rc.PromptEngine.RuntimeContext(systemprompt.RuntimeContextInput{
 				RunStartedAt:           runStartedAt,
 				Now:                    time.Now().UTC(),
 				Step:                   step,
@@ -278,7 +283,7 @@ func (se *stepEngine) run() {
 		}
 		turnMessages := r.buildTurnMessages(systemPrompt, messages, workingMemorySnippet, memorySnippetForSnapshot, injectedRuleContent.String(), runtimeContext)
 
-		if r.config.AutoCompactEnabled && r.config.ModelContextWindow > 0 {
+		if rc.AutoCompactEnabled && rc.ModelContextWindow > 0 {
 			estimated := 0
 			for _, m := range turnMessages {
 				runes := utf8.RuneCountInString(m.Content)
@@ -286,14 +291,14 @@ func (se *stepEngine) run() {
 					estimated += (runes + 3) / 4
 				}
 			}
-			ratio := float64(estimated) / float64(r.config.ModelContextWindow)
-			if ratio > r.config.AutoCompactThreshold {
+			ratio := float64(estimated) / float64(rc.ModelContextWindow)
+			if ratio > rc.AutoCompactThreshold {
 				r.emit(runID, EventAutoCompactStarted, map[string]any{
 					"estimated_tokens": estimated,
-					"context_window":   r.config.ModelContextWindow,
-					"threshold":        r.config.AutoCompactThreshold,
+					"context_window":   rc.ModelContextWindow,
+					"threshold":        rc.AutoCompactThreshold,
 					"ratio":            ratio,
-					"mode":             r.config.AutoCompactMode,
+					"mode":             rc.AutoCompactMode,
 				})
 				compactedMsgs, compactErr := r.autoCompactMessages(ctx, runID, messages)
 				if compactErr == nil && compactedMsgs != nil {
@@ -310,13 +315,13 @@ func (se *stepEngine) run() {
 					r.emit(runID, EventAutoCompactCompleted, map[string]any{
 						"before_tokens": estimated,
 						"after_tokens":  afterTokens,
-						"mode":          r.config.AutoCompactMode,
+						"mode":          rc.AutoCompactMode,
 					})
 				} else if compactErr != nil {
 					r.emit(runID, EventAutoCompactCompleted, map[string]any{
 						"before_tokens": estimated,
 						"after_tokens":  estimated,
-						"mode":          r.config.AutoCompactMode,
+						"mode":          rc.AutoCompactMode,
 						"error":         compactErr.Error(),
 					})
 				}
@@ -355,7 +360,7 @@ func (se *stepEngine) run() {
 			return
 		}
 
-		if r.config.CaptureRequestEnvelope {
+		if rc.CaptureRequestEnvelope {
 			var promptBuilder strings.Builder
 			for _, m := range completionReq.Messages {
 				promptBuilder.WriteString(m.Content)
@@ -372,7 +377,7 @@ func (se *stepEngine) run() {
 				"prompt_hash": requestenvelope.HashPrompt(promptBuilder.String()),
 				"tool_names":  toolNames,
 			}
-			if r.config.SnapshotMemorySnippet && memorySnippetForSnapshot != "" {
+			if rc.SnapshotMemorySnippet && memorySnippetForSnapshot != "" {
 				snapshotPayload["memory_snippet"] = memorySnippetForSnapshot
 			}
 			r.emit(runID, EventLLMRequestSnapshot, snapshotPayload)
@@ -472,7 +477,7 @@ func (se *stepEngine) run() {
 			llmTotalDurationMs = time.Since(llmCallStart).Milliseconds()
 		}
 
-		if r.config.CaptureRequestEnvelope {
+		if rc.CaptureRequestEnvelope {
 			r.emit(runID, EventLLMResponseMeta, map[string]any{
 				"step":          step,
 				"latency_ms":    llmTotalDurationMs,
@@ -535,7 +540,7 @@ func (se *stepEngine) run() {
 			}
 		}
 
-		if r.config.ContextWindowSnapshotEnabled {
+		if rc.ContextWindowSnapshotEnabled {
 			r.emitContextWindowSnapshot(runID, step, model, systemPrompt, turnMessages, result)
 		}
 
@@ -546,13 +551,13 @@ func (se *stepEngine) run() {
 		//      turns or they reject the request. This must happen regardless
 		//      of forensics config.
 		//   2. Observational — emitting an EventReasoningComplete for
-		//      transcripts/forensics is gated on r.config.CaptureReasoning.
+		//      transcripts/forensics is gated on rc.CaptureReasoning.
 		// Always carry reasoning on the assistant Message so (1) works; only
 		// emit the event when the operator opts in via (2).
 		capturedReasoning := result.ReasoningText
-		if r.config.CaptureReasoning && capturedReasoning != "" {
-			if r.config.RedactionPipeline != nil {
-				redacted, keep := r.config.RedactionPipeline.Apply(
+		if rc.CaptureReasoning && capturedReasoning != "" {
+			if rc.RedactionPipeline != nil {
+				redacted, keep := rc.RedactionPipeline.Apply(
 					string(EventReasoningComplete),
 					map[string]any{"text": capturedReasoning},
 				)
@@ -696,7 +701,7 @@ func (se *stepEngine) run() {
 		r.stepSetMessages(runID, messages)
 		r.snapshotRecordMessage(runID, "assistant", result.Content)
 
-		if r.config.TraceToolDecisions && len(result.ToolCalls) > 0 {
+		if rc.TraceToolDecisions && len(result.ToolCalls) > 0 {
 			callSeq++
 			availableTools := make([]string, 0, len(completionReq.Tools))
 			for _, td := range completionReq.Tools {
@@ -750,7 +755,7 @@ func (se *stepEngine) run() {
 				causalBuilder.RecordToolCall(step, call.ID, call.Name, call.Arguments)
 			}
 
-			if r.config.AuditTrailEnabled && audittrail.IsStateModifying(call.Name) {
+			if rc.AuditTrailEnabled && audittrail.IsStateModifying(call.Name) {
 				auditPayload := map[string]any{
 					"tool":      call.Name,
 					"call_id":   call.ID,
@@ -765,7 +770,7 @@ func (se *stepEngine) run() {
 				})
 			}
 
-			if r.config.DetectAntiPatterns {
+			if rc.DetectAntiPatterns {
 				apKey := call.Name + "\x00" + call.Arguments
 				antiPatternCounts[apKey]++
 				count := antiPatternCounts[apKey]
@@ -819,7 +824,7 @@ func (se *stepEngine) run() {
 				questions, err := htools.ParseAskUserQuestionArgs(json.RawMessage(call.Arguments))
 				if err == nil {
 					waitingForUser = true
-					deadlineAt := time.Now().UTC().Add(r.config.AskUserTimeout)
+					deadlineAt := time.Now().UTC().Add(rc.AskUserTimeout)
 					r.setStatus(runID, RunStatusWaitingForUser, "", "")
 					r.emit(runID, EventRunWaitingForUser, map[string]any{
 						"call_id":     call.ID,
@@ -870,7 +875,7 @@ func (se *stepEngine) run() {
 			}
 
 			needsApproval := ruleEffect == PermissionEffectAsk
-			if !needsApproval && r.config.ApprovalBroker != nil && effectiveApprovalPolicy != ApprovalPolicyNone && effectiveApprovalPolicy != "" {
+			if !needsApproval && rc.ApprovalBroker != nil && effectiveApprovalPolicy != ApprovalPolicyNone && effectiveApprovalPolicy != "" {
 				switch effectiveApprovalPolicy {
 				case ApprovalPolicyAll:
 					needsApproval = true
@@ -878,9 +883,9 @@ func (se *stepEngine) run() {
 					needsApproval = runTools.IsMutating(call.Name)
 				}
 			}
-			if r.config.ApprovalBroker != nil {
+			if rc.ApprovalBroker != nil {
 				if needsApproval {
-					deadlineAt := time.Now().UTC().Add(r.config.AskUserTimeout)
+					deadlineAt := time.Now().UTC().Add(rc.AskUserTimeout)
 					r.setStatus(runID, RunStatusWaitingForApproval, "", "")
 					r.emit(runID, EventToolApprovalRequired, map[string]any{
 						"call_id":     call.ID,
@@ -888,12 +893,12 @@ func (se *stepEngine) run() {
 						"arguments":   call.Arguments,
 						"deadline_at": deadlineAt.Format(time.RFC3339),
 					})
-					approved, approvalErr := r.config.ApprovalBroker.Ask(ctx, ApprovalRequest{
+					approved, approvalErr := rc.ApprovalBroker.Ask(ctx, ApprovalRequest{
 						RunID:   runID,
 						CallID:  call.ID,
 						Tool:    call.Name,
 						Args:    call.Arguments,
-						Timeout: r.config.AskUserTimeout,
+						Timeout: rc.AskUserTimeout,
 					})
 					if approvalErr != nil {
 						if ctx.Err() != nil {
@@ -1018,7 +1023,7 @@ func (se *stepEngine) run() {
 					"message_count": len(replaced),
 					"duration_ms":   time.Since(compactStart).Milliseconds(),
 				}
-				if r.config.ContextWindowSnapshotEnabled {
+				if rc.ContextWindowSnapshotEnabled {
 					var beforeTokens, afterTokens int
 					for _, m := range preCompactMessages {
 						beforeTokens += contextwindow.EstimateTokens(m.Content)
@@ -1051,9 +1056,9 @@ func (se *stepEngine) run() {
 			isSafe := runTools.IsParallelSafe(pe.call.Name) && !pe.waitingForUser
 
 			if !isSafe {
-				if rewind, ok := r.config.ConversationStore.(RewindStore); ok && runTools.IsMutating(pe.call.Name) {
+				if rewind, ok := rc.ConversationStore.(RewindStore); ok && runTools.IsMutating(pe.call.Name) {
 					meta := r.runMetadata(runID)
-					workspace := r.config.WorkspaceBaseOptions.RepoPath
+					workspace := rc.WorkspaceBaseOptions.RepoPath
 					if workspace != "" {
 						point := RewindPoint{ID: fmt.Sprintf("%s-%d-%s", runID, step, pe.call.ID), ConversationID: meta.ConversationID, Step: step, Tool: pe.call.Name}
 						if err := CaptureRewindPreImage(pe.toolCtx, rewind, point, workspace, pe.callArgs); err != nil {
@@ -1067,8 +1072,8 @@ func (se *stepEngine) run() {
 				start := time.Now()
 				out, err := runTools.Execute(pe.toolCtx, pe.call.Name, pe.callArgs)
 				if err == nil && pe.rewindPointID != "" {
-					if rewind, ok := r.config.ConversationStore.(RewindStore); ok {
-						_ = FinalizeRewindPoint(pe.toolCtx, rewind, pe.rewindPointID, r.config.WorkspaceBaseOptions.RepoPath)
+					if rewind, ok := rc.ConversationStore.(RewindStore); ok {
+						_ = FinalizeRewindPoint(pe.toolCtx, rewind, pe.rewindPointID, rc.WorkspaceBaseOptions.RepoPath)
 					}
 				}
 				execResults[pe.origIdx] = toolExecResult{
@@ -1207,7 +1212,7 @@ func (se *stepEngine) run() {
 					}
 					r.mu.Unlock()
 
-					if r.config.MemoryManager != nil && r.config.MemoryManager.Mode() != om.ModeOff {
+					if rc.MemoryManager != nil && rc.MemoryManager.Mode() != om.ModeOff {
 						persistContent := string(persist)
 						if persistContent == "" || persistContent == "null" {
 							persistContent = "{}"
@@ -1218,7 +1223,7 @@ func (se *stepEngine) run() {
 							Name:    "context_reset",
 							Content: "[context_reset] persist: " + persistContent,
 						}
-						_, _ = r.config.MemoryManager.Observe(context.Background(), om.ObserveRequest{
+						_, _ = rc.MemoryManager.Observe(context.Background(), om.ObserveRequest{
 							Scope:      r.scopeKey(runID),
 							RunID:      runID,
 							ToolCallID: call.ID,
@@ -1226,8 +1231,8 @@ func (se *stepEngine) run() {
 						})
 					}
 
-					if r.config.ContextResetStore != nil {
-						_ = r.config.ContextResetStore.RecordContextReset(context.Background(), runID, resetIdx, step, persist)
+					if rc.ContextResetStore != nil {
+						_ = rc.ContextResetStore.RecordContextReset(context.Background(), runID, resetIdx, step, persist)
 					}
 
 					r.emit(runID, EventContextReset, map[string]any{

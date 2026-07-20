@@ -156,7 +156,7 @@ func (r *Runner) permissionRuleDecision(runID, toolName string, args json.RawMes
 }
 
 func (r *Runner) defaultPermissionWorkspaceRoot() string {
-	return r.config.WorkspaceBaseOptions.RepoPath
+	return r.snapshotConfig().WorkspaceBaseOptions.RepoPath
 }
 
 type parsedPermissionRule struct {

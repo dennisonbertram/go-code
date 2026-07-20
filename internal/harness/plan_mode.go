@@ -30,6 +30,7 @@ import (
 //   - Broker timeout or context cancellation propagates as an error and fails
 //     the run — the defined outcome instead of waiting forever.
 func (r *Runner) awaitPlanApproval(ctx context.Context, runID, content string) (bool, error) {
+	rc := r.configForRun(runID)
 	r.mu.Lock()
 	st := r.runs[runID]
 	if st == nil || st.planMode != PlanModeActive {
@@ -38,11 +39,11 @@ func (r *Runner) awaitPlanApproval(ctx context.Context, runID, content string) (
 	}
 	st.planMode = PlanModeExitPending
 	r.mu.Unlock()
-	if r.config.ApprovalBroker == nil {
+	if rc.ApprovalBroker == nil {
 		return false, fmt.Errorf("plan mode requires an approval broker")
 	}
 	r.setStatus(runID, RunStatusWaitingForApproval, "", "")
-	if plans, ok := r.config.ConversationStore.(PlanContentStore); ok {
+	if plans, ok := rc.ConversationStore.(PlanContentStore); ok {
 		r.mu.RLock()
 		st := r.runs[runID]
 		var convID string
@@ -55,7 +56,7 @@ func (r *Runner) awaitPlanApproval(ctx context.Context, runID, content string) (
 		}
 	}
 	r.emit(runID, EventPlanApprovalRequired, map[string]any{"tool": "plan_exit", "plan": content})
-	approved, err := r.config.ApprovalBroker.Ask(ctx, ApprovalRequest{RunID: runID, CallID: "plan_exit", Tool: "plan_exit", Args: content, Timeout: r.config.AskUserTimeout})
+	approved, err := rc.ApprovalBroker.Ask(ctx, ApprovalRequest{RunID: runID, CallID: "plan_exit", Tool: "plan_exit", Args: content, Timeout: rc.AskUserTimeout})
 	if err != nil {
 		return false, err
 	}

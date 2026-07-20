@@ -38,13 +38,19 @@ type runState struct {
 	planFile           string
 	staticSystemPrompt string
 	promptResolved     *systemprompt.ResolvedPrompt
-	usageTotals        usageTotalsAccumulator
-	costTotals         RunCostTotals
-	messages           []Message
-	events             []Event
-	subscribers        map[chan Event]struct{}
-	nextEventSeq       uint64
-	steeringCh         chan string // buffered channel for user steering messages
+	// config is the RunnerConfig snapshot captured when this run was created
+	// (StartRun / ContinueRunWithOptions). It is immutable for the run's
+	// lifetime, so a Runner.ApplyConfig call mid-run never disturbs an
+	// in-flight run. Nil only for runStates constructed directly in tests;
+	// Runner.configForRun falls back to the runner's current config then.
+	config       *RunnerConfig
+	usageTotals  usageTotalsAccumulator
+	costTotals   RunCostTotals
+	messages     []Message
+	events       []Event
+	subscribers  map[chan Event]struct{}
+	nextEventSeq uint64
+	steeringCh   chan string // buffered channel for user steering messages
 	// maxCostUSD is the per-run spending ceiling (0 = unlimited).
 	maxCostUSD float64
 	// allowedTools is the per-run base tool filter from RunRequest.AllowedTools.
@@ -247,8 +253,13 @@ type auditBucket struct {
 }
 
 type Runner struct {
-	provider         Provider
-	tools            *Registry
+	provider Provider
+	tools    *Registry
+	// config is guarded by configMu: ApplyConfig replaces it atomically.
+	// Read it only via snapshotConfig / configForRun so a swap can never
+	// race a reader. configMu is leaf-level: it must never be held while
+	// acquiring r.mu (ApplyConfig and snapshotConfig touch no other lock).
+	configMu         sync.RWMutex
 	config           RunnerConfig
 	providerRegistry *catalog.ProviderRegistry
 	activations      *ActivationTracker
@@ -314,7 +325,10 @@ type Runner struct {
 	inflight sync.WaitGroup
 }
 
-func NewRunner(provider Provider, tools *Registry, config RunnerConfig) *Runner {
+// normalizeRunnerConfig applies the zero-value defaults shared by NewRunner
+// and ApplyConfig so an applied config behaves exactly like a
+// construction-time one.
+func normalizeRunnerConfig(config RunnerConfig) RunnerConfig {
 	if config.DefaultModel == "" {
 		config.DefaultModel = "gpt-4.1-mini"
 	}
@@ -346,6 +360,11 @@ func NewRunner(provider Provider, tools *Registry, config RunnerConfig) *Runner 
 	if config.MaxConversationRetention <= 0 {
 		config.MaxConversationRetention = defaultMaxConversationRetention
 	}
+	return config
+}
+
+func NewRunner(provider Provider, tools *Registry, config RunnerConfig) *Runner {
+	config = normalizeRunnerConfig(config)
 	if tools == nil {
 		tools = NewRegistry()
 	}
@@ -402,6 +421,39 @@ func NewRunner(provider Provider, tools *Registry, config RunnerConfig) *Runner 
 	return r
 }
 
+// ApplyConfig atomically replaces the runner's config after applying the same
+// zero-value normalization as NewRunner. Runs started after ApplyConfig
+// returns observe the new config; in-flight runs keep the snapshot captured
+// at their creation (see runState.config) and are completely undisturbed.
+// Worker-pool sizing is construction-time only and is not re-applied here.
+func (r *Runner) ApplyConfig(config RunnerConfig) {
+	config = normalizeRunnerConfig(config)
+	r.configMu.Lock()
+	defer r.configMu.Unlock()
+	r.config = config
+}
+
+// snapshotConfig returns a copy of the runner's current config. The copy is a
+// stable view: callers may read it without holding any lock.
+func (r *Runner) snapshotConfig() RunnerConfig {
+	r.configMu.RLock()
+	defer r.configMu.RUnlock()
+	return r.config
+}
+
+// configForRun returns the config snapshot captured when the run was created.
+// It falls back to the runner's current config when the run is unknown or its
+// snapshot was never captured (runStates constructed directly in tests).
+func (r *Runner) configForRun(runID string) RunnerConfig {
+	r.mu.RLock()
+	state := r.runs[runID]
+	r.mu.RUnlock()
+	if state != nil && state.config != nil {
+		return *state.config
+	}
+	return r.snapshotConfig()
+}
+
 type retainedRunCandidate struct {
 	id        string
 	updatedAt time.Time
@@ -414,11 +466,12 @@ func (r *Runner) pruneCompletedRuns() {
 }
 
 func (r *Runner) pruneCompletedRunsLocked() {
-	if r.config.Store == nil {
+	rc := r.snapshotConfig()
+	if rc.Store == nil {
 		return
 	}
 
-	limit := r.config.MaxCompletedRetention
+	limit := rc.MaxCompletedRetention
 	if limit <= 0 {
 		limit = defaultMaxCompletedRetention
 	}
@@ -469,7 +522,8 @@ func (r *Runner) pruneConversationMirror() {
 }
 
 func (r *Runner) pruneConversationMirrorLocked() {
-	limit := r.config.MaxConversationRetention
+	rc := r.snapshotConfig()
+	limit := rc.MaxConversationRetention
 	if limit <= 0 {
 		limit = defaultMaxConversationRetention
 	}
@@ -556,6 +610,7 @@ func (r *Runner) poolDispatcher() {
 }
 
 func (r *Runner) poolDispatcherStep() (keepGoing bool) {
+	rc := r.snapshotConfig()
 	keepGoing = true
 	var item queuedRun
 	haveItem := false
@@ -569,8 +624,8 @@ func (r *Runner) poolDispatcherStep() (keepGoing bool) {
 				r.failRun(item.runID, fmt.Errorf("pool dispatcher panic: %v", p))
 				r.inflight.Done()
 			}
-			if r.config.Logger != nil {
-				r.config.Logger.Error("runner: recovered panic in pool dispatcher",
+			if rc.Logger != nil {
+				rc.Logger.Error("runner: recovered panic in pool dispatcher",
 					"run_id", item.runID,
 					"panic", p,
 				)
@@ -709,6 +764,11 @@ func (r *Runner) dispatchRun(runID string, req RunRequest) error {
 }
 
 func (r *Runner) StartRun(req RunRequest) (Run, error) {
+	// rc is the config snapshot for the new run: it is stored on the run
+	// state at creation and read by all run-scoped code for the run's whole
+	// lifetime, so a later ApplyConfig never disturbs this run.
+	rc := r.snapshotConfig()
+
 	// Fast path: reject immediately if the runner has been shut down.
 	select {
 	case <-r.done:
@@ -767,7 +827,7 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 		if err := validateWorkspaceType(req.WorkspaceType); err != nil {
 			return Run{}, err
 		}
-		if err := validateWorkspaceProvisionPreconditions(req.WorkspaceType, r.config.WorkspaceBaseOptions); err != nil {
+		if err := validateWorkspaceProvisionPreconditions(req.WorkspaceType, rc.WorkspaceBaseOptions); err != nil {
 			return Run{}, err
 		}
 	}
@@ -789,13 +849,13 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 
 	model := req.Model
 	if model == "" {
-		model = r.config.DefaultModel
+		model = rc.DefaultModel
 	}
 	// Use RepoPath as the initial workspace path so that AGENTS.md from the
 	// base repository is loaded for all runs. For workspace-type runs, the
 	// system prompt is re-resolved after provisioning with the actual workspace
 	// path (see execute()).
-	systemPrompt, resolvedPrompt, err := r.resolveSystemPrompt(req, model, r.config.WorkspaceBaseOptions.RepoPath)
+	systemPrompt, resolvedPrompt, err := r.resolveSystemPrompt(req, model, rc.WorkspaceBaseOptions.RepoPath)
 	if err != nil {
 		return Run{}, err
 	}
@@ -850,14 +910,14 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 	// Create rollout recorder before acquiring the run lock so that any
 	// filesystem error is surfaced at start time rather than mid-run.
 	var rec *rollout.Recorder
-	if r.config.RolloutDir != "" {
+	if rc.RolloutDir != "" {
 		var recErr error
 		rec, recErr = rollout.NewRecorder(rollout.RecorderConfig{
-			Dir:   r.config.RolloutDir,
+			Dir:   rc.RolloutDir,
 			RunID: run.ID,
 		})
-		if recErr != nil && r.config.Logger != nil {
-			r.config.Logger.Error("rollout recorder: failed to create", "run_id", run.ID, "error", recErr)
+		if recErr != nil && rc.Logger != nil {
+			rc.Logger.Error("rollout recorder: failed to create", "run_id", run.ID, "error", recErr)
 		}
 	}
 
@@ -865,11 +925,11 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 	// The audit log is written to <RolloutDir>/<YYYY-MM-DD>/audit.jsonl, a single
 	// shared file (not per-run) since it captures all runs in the session.
 	var aw *audittrail.AuditWriter
-	if r.config.AuditTrailEnabled && r.config.RolloutDir != "" {
+	if rc.AuditTrailEnabled && rc.RolloutDir != "" {
 		var awErr error
 		aw, awErr = r.auditWriterFor(time.Now().UTC())
-		if awErr != nil && r.config.Logger != nil {
-			r.config.Logger.Error("audit trail: failed to create writer", "run_id", run.ID, "error", awErr)
+		if awErr != nil && rc.Logger != nil {
+			rc.Logger.Error("audit trail: failed to create writer", "run_id", run.ID, "error", awErr)
 		}
 	}
 
@@ -882,15 +942,16 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 	effectivePerms.Rules = NewPermissionRuleSet(mergedPermissionRules)
 
 	var sb *errorchain.SnapshotBuilder
-	if r.config.ErrorChainEnabled {
-		sb = errorchain.NewSnapshotBuilder(r.config.ErrorContextDepth)
+	if rc.ErrorChainEnabled {
+		sb = errorchain.NewSnapshotBuilder(rc.ErrorContextDepth)
 	}
 	// Merge runner-level dynamic rules with per-run dynamic rules.
 	// Runner-level rules come first; per-run rules are appended.
-	mergedRules := mergeDynamicRules(r.config.DynamicRules, req.DynamicRules)
+	mergedRules := mergeDynamicRules(rc.DynamicRules, req.DynamicRules)
 
 	state := &runState{
 		run:                     run,
+		config:                  &rc,
 		planMode:                initialPlanModeState(req.PlanMode),
 		planFile:                normalizedPlanFile(req.PlanFile),
 		staticSystemPrompt:      systemPrompt,
@@ -963,6 +1024,7 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 // the SQLite layer stores "" for "default" tenant rows. Both sides are
 // normalised before comparison so "default" and "" compare equal.
 func (r *Runner) checkConversationOwnership(convID, tenantID, agentID string) error {
+	rc := r.snapshotConfig()
 	// Normalise: "" and "default" are the same tenant value.
 	normTenant := func(t string) string {
 		if t == "" {
@@ -987,11 +1049,11 @@ func (r *Runner) checkConversationOwnership(convID, tenantID, agentID string) er
 	}
 
 	// Phase 2: persistent store (tenant-only check — schema has no agent_id).
-	if r.config.ConversationStore == nil {
+	if rc.ConversationStore == nil {
 		// No store configured and not in memory — brand-new conversation, allow.
 		return nil
 	}
-	conv, err := r.config.ConversationStore.GetConversationOwner(context.Background(), convID)
+	conv, err := rc.ConversationStore.GetConversationOwner(context.Background(), convID)
 	if err != nil {
 		// Treat store errors as a hard failure to prevent silent bypass.
 		return fmt.Errorf("conversation ownership check: %w", err)
@@ -1009,17 +1071,18 @@ func (r *Runner) checkConversationOwnership(convID, tenantID, agentID string) er
 }
 
 func (r *Runner) resolveSystemPrompt(req RunRequest, model, workspacePath string) (string, *systemprompt.ResolvedPrompt, error) {
+	rc := r.snapshotConfig()
 	if strings.TrimSpace(req.SystemPrompt) != "" {
 		return req.SystemPrompt, nil, nil
 	}
-	if r.config.PromptEngine == nil {
-		return r.config.DefaultSystemPrompt, nil, nil
+	if rc.PromptEngine == nil {
+		return rc.DefaultSystemPrompt, nil, nil
 	}
 	extensions := mapPromptExtensions(req.PromptExtensions)
-	resolved, err := r.config.PromptEngine.Resolve(systemprompt.ResolveRequest{
+	resolved, err := rc.PromptEngine.Resolve(systemprompt.ResolveRequest{
 		Model:              model,
 		AgentIntent:        req.AgentIntent,
-		DefaultAgentIntent: r.config.DefaultAgentIntent,
+		DefaultAgentIntent: rc.DefaultAgentIntent,
 		PromptProfile:      req.PromptProfile,
 		TaskContext:        req.TaskContext,
 		Extensions:         extensions,
@@ -1056,6 +1119,7 @@ type runPreflightResult struct {
 }
 
 func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest) (*runPreflightResult, error) {
+	rc := r.configForRun(runID)
 	// Per-run workspace provisioning (issue #324, extended by issue #414).
 	// Resolve the effective workspace type: RunRequest.WorkspaceType takes
 	// precedence; if unset, Profile.IsolationMode provides the fallback.
@@ -1066,7 +1130,7 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 	// already handles the authoritative profile error reporting).
 	var resolvedProfile *profiles.Profile
 	if req.ProfileName != "" {
-		profilesDir := r.config.ProfilesDir
+		profilesDir := rc.ProfilesDir
 		if profilesDir == "" {
 			profilesDir = defaultProfilesDir()
 		}
@@ -1081,7 +1145,7 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 	// The cleanup function is called by runWorkspaceCleanup() before each terminal
 	// event, ensuring workspace.destroyed is emitted before run.completed/failed.
 	if effectiveWorkspaceType != "" {
-		ws, provisionErr := provisionRunWorkspace(ctx, runID, effectiveWorkspaceType, r.config.WorkspaceBaseOptions)
+		ws, provisionErr := provisionRunWorkspace(ctx, runID, effectiveWorkspaceType, rc.WorkspaceBaseOptions)
 		if provisionErr != nil {
 			r.emit(runID, EventWorkspaceProvisionFailed, map[string]any{
 				"workspace_type": effectiveWorkspaceType,
@@ -1100,9 +1164,9 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 		// no-op when the workspace path matches the repo path.
 		wsModel := req.Model
 		if wsModel == "" {
-			wsModel = r.config.DefaultModel
+			wsModel = rc.DefaultModel
 		}
-		if wsPath != "" && r.config.PromptEngine != nil {
+		if wsPath != "" && rc.PromptEngine != nil {
 			if wsSP, wsRP, wsErr := r.resolveSystemPrompt(req, wsModel, wsPath); wsErr == nil {
 				r.mu.Lock()
 				if st, ok := r.runs[runID]; ok {
@@ -1110,15 +1174,15 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 					st.promptResolved = wsRP
 				}
 				r.mu.Unlock()
-			} else if r.config.Logger != nil {
-				r.config.Logger.Error("failed to re-resolve system prompt with workspace path",
+			} else if rc.Logger != nil {
+				rc.Logger.Error("failed to re-resolve system prompt with workspace path",
 					"run_id", runID, "workspace_path", wsPath, "error", wsErr)
 			}
 		}
 		// Store cleanup function so completeRun/failRun/cancelledRun can call it
 		// before the terminal event, keeping workspace.destroyed before run.completed.
 		wsType := effectiveWorkspaceType
-		logger := r.config.Logger
+		logger := rc.Logger
 		cleanupFn := func() {
 			destroyErr := ws.Destroy(context.Background())
 			payload := map[string]any{
@@ -1145,7 +1209,7 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 		// Without this, the workspace.provisioned event is cosmetic — only AGENTS.md
 		// loading respected the new path.
 		if wsPath != "" && effectiveWorkspaceType != "vm" {
-			perRun := NewDefaultRegistryWithOptions(wsPath, r.config.BaseRegistryOptions)
+			perRun := NewDefaultRegistryWithOptions(wsPath, rc.BaseRegistryOptions)
 			r.mu.Lock()
 			if st, ok := r.runs[runID]; ok {
 				st.perRunTools = perRun
@@ -1163,7 +1227,7 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 
 	model := req.Model
 	if model == "" {
-		model = r.config.DefaultModel
+		model = rc.DefaultModel
 	}
 
 	// Canonicalize the model for the target provider: when a non-OpenRouter
@@ -1191,7 +1255,7 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 
 	preferredProvider := req.ProviderName
 	if preferredProvider == "" {
-		preferredProvider = r.config.DefaultProviderName
+		preferredProvider = rc.DefaultProviderName
 	}
 	candidates, err := r.resolveProviderCandidates(runID, model, preferredProvider, req.AllowFallback, req.FallbackProviders)
 	if err != nil {
@@ -1268,15 +1332,15 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 
 		if req.ProfileName != "" {
 			// Resolve the profiles directory: use runner config value or fall back to default.
-			profilesDir := r.config.ProfilesDir
+			profilesDir := rc.ProfilesDir
 			if profilesDir == "" {
 				profilesDir = defaultProfilesDir()
 			}
 			profileCfg, profileErr := loadProfileMCPServers(profilesDir, req.ProfileName)
 			if profileErr != nil {
 				// Non-fatal: log and continue without profile servers.
-				if r.config.Logger != nil {
-					r.config.Logger.Error("failed to load profile MCP servers",
+				if rc.Logger != nil {
+					rc.Logger.Error("failed to load profile MCP servers",
 						"run_id", runID,
 						"profile", req.ProfileName,
 						"error", profileErr)
@@ -1296,8 +1360,8 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 		}
 
 		scopedReg, mcpErr := buildPerRunMCPRegistry(
-			r.config.GlobalMCPRegistry,
-			r.config.GlobalMCPServerNames,
+			rc.GlobalMCPRegistry,
+			rc.GlobalMCPServerNames,
 			profileMCPServers,
 			req.MCPServers,
 		)
@@ -1322,8 +1386,8 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 		if storedReg {
 			byServer, listErr := scopedReg.ListPerRunTools(ctx)
 			if listErr != nil {
-				if r.config.Logger != nil {
-					r.config.Logger.Error("failed to list per-run MCP tools for registration",
+				if rc.Logger != nil {
+					rc.Logger.Error("failed to list per-run MCP tools for registration",
 						"run_id", runID,
 						"error", listErr)
 				}
@@ -1337,8 +1401,8 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 					if regErr != nil {
 						// "already connected" is expected when a global server is shadowed
 						// by a profile server — log at warn level but do not fail the run.
-						if r.config.Logger != nil {
-							r.config.Logger.Error("failed to register per-run MCP tools",
+						if rc.Logger != nil {
+							rc.Logger.Error("failed to register per-run MCP tools",
 								"run_id", runID,
 								"server", serverName,
 								"error", regErr)
@@ -1430,6 +1494,10 @@ func (r *Runner) ContinueRun(runID, message string) (Run, error) {
 // completed source run, optionally overriding the source run's tool and
 // permission policy for the continuation.
 func (r *Runner) ContinueRunWithOptions(runID string, req ContinueRunRequest) (Run, error) {
+	// A continuation is a new run: capture a fresh config snapshot for it so
+	// it observes any ApplyConfig that landed after the source run started.
+	rc := r.snapshotConfig()
+
 	// Fast path: reject immediately if the runner has been shut down.
 	// This prevents mutating the source run's state (state.continued) when
 	// the runner is already closed and dispatch would always fail.
@@ -1521,23 +1589,24 @@ func (r *Runner) ContinueRunWithOptions(runID string, req ContinueRunRequest) (R
 	r.mu.Unlock()
 
 	var contRec *rollout.Recorder
-	if r.config.RolloutDir != "" {
+	if rc.RolloutDir != "" {
 		var recErr error
 		contRec, recErr = rollout.NewRecorder(rollout.RecorderConfig{
-			Dir:   r.config.RolloutDir,
+			Dir:   rc.RolloutDir,
 			RunID: newRun.ID,
 		})
-		if recErr != nil && r.config.Logger != nil {
-			r.config.Logger.Error("rollout recorder: failed to create for continuation", "run_id", newRun.ID, "error", recErr)
+		if recErr != nil && rc.Logger != nil {
+			rc.Logger.Error("rollout recorder: failed to create for continuation", "run_id", newRun.ID, "error", recErr)
 		}
 	}
 
 	var contSB *errorchain.SnapshotBuilder
-	if r.config.ErrorChainEnabled {
-		contSB = errorchain.NewSnapshotBuilder(r.config.ErrorContextDepth)
+	if rc.ErrorChainEnabled {
+		contSB = errorchain.NewSnapshotBuilder(rc.ErrorContextDepth)
 	}
 	contState := &runState{
 		run:                      newRun,
+		config:                   &rc,
 		staticSystemPrompt:       systemPrompt,
 		promptResolved:           promptResolved,
 		usageTotals:              usageTotalsAccumulator{},
@@ -1690,16 +1759,17 @@ func (r *Runner) GetRunSummary(runID string) (RunSummary, error) {
 }
 
 func (r *Runner) PendingInput(runID string) (htools.AskUserQuestionPending, error) {
+	rc := r.configForRun(runID)
 	r.mu.RLock()
 	_, ok := r.runs[runID]
 	r.mu.RUnlock()
 	if !ok {
 		return htools.AskUserQuestionPending{}, ErrRunNotFound
 	}
-	if r.config.AskUserBroker == nil {
+	if rc.AskUserBroker == nil {
 		return htools.AskUserQuestionPending{}, ErrNoPendingInput
 	}
-	pending, ok := r.config.AskUserBroker.Pending(runID)
+	pending, ok := rc.AskUserBroker.Pending(runID)
 	if !ok {
 		return htools.AskUserQuestionPending{}, ErrNoPendingInput
 	}
@@ -1707,16 +1777,17 @@ func (r *Runner) PendingInput(runID string) (htools.AskUserQuestionPending, erro
 }
 
 func (r *Runner) SubmitInput(runID string, answers map[string]string) error {
+	rc := r.configForRun(runID)
 	r.mu.RLock()
 	_, ok := r.runs[runID]
 	r.mu.RUnlock()
 	if !ok {
 		return ErrRunNotFound
 	}
-	if r.config.AskUserBroker == nil {
+	if rc.AskUserBroker == nil {
 		return ErrNoPendingInput
 	}
-	if err := r.config.AskUserBroker.Submit(runID, answers); err != nil {
+	if err := rc.AskUserBroker.Submit(runID, answers); err != nil {
 		if errors.Is(err, ErrNoPendingUserQuestion) {
 			return ErrNoPendingInput
 		}
@@ -2091,6 +2162,7 @@ func (r *Runner) resolveProviderCandidates(runID, model, preferredProvider strin
 }
 
 func (r *Runner) execute(runID string, req RunRequest) {
+	rc := r.configForRun(runID)
 	// Create a cancellable context for this run. The cancel function is stored
 	// in cancelFuncs so that CancelRun() can interrupt any in-flight provider
 	// call or tool execution cooperatively via context cancellation.
@@ -2128,8 +2200,8 @@ func (r *Runner) execute(runID string, req RunRequest) {
 		if p := recover(); p != nil {
 			stack := debug.Stack()
 			errMsg := fmt.Sprintf("internal panic: %v", p)
-			if r.config.Logger != nil {
-				r.config.Logger.Error("runner: recovered panic in execute",
+			if rc.Logger != nil {
+				rc.Logger.Error("runner: recovered panic in execute",
 					"run_id", runID,
 					"panic", p,
 					"stack", string(stack),
@@ -2175,10 +2247,10 @@ func (r *Runner) execute(runID string, req RunRequest) {
 	r.emit(runID, EventRunStarted, startPayload)
 
 	// Audit trail: write run.started with provenance (model, initiator prefix).
-	if r.config.AuditTrailEnabled {
+	if rc.AuditTrailEnabled {
 		auditModel := req.Model
 		if auditModel == "" {
-			auditModel = r.config.DefaultModel
+			auditModel = rc.DefaultModel
 		}
 		r.writeAudit(runID, audittrail.AuditRecord{
 			RunID:     runID,
@@ -2200,7 +2272,7 @@ func (r *Runner) execute(runID string, req RunRequest) {
 	// Resolve the effective step limit for this run.
 	// Priority: per-run request > runner config.
 	// 0 in either position means "no limit" once chosen.
-	effectiveMaxSteps := r.config.MaxSteps
+	effectiveMaxSteps := rc.MaxSteps
 	if req.MaxSteps > 0 {
 		effectiveMaxSteps = req.MaxSteps
 	}
@@ -2209,7 +2281,7 @@ func (r *Runner) execute(runID string, req RunRequest) {
 	// Resolve the effective turns limit for this run.
 	// Priority: per-run request > runner config.
 	// 0 means "no limit" once chosen. MaxTurns counts assistant LLM turns.
-	effectiveMaxTurns := r.config.MaxTurns
+	effectiveMaxTurns := rc.MaxTurns
 	if req.MaxTurns > 0 {
 		effectiveMaxTurns = req.MaxTurns
 	}
@@ -2229,8 +2301,9 @@ type hookBlock struct {
 }
 
 func (r *Runner) applyPreHooks(ctx context.Context, runID string, step int, req CompletionRequest) (CompletionRequest, *hookBlock, error) {
+	rc := r.configForRun(runID)
 	current := req
-	for _, hook := range r.config.PreMessageHooks {
+	for _, hook := range rc.PreMessageHooks {
 		hookName := normalizeHookName(hook.Name())
 		r.emit(runID, EventHookStarted, map[string]any{
 			"stage": "pre_message",
@@ -2245,13 +2318,13 @@ func (r *Runner) applyPreHooks(ctx context.Context, runID string, step int, req 
 			Request: current,
 		})
 		if err != nil {
-			ignored := r.config.HookFailureMode == HookFailureModeFailOpen
+			ignored := rc.HookFailureMode == HookFailureModeFailOpen
 			r.emit(runID, EventHookFailed, map[string]any{
 				"stage":   "pre_message",
 				"hook":    hookName,
 				"step":    step,
 				"error":   err.Error(),
-				"mode":    r.config.HookFailureMode,
+				"mode":    rc.HookFailureMode,
 				"ignored": ignored,
 			})
 			if ignored {
@@ -2288,8 +2361,9 @@ func (r *Runner) applyPreHooks(ctx context.Context, runID string, step int, req 
 }
 
 func (r *Runner) applyPostHooks(ctx context.Context, runID string, step int, req CompletionRequest, res CompletionResult) (CompletionResult, *hookBlock, error) {
+	rc := r.configForRun(runID)
 	current := res
-	for _, hook := range r.config.PostMessageHooks {
+	for _, hook := range rc.PostMessageHooks {
 		hookName := normalizeHookName(hook.Name())
 		r.emit(runID, EventHookStarted, map[string]any{
 			"stage": "post_message",
@@ -2306,13 +2380,13 @@ func (r *Runner) applyPostHooks(ctx context.Context, runID string, step int, req
 			ToolCalls: current.ToolCalls,
 		})
 		if err != nil {
-			ignored := r.config.HookFailureMode == HookFailureModeFailOpen
+			ignored := rc.HookFailureMode == HookFailureModeFailOpen
 			r.emit(runID, EventHookFailed, map[string]any{
 				"stage":   "post_message",
 				"hook":    hookName,
 				"step":    step,
 				"error":   err.Error(),
-				"mode":    r.config.HookFailureMode,
+				"mode":    rc.HookFailureMode,
 				"ignored": ignored,
 			})
 			if ignored {
@@ -2365,11 +2439,12 @@ func normalizeHookName(name string) string {
 // - fail_open:   panic is recovered, hook is skipped, execution continues.
 // - fail_closed: panic is recovered, tool is denied with an error output.
 func (r *Runner) applyPreToolUseHooks(ctx context.Context, runID string, call ToolCall, callArgs *json.RawMessage) (denied bool, denialOutput string) {
-	if len(r.config.PreToolUseHooks) == 0 {
+	rc := r.configForRun(runID)
+	if len(rc.PreToolUseHooks) == 0 {
 		return false, ""
 	}
 
-	for _, hook := range r.config.PreToolUseHooks {
+	for _, hook := range rc.PreToolUseHooks {
 		hookName := normalizeHookName(hook.Name())
 		r.emit(runID, EventToolHookStarted, map[string]any{
 			"stage":   "pre_tool_use",
@@ -2380,7 +2455,7 @@ func (r *Runner) applyPreToolUseHooks(ctx context.Context, runID string, call To
 
 		// Forensics Part 3: capture args before hook runs for mutation tracing.
 		argsBefore := ""
-		if r.config.TraceHookMutations {
+		if rc.TraceHookMutations {
 			argsBefore = string(*callArgs)
 		}
 
@@ -2394,7 +2469,7 @@ func (r *Runner) applyPreToolUseHooks(ctx context.Context, runID string, call To
 		hookDuration := time.Since(hookStart)
 
 		if err != nil {
-			ignored := r.config.HookFailureMode == HookFailureModeFailOpen
+			ignored := rc.HookFailureMode == HookFailureModeFailOpen
 			r.emit(runID, EventToolHookFailed, map[string]any{
 				"stage":       "pre_tool_use",
 				"hook":        hookName,
@@ -2404,7 +2479,7 @@ func (r *Runner) applyPreToolUseHooks(ctx context.Context, runID string, call To
 				"ignored":     ignored,
 				"duration_ms": hookDuration.Milliseconds(),
 			})
-			if r.config.TraceHookMutations {
+			if rc.TraceHookMutations {
 				// Hook error in fail_closed mode counts as an implicit block.
 				if !ignored {
 					mutation := tooldecision.HookMutation{
@@ -2468,7 +2543,7 @@ func (r *Runner) applyPreToolUseHooks(ctx context.Context, runID string, call To
 		})
 
 		// Forensics Part 3: emit hook mutation event when tracing is enabled.
-		if r.config.TraceHookMutations {
+		if rc.TraceHookMutations {
 			argsAfter := string(*callArgs)
 			blocked := result.Decision == ToolHookDeny
 			action := tooldecision.ClassifyHookAction(blocked, argsBefore, argsAfter)
@@ -2513,7 +2588,8 @@ func (r *Runner) applyPreToolUseHooks(ctx context.Context, runID string, call To
 //
 // Panic recovery mirrors pre-tool-use hook behaviour.
 func (r *Runner) applyPostToolUseHooks(ctx context.Context, runID string, call ToolCall, callArgs json.RawMessage, output string, duration time.Duration, toolErr error) string {
-	if len(r.config.PostToolUseHooks) == 0 {
+	rc := r.configForRun(runID)
+	if len(rc.PostToolUseHooks) == 0 {
 		return output
 	}
 
@@ -2525,7 +2601,7 @@ func (r *Runner) applyPostToolUseHooks(ctx context.Context, runID string, call T
 	}
 
 	current := output
-	for _, hook := range r.config.PostToolUseHooks {
+	for _, hook := range rc.PostToolUseHooks {
 		hookName := normalizeHookName(hook.Name())
 		r.emit(runID, EventToolHookStarted, map[string]any{
 			"stage":   "post_tool_use",
@@ -2547,7 +2623,7 @@ func (r *Runner) applyPostToolUseHooks(ctx context.Context, runID string, call T
 		hookDuration := time.Since(hookStart)
 
 		if err != nil {
-			ignored := r.config.HookFailureMode == HookFailureModeFailOpen
+			ignored := rc.HookFailureMode == HookFailureModeFailOpen
 			r.emit(runID, EventToolHookFailed, map[string]any{
 				"stage":       "post_tool_use",
 				"hook":        hookName,
@@ -2731,6 +2807,7 @@ func (r *Runner) drainSteering(runID string, messages *[]Message) {
 }
 
 func (r *Runner) completeRun(runID, output string) {
+	rc := r.configForRun(runID)
 	// Clean up per-run workspace before terminal event (issue #324).
 	r.runWorkspaceCleanup(runID)
 
@@ -2768,7 +2845,7 @@ func (r *Runner) completeRun(runID, output string) {
 		r.mu.Unlock()
 
 		// Persist to SQLite store if configured
-		if r.config.ConversationStore != nil {
+		if rc.ConversationStore != nil {
 			storeMsgs := copyMessages(msgs) // defensive clone for untrusted store boundary
 			usageTotals, costTotals := r.accountingTotals(runID)
 			tokenCost := ConversationTokenCost{
@@ -2776,9 +2853,9 @@ func (r *Runner) completeRun(runID, output string) {
 				CompletionTokens: usageTotals.CompletionTokensTotal,
 				CostUSD:          costTotals.CostUSDTotal,
 			}
-			if err := r.config.ConversationStore.SaveConversationWithCost(context.Background(), convID, storeMsgs, tokenCost); err != nil {
-				if r.config.Logger != nil {
-					r.config.Logger.Error("failed to persist conversation", "conv_id", convID, "error", err)
+			if err := rc.ConversationStore.SaveConversationWithCost(context.Background(), convID, storeMsgs, tokenCost); err != nil {
+				if rc.Logger != nil {
+					rc.Logger.Error("failed to persist conversation", "conv_id", convID, "error", err)
 				}
 			} else {
 				// Wire tenant scoping: set workspace and tenant_id on the conversation row.
@@ -2786,9 +2863,9 @@ func (r *Runner) completeRun(runID, output string) {
 					tenantID = ""
 				}
 				if tenantID != "" {
-					if err := r.config.ConversationStore.UpdateConversationMeta(context.Background(), convID, "", tenantID); err != nil {
-						if r.config.Logger != nil {
-							r.config.Logger.Error("failed to update conversation meta", "conv_id", convID, "error", err)
+					if err := rc.ConversationStore.UpdateConversationMeta(context.Background(), convID, "", tenantID); err != nil {
+						if rc.Logger != nil {
+							rc.Logger.Error("failed to update conversation meta", "conv_id", convID, "error", err)
 						}
 					}
 				}
@@ -2800,7 +2877,7 @@ func (r *Runner) completeRun(runID, output string) {
 	}
 
 	// Audit trail: write run.completed and close the writer.
-	if r.config.AuditTrailEnabled {
+	if rc.AuditTrailEnabled {
 		r.writeAudit(runID, audittrail.AuditRecord{
 			RunID:     runID,
 			EventType: string(EventRunCompleted),
@@ -2870,7 +2947,8 @@ func (r *Runner) maybeEmitProfileEfficiencySuggestion(runID string, costUSD floa
 // nil or the run has no profile name.  Errors are non-fatal: logged but never
 // propagated so that persistence failures never affect the run outcome.
 func (r *Runner) persistProfileRun(runID string, runStatus string, costUSD float64) {
-	if r.config.ProfileRunStore == nil {
+	rc := r.configForRun(runID)
+	if rc.ProfileRunStore == nil {
 		return
 	}
 
@@ -2918,9 +2996,9 @@ func (r *Runner) persistProfileRun(runID string, runStatus string, costUSD float
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := r.config.ProfileRunStore.RecordProfileRun(ctx, rec); err != nil {
-		if r.config.Logger != nil {
-			r.config.Logger.Error("failed to persist profile run",
+	if err := rc.ProfileRunStore.RecordProfileRun(ctx, rec); err != nil {
+		if rc.Logger != nil {
+			rc.Logger.Error("failed to persist profile run",
 				"run_id", runID,
 				"profile", profileName,
 				"error", err,
@@ -2934,7 +3012,8 @@ func (r *Runner) persistProfileRun(runID string, runStatus string, costUSD float
 // never propagated to callers — backup failures must never block the run loop.
 // This is a no-op when S3Uploader is nil or when the run store is not set.
 func (r *Runner) backupRunToS3(runID string) {
-	if r.config.S3Uploader == nil || r.config.Store == nil {
+	rc := r.configForRun(runID)
+	if rc.S3Uploader == nil || rc.Store == nil {
 		return
 	}
 
@@ -2956,9 +3035,9 @@ func (r *Runner) backupRunToS3(runID string) {
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer cancel()
-		if err := r.config.S3Uploader.UploadRun(ctx, r.config.Store, convID, runID); err != nil {
-			if r.config.Logger != nil {
-				r.config.Logger.Error("s3 backup failed", "run_id", runID, "conv_id", convID, "error", err)
+		if err := rc.S3Uploader.UploadRun(ctx, rc.Store, convID, runID); err != nil {
+			if rc.Logger != nil {
+				rc.Logger.Error("s3 backup failed", "run_id", runID, "conv_id", convID, "error", err)
 			}
 		}
 	}()
@@ -3024,7 +3103,8 @@ func (r *Runner) closeAllScopedMCP() {
 // snapshotRecordToolCall records a tool call in the run's snapshot builder when
 // ErrorChainEnabled is set. It is a no-op when ErrorChainEnabled is false.
 func (r *Runner) snapshotRecordToolCall(runID, name, callID, args, errMsg string) {
-	if !r.config.ErrorChainEnabled {
+	rc := r.configForRun(runID)
+	if !rc.ErrorChainEnabled {
 		return
 	}
 	r.mu.RLock()
@@ -3042,7 +3122,8 @@ func (r *Runner) snapshotRecordToolCall(runID, name, callID, args, errMsg string
 // snapshotRecordMessage records a message in the run's snapshot builder when
 // ErrorChainEnabled is set. It is a no-op when ErrorChainEnabled is false.
 func (r *Runner) snapshotRecordMessage(runID, role, content string) {
-	if !r.config.ErrorChainEnabled {
+	rc := r.configForRun(runID)
+	if !rc.ErrorChainEnabled {
 		return
 	}
 	r.mu.RLock()
@@ -3075,8 +3156,10 @@ func (r *Runner) emitContextWindowSnapshot(
 	turnMessages []Message,
 	result CompletionResult,
 ) {
+	rc := r.configForRun(runID)
+
 	// Determine max context tokens: prefer catalog, fall back to config.
-	maxCtxTokens := r.config.ModelContextWindow
+	maxCtxTokens := rc.ModelContextWindow
 	if r.providerRegistry != nil {
 		if catalogMax, ok := r.providerRegistry.MaxContextTokens(model); ok && catalogMax > 0 {
 			maxCtxTokens = catalogMax
@@ -3119,7 +3202,7 @@ func (r *Runner) emitContextWindowSnapshot(
 	r.emit(runID, EventContextWindowSnapshot, contextwindow.SnapshotToPayload(snap))
 
 	// Emit warning when threshold is configured and usage exceeds it.
-	if r.config.ContextWindowWarningThreshold > 0 && snap.UsageRatio >= r.config.ContextWindowWarningThreshold {
+	if rc.ContextWindowWarningThreshold > 0 && snap.UsageRatio >= rc.ContextWindowWarningThreshold {
 		tokensUsed := snap.EstimatedTotalTokens
 		if snap.ProviderReported {
 			tokensUsed = snap.ProviderReportedTokens
@@ -3127,7 +3210,7 @@ func (r *Runner) emitContextWindowSnapshot(
 		r.emit(runID, EventContextWindowWarning, map[string]any{
 			"step":               step,
 			"usage_ratio":        snap.UsageRatio,
-			"threshold":          r.config.ContextWindowWarningThreshold,
+			"threshold":          rc.ContextWindowWarningThreshold,
 			"provider_reported":  snap.ProviderReported,
 			"tokens_used":        tokensUsed,
 			"max_context_tokens": maxCtxTokens,
@@ -3136,6 +3219,7 @@ func (r *Runner) emitContextWindowSnapshot(
 }
 
 func (r *Runner) failRun(runID string, err error) {
+	rc := r.configForRun(runID)
 	if err == nil {
 		err = errors.New("run failed")
 	}
@@ -3153,7 +3237,7 @@ func (r *Runner) failRun(runID string, err error) {
 	r.closeScopedMCP(runID)
 
 	// Emit error.context before run.failed when ErrorChainEnabled.
-	if r.config.ErrorChainEnabled {
+	if rc.ErrorChainEnabled {
 		r.mu.RLock()
 		state, ok := r.runs[runID]
 		var sb *errorchain.SnapshotBuilder
@@ -3169,7 +3253,7 @@ func (r *Runner) failRun(runID string, err error) {
 	}
 
 	// Audit trail: write run.failed and close the writer.
-	if r.config.AuditTrailEnabled {
+	if rc.AuditTrailEnabled {
 		r.writeAudit(runID, audittrail.AuditRecord{
 			RunID:     runID,
 			EventType: string(EventRunFailed),
@@ -3202,6 +3286,7 @@ func (r *Runner) failRun(runID string, err error) {
 // reason="max_steps_reached" and max_steps field so clients can distinguish
 // this terminal state from other failures without parsing the error string.
 func (r *Runner) failRunMaxSteps(runID string, maxSteps int) {
+	rc := r.configForRun(runID)
 	err := fmt.Errorf("max steps (%d) reached", maxSteps)
 
 	// Clean up per-run workspace before terminal event (issue #324).
@@ -3216,7 +3301,7 @@ func (r *Runner) failRunMaxSteps(runID string, maxSteps int) {
 	// Clean up per-run MCP servers
 	r.closeScopedMCP(runID)
 	// Audit trail: write run.failed and close the writer.
-	if r.config.AuditTrailEnabled {
+	if rc.AuditTrailEnabled {
 		r.writeAudit(runID, audittrail.AuditRecord{
 			RunID:     runID,
 			EventType: string(EventRunFailed),
@@ -3255,6 +3340,7 @@ func (r *Runner) failRunMaxSteps(runID string, maxSteps int) {
 // reason="max_turns_exhausted" and max_turns field so clients can distinguish
 // this terminal state from other failures without parsing the error string.
 func (r *Runner) failRunMaxTurns(runID string, maxTurns int) {
+	rc := r.configForRun(runID)
 	err := fmt.Errorf("max turns (%d) reached", maxTurns)
 
 	// Clean up per-run workspace before terminal event (issue #324).
@@ -3269,7 +3355,7 @@ func (r *Runner) failRunMaxTurns(runID string, maxTurns int) {
 	// Clean up per-run MCP servers
 	r.closeScopedMCP(runID)
 	// Audit trail: write run.failed and close the writer.
-	if r.config.AuditTrailEnabled {
+	if rc.AuditTrailEnabled {
 		r.writeAudit(runID, audittrail.AuditRecord{
 			RunID:     runID,
 			EventType: string(EventRunFailed),
@@ -3307,6 +3393,7 @@ func (r *Runner) failRunMaxTurns(runID string, maxTurns int) {
 // to RunStatusCancelled. It mirrors the structure of failRun but uses the
 // dedicated cancelled event and status rather than failed.
 func (r *Runner) cancelledRun(runID string) {
+	rc := r.configForRun(runID)
 	// Clean up per-run workspace before terminal event (issue #324).
 	r.runWorkspaceCleanup(runID)
 
@@ -3320,7 +3407,7 @@ func (r *Runner) cancelledRun(runID string) {
 	r.closeScopedMCP(runID)
 
 	// Audit trail: write run.cancelled and close the writer.
-	if r.config.AuditTrailEnabled {
+	if rc.AuditTrailEnabled {
 		r.writeAudit(runID, audittrail.AuditRecord{
 			RunID:     runID,
 			EventType: string(EventRunCancelled),
@@ -3960,6 +4047,7 @@ func (r *Runner) transcriptSnapshot(runID string, limit int, includeTools bool) 
 }
 
 func (r *Runner) loadConversationHistory(runID string) []Message {
+	rc := r.configForRun(runID)
 	r.mu.RLock()
 	state, ok := r.runs[runID]
 	if !ok {
@@ -3975,21 +4063,21 @@ func (r *Runner) loadConversationHistory(runID string) []Message {
 	r.mu.RUnlock()
 
 	// Fall through to persistent store
-	if r.config.ConversationStore != nil {
-		loaded, err := r.config.ConversationStore.LoadMessages(context.Background(), convID)
+	if rc.ConversationStore != nil {
+		loaded, err := rc.ConversationStore.LoadMessages(context.Background(), convID)
 		if err != nil {
-			if r.config.Logger != nil {
-				r.config.Logger.Error("failed to load conversation from store", "conv_id", convID, "error", err)
+			if rc.Logger != nil {
+				rc.Logger.Error("failed to load conversation from store", "conv_id", convID, "error", err)
 			}
 			return nil
 		}
 		if len(loaded) > 0 {
 			return copyMessages(loaded)
 		}
-		owner, ownerErr := r.config.ConversationStore.GetConversationOwner(context.Background(), convID)
+		owner, ownerErr := rc.ConversationStore.GetConversationOwner(context.Background(), convID)
 		if ownerErr != nil {
-			if r.config.Logger != nil {
-				r.config.Logger.Error("failed to load conversation owner from store", "conv_id", convID, "error", ownerErr)
+			if rc.Logger != nil {
+				rc.Logger.Error("failed to load conversation owner from store", "conv_id", convID, "error", ownerErr)
 			}
 			return nil
 		}
@@ -4011,6 +4099,7 @@ func (r *Runner) conversationID(runID string) string {
 }
 
 func (r *Runner) ConversationMessages(conversationID string) ([]Message, bool) {
+	rc := r.snapshotConfig()
 	r.mu.RLock()
 	msgs, ok := r.conversations[conversationID]
 	if ok {
@@ -4020,15 +4109,15 @@ func (r *Runner) ConversationMessages(conversationID string) ([]Message, bool) {
 	r.mu.RUnlock()
 
 	// Fall through to persistent store
-	if r.config.ConversationStore != nil {
-		loaded, err := r.config.ConversationStore.LoadMessages(context.Background(), conversationID)
+	if rc.ConversationStore != nil {
+		loaded, err := rc.ConversationStore.LoadMessages(context.Background(), conversationID)
 		if err != nil {
 			return nil, false
 		}
 		if len(loaded) > 0 {
 			return copyMessages(loaded), true
 		}
-		owner, err := r.config.ConversationStore.GetConversationOwner(context.Background(), conversationID)
+		owner, err := rc.ConversationStore.GetConversationOwner(context.Background(), conversationID)
 		if err != nil {
 			return nil, false
 		}
@@ -4041,7 +4130,8 @@ func (r *Runner) ConversationMessages(conversationID string) ([]Message, bool) {
 
 // GetConversationStore returns the configured conversation store, or nil.
 func (r *Runner) GetConversationStore() ConversationStore {
-	return r.config.ConversationStore
+	rc := r.snapshotConfig()
+	return rc.ConversationStore
 }
 
 // RunContextStatus holds the context window status for a run.
@@ -4159,11 +4249,12 @@ func (r *Runner) CompactRun(ctx context.Context, runID string, req CompactRunReq
 	r.mu.RUnlock()
 
 	beforeCount := len(snap)
-	summarizer := r.newMessageSummarizerWithModel(summarizerModel)
+	runCfg := r.configForRun(runID)
+	summarizer := r.newMessageSummarizerWithConfig(summarizerModel, "", runCfg)
 	if inst := strings.TrimSpace(req.Instruction); inst != "" {
 		// A preserve-instruction steers the summarizer (summarize/hybrid only;
 		// strip never invokes the summarizer, so it ignores the instruction).
-		summarizer = r.newMessageSummarizerWithInstruction(summarizerModel, inst)
+		summarizer = r.newMessageSummarizerWithConfig(summarizerModel, inst, runCfg)
 	}
 	compacted, err := compactMessagesHTTP(ctx, snap, mode, keepLast, summarizer)
 	if err != nil {
@@ -4196,6 +4287,7 @@ func (r *Runner) messagesForStep(state *runState) []Message {
 // The per-request Summarizer role model override stored in runState is honoured
 // so that a per-request RoleModels.Summarizer is not silently ignored.
 func (r *Runner) autoCompactMessages(ctx context.Context, runID string, messages []Message) ([]Message, error) {
+	rc := r.configForRun(runID)
 	r.mu.RLock()
 	state, ok := r.runs[runID]
 	r.mu.RUnlock()
@@ -4211,13 +4303,13 @@ func (r *Runner) autoCompactMessages(ctx context.Context, runID string, messages
 		return messages, nil
 	}
 
-	mode := r.config.AutoCompactMode
-	keepLast := r.config.AutoCompactKeepLast
+	mode := rc.AutoCompactMode
+	keepLast := rc.AutoCompactKeepLast
 
-	// Use the per-request summarizer model if one was resolved for this run.
-	// newMessageSummarizerWithModel falls back to runner-level config when the
-	// override is empty, preserving existing behaviour.
-	summarizer := r.newMessageSummarizerWithModel(state.resolvedRoleModels.Summarizer)
+	// Use the per-request summarizer model if one was resolved for this run,
+	// and resolve config-level model defaults from the run's config snapshot
+	// so an ApplyConfig swap mid-run cannot flip an in-flight compaction.
+	summarizer := r.newMessageSummarizerWithConfig(state.resolvedRoleModels.Summarizer, "", rc)
 
 	compacted, err := compactMessagesHTTP(ctx, snap, mode, keepLast, summarizer)
 	if err != nil && mode != "strip" {
@@ -4622,16 +4714,23 @@ const summarizeMessagesPrompt = "Please provide a concise summary of this conver
 // manual compaction can steer what the summary keeps. Auto-compaction passes
 // an empty instruction and gets the byte-identical legacy prompt.
 func (r *Runner) summarizeMessagesWithModelAndInstruction(ctx context.Context, messages []Message, overrideModel, instruction string) (string, error) {
+	return r.summarizeWithConfig(ctx, messages, overrideModel, instruction, r.snapshotConfig())
+}
+
+// summarizeWithConfig resolves the summarizer model from the given config
+// snapshot. Run-scoped callers pass the run's config snapshot so an
+// ApplyConfig swap mid-run cannot flip an in-flight run's summarizer model.
+func (r *Runner) summarizeWithConfig(ctx context.Context, messages []Message, overrideModel, instruction string, rc RunnerConfig) (string, error) {
 	if r.provider == nil {
 		return "", fmt.Errorf("provider not configured")
 	}
-	model := r.config.DefaultModel
+	model := rc.DefaultModel
 	if model == "" {
 		model = "gpt-4.1-mini"
 	}
 	// Apply Summarizer role model override when configured.
-	if r.config.RoleModels.Summarizer != "" {
-		model = r.config.RoleModels.Summarizer
+	if rc.RoleModels.Summarizer != "" {
+		model = rc.RoleModels.Summarizer
 	}
 	// Per-request override wins over everything else.
 	if overrideModel != "" {
@@ -4667,6 +4766,10 @@ type runnerMessageSummarizer struct {
 	runner        *Runner
 	overrideModel string
 	instruction   string
+	// rc, when non-nil, is the per-run config snapshot used for summarizer
+	// model resolution instead of the runner's live config, keeping
+	// compaction of in-flight runs stable across ApplyConfig swaps.
+	rc *RunnerConfig
 }
 
 func (s *runnerMessageSummarizer) SummarizeMessages(ctx context.Context, msgs []map[string]any) (string, error) {
@@ -4687,6 +4790,9 @@ func (s *runnerMessageSummarizer) SummarizeMessages(ctx context.Context, msgs []
 		}
 		converted = append(converted, msg)
 	}
+	if s.rc != nil {
+		return s.runner.summarizeWithConfig(ctx, converted, s.overrideModel, s.instruction, *s.rc)
+	}
 	return s.runner.summarizeMessagesWithModelAndInstruction(ctx, converted, s.overrideModel, s.instruction)
 }
 
@@ -4702,12 +4808,13 @@ func (r *Runner) newMessageSummarizerWithModel(overrideModel string) htools.Mess
 	return &runnerMessageSummarizer{runner: r, overrideModel: overrideModel}
 }
 
-// newMessageSummarizerWithInstruction is like newMessageSummarizerWithModel but
-// additionally appends instruction to the summarization prompt as a
-// preserve-hint. Used by manual CompactRun when the caller supplies a
-// preserve-instruction.
-func (r *Runner) newMessageSummarizerWithInstruction(overrideModel, instruction string) htools.MessageSummarizer {
-	return &runnerMessageSummarizer{runner: r, overrideModel: overrideModel, instruction: instruction}
+// newMessageSummarizerWithConfig returns a summarizer that resolves its model
+// from the given per-run config snapshot (falling back to overrideModel), so
+// compaction of an in-flight run is not affected by later ApplyConfig swaps.
+// instruction, when non-empty, is appended to the summarization prompt as a
+// preserve-hint (manual /compact only; auto-compaction leaves it empty).
+func (r *Runner) newMessageSummarizerWithConfig(overrideModel, instruction string, rc RunnerConfig) htools.MessageSummarizer {
+	return &runnerMessageSummarizer{runner: r, overrideModel: overrideModel, instruction: instruction, rc: &rc}
 }
 
 // GetSummarizer returns a MessageSummarizer backed by this runner, or nil if no
@@ -4722,11 +4829,13 @@ func (r *Runner) GetSummarizer() htools.MessageSummarizer {
 // ApprovalBroker returns the approval broker configured for this runner, or nil
 // if none was set. This allows the HTTP server to share the same broker instance.
 func (r *Runner) ApprovalBroker() ApprovalBroker {
-	return r.config.ApprovalBroker
+	rc := r.snapshotConfig()
+	return rc.ApprovalBroker
 }
 
 func (r *Runner) observeMemory(runID string, step int, messages []Message) {
-	if r.config.MemoryManager == nil || r.config.MemoryManager.Mode() == om.ModeOff {
+	rc := r.configForRun(runID)
+	if rc.MemoryManager == nil || rc.MemoryManager.Mode() == om.ModeOff {
 		return
 	}
 	scope := r.scopeKey(runID)
@@ -4741,7 +4850,7 @@ func (r *Runner) observeMemory(runID string, step int, messages []Message) {
 		})
 	}
 	r.emit(runID, EventMemoryObserveStarted, map[string]any{"step": step})
-	out, err := r.config.MemoryManager.Observe(context.Background(), om.ObserveRequest{
+	out, err := rc.MemoryManager.Observe(context.Background(), om.ObserveRequest{
 		Scope:    scope,
 		RunID:    runID,
 		Messages: converted,
@@ -4812,13 +4921,14 @@ func (r *Runner) EmitEvent(runID string, eventType EventType, payload map[string
 }
 
 func (r *Runner) emitCompletionDelta(runID string, step int, delta CompletionDelta) {
+	rc := r.configForRun(runID)
 	if delta.Content != "" {
 		r.emit(runID, EventAssistantMessageDelta, map[string]any{
 			"step":    step,
 			"content": delta.Content,
 		})
 	}
-	if delta.Reasoning != "" && r.config.CaptureReasoning {
+	if delta.Reasoning != "" && rc.CaptureReasoning {
 		r.emit(runID, EventAssistantThinkingDelta, map[string]any{
 			"step":    step,
 			"content": delta.Reasoning,
@@ -4860,7 +4970,8 @@ func auditLogPathForDate(rolloutDir, dateKey string) string {
 }
 
 func (r *Runner) auditWriterFor(now time.Time) (*audittrail.AuditWriter, error) {
-	if !r.config.AuditTrailEnabled || r.config.RolloutDir == "" {
+	rc := r.snapshotConfig()
+	if !rc.AuditTrailEnabled || rc.RolloutDir == "" {
 		return nil, nil
 	}
 	dateKey := now.UTC().Format("2006-01-02")
@@ -4871,7 +4982,7 @@ func (r *Runner) auditWriterFor(now time.Time) (*audittrail.AuditWriter, error) 
 		return bucket.writer, nil
 	}
 
-	writer, err := audittrail.NewAuditWriter(auditLogPathForDate(r.config.RolloutDir, dateKey))
+	writer, err := audittrail.NewAuditWriter(auditLogPathForDate(rc.RolloutDir, dateKey))
 	if err != nil {
 		return nil, err
 	}
@@ -4910,6 +5021,7 @@ func (r *Runner) closeAuditBuckets() error {
 // dropping would break the hash chain. When the pipeline is nil the payload
 // is written verbatim.
 func (r *Runner) writeAudit(runID string, rec audittrail.AuditRecord) {
+	rc := r.configForRun(runID)
 	r.mu.RLock()
 	state, ok := r.runs[runID]
 	if !ok {
@@ -4928,8 +5040,8 @@ func (r *Runner) writeAudit(runID string, rec audittrail.AuditRecord) {
 	// pipeline may return keep=false for StorageModeNone events, but we always
 	// write the entry to preserve the hash chain — the payload is cleared to an
 	// empty map in that case so no content is leaked.
-	if r.config.RedactionPipeline != nil && rec.Payload != nil {
-		redacted, keep := redaction.RedactPayload(r.config.RedactionPipeline, rec.EventType, rec.Payload)
+	if rc.RedactionPipeline != nil && rec.Payload != nil {
+		redacted, keep := redaction.RedactPayload(rc.RedactionPipeline, rec.EventType, rec.Payload)
 		if keep {
 			rec.Payload = redacted
 		} else {
@@ -4948,7 +5060,8 @@ func (r *Runner) writeAudit(runID string, rec audittrail.AuditRecord) {
 // fall back to the runner config. The returned RoleModels always reflects the
 // highest-priority non-empty override for each role.
 func (r *Runner) resolveRoleModels(req RunRequest) RoleModels {
-	result := r.config.RoleModels // start from config defaults
+	rc := r.snapshotConfig()
+	result := rc.RoleModels // start from config defaults
 	if req.RoleModels != nil {
 		if req.RoleModels.Primary != "" {
 			result.Primary = req.RoleModels.Primary
@@ -4979,13 +5092,14 @@ func (r *Runner) closeAuditWriter(runID string) {
 // storeCreateRun persists the initial run record to the configured store.
 // Called once at the start of StartRun and ContinueRun after the run ID is assigned.
 func (r *Runner) storeCreateRun(run Run) {
-	if r.config.Store == nil {
+	rc := r.configForRun(run.ID)
+	if rc.Store == nil {
 		return
 	}
 	sr := runToStoreRun(run)
-	if err := r.config.Store.CreateRun(context.Background(), sr); err != nil {
-		if r.config.Logger != nil {
-			r.config.Logger.Error("store: CreateRun failed", "run_id", run.ID, "error", err)
+	if err := rc.Store.CreateRun(context.Background(), sr); err != nil {
+		if rc.Logger != nil {
+			rc.Logger.Error("store: CreateRun failed", "run_id", run.ID, "error", err)
 		}
 	}
 }
@@ -4993,7 +5107,8 @@ func (r *Runner) storeCreateRun(run Run) {
 // storeUpdateRun persists the current run state (status, output, error) to the store.
 // Called from setStatus after each status transition.
 func (r *Runner) storeUpdateRun(runID string) {
-	if r.config.Store == nil {
+	rc := r.configForRun(runID)
+	if rc.Store == nil {
 		return
 	}
 	r.mu.RLock()
@@ -5006,9 +5121,9 @@ func (r *Runner) storeUpdateRun(runID string) {
 	r.mu.RUnlock()
 
 	sr := runToStoreRun(run)
-	if err := r.config.Store.UpdateRun(context.Background(), sr); err != nil {
-		if r.config.Logger != nil {
-			r.config.Logger.Error("store: UpdateRun failed", "run_id", runID, "error", err)
+	if err := rc.Store.UpdateRun(context.Background(), sr); err != nil {
+		if rc.Logger != nil {
+			rc.Logger.Error("store: UpdateRun failed", "run_id", runID, "error", err)
 		}
 	}
 }
@@ -5021,7 +5136,8 @@ func shouldPersistWorkflowRecap(status RunStatus) bool {
 // Called from emit() after the event is appended to state.events.
 // Executed outside the lock to avoid increasing lock hold time.
 func (r *Runner) storeAppendEvent(ev Event, seq uint64) bool {
-	if r.config.Store == nil {
+	rc := r.configForRun(ev.RunID)
+	if rc.Store == nil {
 		return true
 	}
 	payloadJSON, err := json.Marshal(ev.Payload)
@@ -5038,9 +5154,9 @@ func (r *Runner) storeAppendEvent(ev Event, seq uint64) bool {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), terminalEventStoreTimeout)
 	defer cancel()
-	if err := r.config.Store.AppendEvent(ctx, se); err != nil {
-		if r.config.Logger != nil {
-			r.config.Logger.Error("store: AppendEvent failed",
+	if err := rc.Store.AppendEvent(ctx, se); err != nil {
+		if rc.Logger != nil {
+			rc.Logger.Error("store: AppendEvent failed",
 				"run_id", ev.RunID, "event_type", string(ev.Type), "seq", seq, "error", err)
 		}
 		return false
@@ -5061,7 +5177,8 @@ func (r *Runner) markTerminalEventPersisted(runID string) {
 // already been stored via state.storedMsgCount and appends only the new tail.
 // Must be called WITHOUT holding r.mu (it acquires its own read lock).
 func (r *Runner) storeAppendNewMessages(runID string) {
-	if r.config.Store == nil {
+	rc := r.configForRun(runID)
+	if rc.Store == nil {
 		return
 	}
 	r.mu.Lock()
@@ -5083,9 +5200,9 @@ func (r *Runner) storeAppendNewMessages(runID string) {
 	persisted := 0
 	for i, m := range newMsgs {
 		sm := messageToStoreMessage(m, runID, already+i)
-		if err := r.config.Store.AppendMessage(ctx, sm); err != nil {
-			if r.config.Logger != nil {
-				r.config.Logger.Error("store: AppendMessage failed",
+		if err := rc.Store.AppendMessage(ctx, sm); err != nil {
+			if rc.Logger != nil {
+				rc.Logger.Error("store: AppendMessage failed",
 					"run_id", runID, "seq", already+i, "role", m.Role, "error", err)
 			}
 			// Stop on first error to preserve seq monotonicity.

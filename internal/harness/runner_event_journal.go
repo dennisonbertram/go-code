@@ -73,9 +73,17 @@ func (j *eventJournal) prepareLocked(state *runState, runID string, eventType Ev
 	}
 
 	// Apply PII/secret redaction pipeline if configured.
-	if j.runner.config.RedactionPipeline != nil {
+	// The redaction config comes from the run's config snapshot (captured at
+	// run creation) so an ApplyConfig swap mid-run cannot change redaction
+	// behavior for an in-flight run. prepareLocked runs under r.mu, so it
+	// reads state.config directly instead of calling configForRun.
+	rc := j.runner.snapshotConfig()
+	if state.config != nil {
+		rc = *state.config
+	}
+	if rc.RedactionPipeline != nil {
 		var keep bool
-		enriched, keep = redaction.RedactPayload(j.runner.config.RedactionPipeline, string(eventType), enriched)
+		enriched, keep = redaction.RedactPayload(rc.RedactionPipeline, string(eventType), enriched)
 		if !keep {
 			delivery.dropped = true
 			return delivery, true
@@ -144,8 +152,8 @@ func (j *eventJournal) prepareLocked(state *runState, runID string, eventType Ev
 			Seq:       eventSeq,
 		}
 		if !safeRecorderSend(state.recorderCh, rev) {
-			if j.runner.config.Logger != nil {
-				j.runner.config.Logger.Error("rollout recorder: channel full, event dropped",
+			if rc.Logger != nil {
+				rc.Logger.Error("rollout recorder: channel full, event dropped",
 					"run_id", runID, "event_type", string(eventType), "seq", eventSeq)
 			}
 			dropMarker := rollout.RecordableEvent{
@@ -185,6 +193,10 @@ func (j *eventJournal) dispatch(delivery eventDispatch) {
 		return
 	}
 
+	// Logger comes from the run's config snapshot when available so logging
+	// stays consistent with the config the run started with.
+	rc := j.runner.configForRun(delivery.runID)
+
 	if !IsTerminalEvent(delivery.eventType) {
 		j.runner.storeAppendEvent(delivery.event, delivery.eventSeq)
 	}
@@ -207,8 +219,8 @@ func (j *eventJournal) dispatch(delivery eventDispatch) {
 			select {
 			case delivery.recorderCh <- rev:
 			case <-sendTimer.C:
-				if j.runner.config.Logger != nil {
-					j.runner.config.Logger.Error("rollout recorder: terminal send timeout, JSONL may be incomplete",
+				if rc.Logger != nil {
+					rc.Logger.Error("rollout recorder: terminal send timeout, JSONL may be incomplete",
 						"run_id", delivery.runID, "timeout", recorderDrainTimeout)
 				}
 			}
@@ -218,8 +230,8 @@ func (j *eventJournal) dispatch(delivery eventDispatch) {
 			select {
 			case <-delivery.recorderDone:
 			case <-drainTimer.C:
-				if j.runner.config.Logger != nil {
-					j.runner.config.Logger.Error("rollout recorder: drain timeout exceeded, JSONL may be incomplete",
+				if rc.Logger != nil {
+					rc.Logger.Error("rollout recorder: drain timeout exceeded, JSONL may be incomplete",
 						"run_id", delivery.runID, "timeout", recorderDrainTimeout)
 				}
 			}
