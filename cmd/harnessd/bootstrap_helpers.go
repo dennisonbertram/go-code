@@ -17,6 +17,7 @@ import (
 	"go-agent-harness/internal/hooks"
 	linearadapter "go-agent-harness/internal/linear"
 	"go-agent-harness/internal/networks"
+	"go-agent-harness/internal/provider"
 	"go-agent-harness/internal/provider/anthropic"
 	"go-agent-harness/internal/provider/catalog"
 	openai "go-agent-harness/internal/provider/openai"
@@ -122,7 +123,7 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 				TTL: 5 * time.Minute,
 			}))
 		}
-		bootstrap.providerRegistry.SetClientFactory(func(apiKey, baseURL, providerName string) (catalog.ProviderClient, error) {
+		bootstrap.providerRegistry.SetClientFactory(catalog.ClientFactory(func(apiKey, baseURL, providerName string, tokenSource provider.TokenSource) (catalog.ProviderClient, error) {
 			if providerName == "anthropic" {
 				return anthropic.NewClient(anthropic.Config{
 					APIKey:          apiKey,
@@ -144,6 +145,7 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 			}
 			cfg := openai.Config{
 				APIKey:          apiKey,
+				TokenSource:     tokenSource,
 				BaseURL:         baseURL,
 				ProviderName:    providerName,
 				PricingResolver: bootstrap.pricingResolver,
@@ -170,7 +172,7 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 				cfg.OpenRouterTitle = title
 			}
 			return opts.newProvider(cfg)
-		})
+		}))
 	}
 
 	return bootstrap, nil

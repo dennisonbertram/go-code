@@ -9,14 +9,17 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"go-agent-harness/internal/provider"
 )
 
 // ProviderClient is the interface that provider clients must implement.
 // This avoids an import cycle with the harness package.
 type ProviderClient interface{}
 
-// ClientFactory creates a provider client given API key, base URL, and provider name.
-type ClientFactory func(apiKey, baseURL, providerName string) (ProviderClient, error)
+// ClientFactory creates a provider client given API key, base URL, provider
+// name, and an optional dynamic bearer credential source.
+type ClientFactory func(apiKey, baseURL, providerName string, tokenSource provider.TokenSource) (ProviderClient, error)
 
 // ProviderRegistry holds a Catalog and lazily creates provider client instances per provider.
 type ProviderRegistry struct {
@@ -24,6 +27,7 @@ type ProviderRegistry struct {
 	mu            sync.RWMutex
 	clients       map[string]ProviderClient
 	overrideKeys  map[string]string
+	tokenSources  map[string]provider.TokenSource
 	getenv        func(string) string
 	clientFactory ClientFactory
 	openRouter    OpenRouterModelDiscoverer
@@ -52,10 +56,25 @@ func NewProviderRegistryWithEnv(catalog *Catalog, getenv func(string) string) *P
 
 // SetClientFactory sets the factory function used to create provider clients.
 // Must be called before GetClient/GetClientForModel if client creation is needed.
-func (r *ProviderRegistry) SetClientFactory(factory ClientFactory) {
+func (r *ProviderRegistry) SetClientFactory(factory any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.clientFactory = factory
+	switch factory := factory.(type) {
+	case ClientFactory:
+		r.clientFactory = factory
+	case func(string, string, string, provider.TokenSource) (ProviderClient, error):
+		r.clientFactory = ClientFactory(factory)
+	case func(string, string, string) (ProviderClient, error):
+		// Keep existing static-key registrations source-compatible while the
+		// typed ClientFactory carries the optional dynamic credential.
+		r.clientFactory = func(apiKey, baseURL, providerName string, _ provider.TokenSource) (ProviderClient, error) {
+			return factory(apiKey, baseURL, providerName)
+		}
+	case nil:
+		r.clientFactory = nil
+	default:
+		panic("catalog: unsupported client factory signature")
+	}
 }
 
 // SetOpenRouterDiscovery sets the live OpenRouter model discoverer used for
@@ -79,12 +98,29 @@ func (r *ProviderRegistry) SetAPIKey(provider, key string) {
 	delete(r.clients, provider)
 }
 
+// SetTokenSource stores a runtime dynamic credential source for the named
+// provider. It satisfies provider configuration independently of an API key
+// and evicts any cached client so the next GetClient receives the new source.
+func (r *ProviderRegistry) SetTokenSource(providerName string, tokenSource provider.TokenSource) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.tokenSources == nil {
+		r.tokenSources = make(map[string]provider.TokenSource)
+	}
+	r.tokenSources[providerName] = tokenSource
+	delete(r.clients, providerName)
+}
+
 // IsConfigured returns true if the named provider has an API key available,
 // either via a runtime override, the environment variable, or an optional
 // local-provider configuration that does not require a key.
 func (r *ProviderRegistry) IsConfigured(providerName string) bool {
 	r.mu.RLock()
 	if k := r.overrideKeys[providerName]; k != "" {
+		r.mu.RUnlock()
+		return true
+	}
+	if r.tokenSources[providerName] != nil {
 		r.mu.RUnlock()
 		return true
 	}
@@ -124,11 +160,12 @@ func (r *ProviderRegistry) GetClient(providerName string) (ProviderClient, error
 	}
 
 	// Check runtime override before falling back to environment variable.
+	tokenSource := r.tokenSources[providerName]
 	apiKey := r.overrideKeys[providerName]
-	if apiKey == "" {
+	if apiKey == "" && tokenSource == nil {
 		apiKey = r.getenv(entry.APIKeyEnv)
 	}
-	if apiKey == "" {
+	if apiKey == "" && tokenSource == nil {
 		if !entry.APIKeyOptional {
 			return nil, fmt.Errorf("provider %q: API key env %q is not set", providerName, entry.APIKeyEnv)
 		}
@@ -145,7 +182,7 @@ func (r *ProviderRegistry) GetClient(providerName string) (ProviderClient, error
 		}
 	}
 
-	client, err := r.clientFactory(apiKey, entry.BaseURL, providerName)
+	client, err := r.clientFactory(apiKey, entry.BaseURL, providerName, tokenSource)
 	if err != nil {
 		return nil, fmt.Errorf("create client for provider %q: %w", providerName, err)
 	}
@@ -529,7 +566,7 @@ func matchesProviderPrefix(prefix, provider string) bool {
 	// Known OpenRouter prefix aliases for common providers.
 	knownAliases := map[string]string{
 		"x-ai":       "xai",
-		"meta-llama": "groq",    // meta-llama models are often routed via groq
+		"meta-llama": "groq", // meta-llama models are often routed via groq
 		"moonshotai": "kimi",
 		"google":     "gemini",
 	}

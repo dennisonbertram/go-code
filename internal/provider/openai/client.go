@@ -141,10 +141,12 @@ func (c *Client) applyAuthAndExtraHeaders(ctx context.Context, req *http.Request
 			return fmt.Errorf("retrieve bearer credential: %w", err)
 		}
 	}
-	req.Header.Set("Authorization", "Bearer "+credential)
 	for key, value := range c.extraHeaders {
 		req.Header.Set(key, value)
 	}
+	// Apply authorization last so a caller-supplied extra header cannot replace
+	// the credential source selected for this request.
+	req.Header.Set("Authorization", "Bearer "+credential)
 	return nil
 }
 

@@ -59,7 +59,7 @@ func (c *Cache) Token(ctx context.Context) (string, error) {
 
 	token, refreshToken, expiresAt, err := c.refresh(ctx, c.refreshToken)
 	if err != nil {
-		if c.token != "" && now.Before(c.expiresAt) {
+		if c.token != "" && time.Now().Before(c.expiresAt) {
 			return c.token, nil
 		}
 		return "", fmt.Errorf("refresh bearer credential: %w", err)
