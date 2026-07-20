@@ -58,9 +58,9 @@ Epic: #806 (parent #803). Branches: `epic/806-acp-server` (slice 1, merged), `ep
 - [x] Slice 1: framing + initialize, merged via PR #835.
 - [x] Slice 2: write failing tests first (red: `undefined: NewRunsClient`; CLI red: `-server` flag undefined).
 - [x] Slice 2: implement minimal code changes (`client.go`, `session.go`, concurrent dispatch in `server.go`, flags in `acp.go`).
-- [ ] Slice 2: gofmt + go vet clean; `go test ./internal/acp/... ./cmd/harnesscli/... -count=1` green.
+- [x] Slice 2: gofmt + go vet clean; `go test ./internal/acp/... ./cmd/harnesscli/... -count=1` green.
 - [x] Slice 2: update engineering log.
-- [ ] Slice 2: push branch `epic/806-acp-server-s2` and open PR (no merge).
+- [x] Slice 2: push branch `epic/806-acp-server-s2` and open PR (no merge) — PR #874.
 
 ## Risks and Mitigations
 
