@@ -1,5 +1,7 @@
 # Plans Index
 
+- `2026-07-20-subscription-auth-foundation-846-plan.md` — Epic #846 subscription-auth foundation: token-source, dynamic request auth, refresh cache, and registry plumbing (in implementation).
+- `2026-07-20-subscription-auth-foundation-846-impact-map.md` — Cross-surface impact map for Epic #846 provider credential plumbing.
 - `823-exit-codes.md` — Epic #823 Slice 1 (docs-only): ratify the headless CLI exit-code contract page for runs and goals.
 - `821-plugin-system.md` — Epic #821 slice 1: plugin home decision and `plugin.json` manifest v1 contract docs, plus legacy-dir startup warning (in implementation).
 - `813-skill-args.md` — Epic #813 slice 1: quote-aware argument tokenizer (`SplitArgs`) for skill argument paths (in implementation).
