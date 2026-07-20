@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"sort"
@@ -173,14 +174,8 @@ func (s *Server) importSubscriptionProvider(name string) error {
 		s.providerRegistry.SetTokenSource(name, source)
 		return nil
 	default:
-		return errUnknownSubscriptionProvider{name: name}
+		return fmt.Errorf("subscription import is not supported for provider %s", name)
 	}
-}
-
-type errUnknownSubscriptionProvider struct{ name string }
-
-func (e errUnknownSubscriptionProvider) Error() string {
-	return "subscription import is not supported for provider " + e.name
 }
 
 // handleSummarize handles POST /v1/summarize.
