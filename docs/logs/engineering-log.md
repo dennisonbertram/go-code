@@ -44,6 +44,14 @@
 - In-memory caveat, same as the existing compact route: the mutation is store-only, so `GET {id}/messages` on a conversation still resident in the runner's memory shows the pre-undo snapshot until the run ends or the daemon restarts (the store fallback then serves the truncated history). The TUI slice refetches after undo.
 - Validation: failing-first tests in `internal/server/http_undo_test.go` (10 endpoint behavior tests) and `internal/server/http_undo_tenant_test.go` (cross-tenant 404 + no-mutation, `runs:read`-only 403); `go test ./internal/server/ -run 'Undo|TenantIsolation' -count=1` green. tmux smoke against `harnessd` (fake provider, `HARNESS_CONVERSATION_DB` set): `POST .../undo {"count":1}` → 200 `{"undone":true,"removed_from_step":2,"remaining_messages":3}`; after restart, `GET .../messages` serves the truncated history with the marker.
 
+## 2026-07-19 (Unified /tasks Panel — Epic #814, Slice 2)
+
+- Background bash jobs are now enumerable and killable daemon-wide. `JobManager.List` (`internal/harness/tools/bash_manager.go` unexported `list` + exported wrapper in `job_manager_exports.go`) returns `JobInfo` snapshots (id, command, working dir, started-at, tenant, running, exit code, timed-out) with a `Status()` of `running`/`exited`/`timed_out`; `runBackground` captures the originating run's tenant from `RunMetadataFromContext`.
+- New `harness.JobTracker` (`internal/harness/job_tracker.go`): per-registry job managers register via the new `DefaultRegistryOptions.JobTracker` (unregister on registry shutdown), so the main registry, per-run provisioned-workspace registries (runner.go), and subagent worktree registries are all covered. Task IDs are namespaced `jm<N>:job_<n>` because managers number jobs from `job_1` independently.
+- Server: `GET /v1/tasks` unions `bash_job` entries (label = command, cancel action while running) with the same tenant filtering as callbacks; new `POST /v1/jobs/{id}/kill` (runs:write, 404 unknown/cross-tenant, 501 unconfigured) reuses `JobManager.Kill`.
+- harnessd: one `JobTracker` created in `main.go`, threaded via `baseRegistryOptions` and `runtime_container`/`bootstrap_helpers` into `ServerOptions.JobTracker`.
+- Validation: failing-first tests — `bash_manager_list_test.go` (7 tests incl. race-checked concurrency), `job_tracker_test.go` (6 tests incl. registry-wiring integration through the real `bash` tool and `job_output`), and 8 new `http_tasks_test.go` tests. `go test ./internal/server/ ./internal/harness/ ./internal/harness/tools/ ./cmd/harnessd/ -count=1` all pass; the pre-existing flaky `TestJobManagerRunForegroundStreamingOverlongLineReturnsPromptly` passed in this run.
+
 ## 2026-07-20 (Issue #854 TUI Subscription Credential Import)
 
 - Replaced the stale `/keys` startup hint based on nonexistent `KIMI_SUBSCRIPTION_AUTH` with synchronous, local-only reads of both harness-owned Codex and Kimi credential stores. The TUI stores only a non-secret availability marker.

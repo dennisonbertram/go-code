@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,9 @@ type backgroundJob struct {
 	command    string
 	workingDir string
 	startedAt  time.Time
+	// tenantID is the tenant of the run that started the job, captured from
+	// the tool execution context. Empty for unscoped/legacy callers.
+	tenantID string
 
 	stdout *headTailBuffer
 	stderr *headTailBuffer
@@ -233,11 +237,19 @@ func (m *JobManager) runBackground(ctx context.Context, command string, timeoutS
 	}
 	id := "job_" + strconv.FormatUint(atomic.AddUint64(&m.nextID, 1), 10)
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
+	// Capture the originating run's tenant so daemon-wide listings (the
+	// /v1/tasks union) can scope jobs to their owning tenant. Absent for
+	// callers without run metadata (e.g. the exported RunBackground wrapper).
+	var tenantID string
+	if md, ok := RunMetadataFromContext(ctx); ok {
+		tenantID = md.TenantID
+	}
 	job := &backgroundJob{
 		id:         id,
 		command:    command,
 		workingDir: workDir,
 		startedAt:  m.now(),
+		tenantID:   tenantID,
 		stdout:     newHeadTailBuffer(m.maxOutputBytes),
 		stderr:     newHeadTailBuffer(m.maxOutputBytes),
 		cancel:     cancel,
@@ -435,6 +447,80 @@ func (m *JobManager) get(id string) *backgroundJob {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.jobs[id]
+}
+
+// Job status values reported by JobInfo.Status. These are the bash_job
+// statuses surfaced by the /v1/tasks union (epic #814).
+const (
+	JobStatusRunning  = "running"
+	JobStatusExited   = "exited"
+	JobStatusTimedOut = "timed_out"
+)
+
+// JobInfo is a point-in-time snapshot of a background job, safe to read
+// without holding any manager locks. It carries everything the /v1/tasks
+// union needs to render a bash_job row: identity, command, start time,
+// owning tenant, and outcome.
+type JobInfo struct {
+	ID         string
+	Command    string
+	WorkingDir string
+	StartedAt  time.Time
+	// TenantID is the tenant of the run that started the job; empty when the
+	// job was started without run metadata.
+	TenantID string
+	Running  bool
+	ExitCode int
+	TimedOut bool
+}
+
+// Status collapses the job's outcome flags into a single status string:
+// running while in flight, timed_out when the timeout killed it, exited
+// otherwise (success, failure, or kill).
+func (j JobInfo) Status() string {
+	if j.Running {
+		return JobStatusRunning
+	}
+	if j.TimedOut {
+		return JobStatusTimedOut
+	}
+	return JobStatusExited
+}
+
+// list returns a snapshot of every job currently tracked by the manager,
+// sorted by start time then ID for deterministic output. Jobs already evicted
+// by the finished-job TTL are absent. Safe for concurrent use with
+// runBackground, kill, and cleanupExpired.
+func (m *JobManager) list() []JobInfo {
+	m.mu.RLock()
+	jobs := make([]*backgroundJob, 0, len(m.jobs))
+	for _, job := range m.jobs {
+		jobs = append(jobs, job)
+	}
+	m.mu.RUnlock()
+
+	out := make([]JobInfo, 0, len(jobs))
+	for _, job := range jobs {
+		job.mu.Lock()
+		out = append(out, JobInfo{
+			ID:         job.id,
+			Command:    job.command,
+			WorkingDir: job.workingDir,
+			StartedAt:  job.startedAt,
+			TenantID:   job.tenantID,
+			Running:    !job.done,
+			ExitCode:   job.exitCode,
+			TimedOut:   job.timedOut,
+		})
+		job.mu.Unlock()
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if !out[i].StartedAt.Equal(out[j].StartedAt) {
+			return out[i].StartedAt.Before(out[j].StartedAt)
+		}
+		return out[i].ID < out[j].ID
+	})
+	return out
 }
 
 func (m *JobManager) cleanupExpired() {

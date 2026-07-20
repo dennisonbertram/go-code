@@ -90,7 +90,12 @@ type ServerOptions struct {
 	// CallbackLister enumerates pending delayed callbacks across all
 	// conversations for GET /v1/tasks (epic #814). Optional; when nil the
 	// tasks union simply contains no callback entries.
-	CallbackLister   CallbackLister
+	CallbackLister CallbackLister
+	// JobTracker enumerates and kills background bash jobs across all tool
+	// registries for GET /v1/tasks and POST /v1/jobs/{id}/kill (epic #814
+	// slice 2). Optional; when nil, bash_job entries are absent and the kill
+	// route returns 501.
+	JobTracker       *harness.JobTracker
 	ProviderRegistry *catalog.ProviderRegistry
 	Checkpoints      checkpointManager
 	// Store is an optional persistence layer for run state.
@@ -213,6 +218,7 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		mcpConnector:      opts.MCPConnector,
 		subagentManager:   opts.SubagentManager,
 		callbackLister:    opts.CallbackLister,
+		jobTracker:        opts.JobTracker,
 		checkpoints:       opts.Checkpoints,
 		runStore:          opts.Store,
 		approvalBroker:    opts.ApprovalBroker,
@@ -300,6 +306,10 @@ func (s *Server) buildMux() http.Handler {
 	// pending delayed callbacks; epic #814). Requires runs:read, consistent
 	// with the per-source list routes above.
 	mux.Handle("/v1/tasks", auth(read(http.HandlerFunc(s.handleTasks))))
+
+	// POST /v1/jobs/{id}/kill — daemon-side kill path for background bash
+	// jobs (epic #814 slice 2). Requires runs:write; scope enforced inside.
+	mux.Handle("/v1/jobs/", auth(http.HandlerFunc(s.handleJobByID)))
 
 	// /v1/skills — GET requires runs:read; POST /verify requires runs:write.
 	mux.Handle("/v1/skills", auth(read(http.HandlerFunc(s.handleSkillsRoot))))
@@ -434,6 +444,10 @@ type Server struct {
 	// conversations for GET /v1/tasks (epic #814). When nil, callbacks are
 	// simply absent from the union.
 	callbackLister CallbackLister
+
+	// jobTracker enumerates and kills background bash jobs daemon-wide for
+	// GET /v1/tasks and POST /v1/jobs/{id}/kill (epic #814 slice 2).
+	jobTracker *harness.JobTracker
 
 	// runStore is an optional persistence layer for run state (issue #7).
 	// When non-nil, GET /v1/runs supports filtering and run history survives restarts.

@@ -324,3 +324,310 @@ func TestTasksEndpoint_MethodNotAllowed(t *testing.T) {
 		t.Fatalf("POST /v1/tasks: status %d, want 405", code)
 	}
 }
+
+// --- bash_job union + kill endpoint (epic #814 slice 2) ---
+
+// newTrackedJobManager returns a JobManager registered on a tracker, plus the
+// tracker. The manager is shut down with test cleanup.
+func newTrackedJobManager(t *testing.T) (*harness.JobTracker, *tools.JobManager) {
+	t.Helper()
+	tracker := harness.NewJobTracker()
+	mgr := tools.NewJobManager(t.TempDir(), nil)
+	tracker.Register(mgr)
+	t.Cleanup(func() { _ = mgr.Shutdown(context.Background()) })
+	return tracker, mgr
+}
+
+func startBashJob(t *testing.T, mgr *tools.JobManager, ctx context.Context, command string) string {
+	t.Helper()
+	result, err := mgr.RunBackgroundWithContext(ctx, command, 60, "")
+	if err != nil {
+		t.Fatalf("RunBackgroundWithContext(%q): %v", command, err)
+	}
+	shellID, _ := result["shell_id"].(string)
+	if shellID == "" {
+		t.Fatalf("RunBackgroundWithContext(%q) returned no shell_id: %v", command, result)
+	}
+	return shellID
+}
+
+func tenantJobCtx(tenantID string) context.Context {
+	return context.WithValue(context.Background(), tools.ContextKeyRunMetadata, tools.RunMetadata{
+		RunID:    "run-1",
+		TenantID: tenantID,
+	})
+}
+
+// TestTasksEndpoint_UnionsBashJobs verifies background bash jobs appear in the
+// union as bash_job entries with running/exited statuses and a cancel action
+// only while running.
+func TestTasksEndpoint_UnionsBashJobs(t *testing.T) {
+	t.Parallel()
+
+	tracker, mgr := newTrackedJobManager(t)
+	runningID := startBashJob(t, mgr, context.Background(), "sleep 30")
+	exitedID := startBashJob(t, mgr, context.Background(), "true")
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		out, err := mgr.Output(exitedID, false)
+		if err != nil {
+			t.Fatalf("Output(%s): %v", exitedID, err)
+		}
+		if running, _ := out["running"].(bool); !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("exited job did not finish in time")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), JobTracker: tracker})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, tasks := listTasks(t, ts, "")
+	if code != http.StatusOK {
+		t.Fatalf("GET /v1/tasks: status %d, want 200", code)
+	}
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2 bash jobs: %+v", len(tasks), tasks)
+	}
+	byLabel := make(map[string]Task, 2)
+	for _, task := range tasks {
+		if task.Type != "bash_job" {
+			t.Errorf("task %s type = %q, want bash_job", task.ID, task.Type)
+		}
+		byLabel[task.Label] = task
+	}
+	running, ok := byLabel["sleep 30"]
+	if !ok {
+		t.Fatalf("no task labelled 'sleep 30': %+v", tasks)
+	}
+	if running.Status != "running" {
+		t.Errorf("running job status = %q, want running", running.Status)
+	}
+	if len(running.Actions) != 1 || running.Actions[0] != "cancel" {
+		t.Errorf("running job actions = %v, want [cancel]", running.Actions)
+	}
+	exited, ok := byLabel["true"]
+	if !ok {
+		t.Fatalf("no task labelled 'true': %+v", tasks)
+	}
+	if exited.Status != "exited" {
+		t.Errorf("finished job status = %q, want exited", exited.Status)
+	}
+	if len(exited.Actions) != 0 {
+		t.Errorf("finished job actions = %v, want []", exited.Actions)
+	}
+	_ = runningID
+}
+
+// TestTasksEndpoint_BashJobTenantFiltering verifies bash jobs are scoped to
+// the caller's tenant like the other task sources.
+func TestTasksEndpoint_BashJobTenantFiltering(t *testing.T) {
+	t.Parallel()
+
+	ms := store.NewMemoryStore()
+	tokenA, keyA := newSubagentTenantAPIKey(t, "tenant-alpha", "key A")
+	if err := ms.CreateAPIKey(context.Background(), keyA); err != nil {
+		t.Fatalf("CreateAPIKey A: %v", err)
+	}
+
+	tracker, mgr := newTrackedJobManager(t)
+	startBashJob(t, mgr, tenantJobCtx("tenant-alpha"), "sleep 30")
+	startBashJob(t, mgr, tenantJobCtx("tenant-bravo"), "sleep 31")
+
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), Store: ms, JobTracker: tracker})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, tasks := listTasks(t, ts, tokenA)
+	if code != http.StatusOK {
+		t.Fatalf("GET /v1/tasks as A: status %d, want 200", code)
+	}
+	if len(tasks) != 1 || tasks[0].Label != "sleep 30" {
+		t.Fatalf("tenant A sees %+v, want exactly the tenant-alpha job", tasks)
+	}
+}
+
+// TestJobKillEndpoint verifies the full slice-2 acceptance flow at the HTTP
+// layer: a running bash job listed in /v1/tasks is killed via
+// POST /v1/jobs/{id}/kill, after which job_output reports it terminated.
+func TestJobKillEndpoint(t *testing.T) {
+	t.Parallel()
+
+	tracker, mgr := newTrackedJobManager(t)
+	shellID := startBashJob(t, mgr, context.Background(), "sleep 30")
+
+	var taskID string
+	for id := range func() map[string]bool {
+		out := map[string]bool{}
+		for _, tj := range tracker.List() {
+			out[tj.TaskID] = true
+		}
+		return out
+	}() {
+		taskID = id
+	}
+	if taskID == "" {
+		t.Fatal("tracker has no jobs")
+	}
+
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), JobTracker: tracker})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, body := doSubagentRequest(t, ts, http.MethodPost, "", "/v1/jobs/"+taskID+"/kill", nil)
+	if code != http.StatusOK {
+		t.Fatalf("POST /v1/jobs/%s/kill: status %d, body %s; want 200", taskID, code, body)
+	}
+
+	// job_output must reflect termination.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		out, err := mgr.Output(shellID, false)
+		if err != nil {
+			t.Fatalf("Output(%s): %v", shellID, err)
+		}
+		if running, _ := out["running"].(bool); !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job %s still running after kill endpoint", shellID)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	// The union now reports the job as exited, no longer running.
+	_, tasks := listTasks(t, ts, "")
+	if len(tasks) != 1 || tasks[0].Status != "exited" {
+		t.Fatalf("after kill, tasks = %+v, want one exited bash_job", tasks)
+	}
+}
+
+// TestJobKillEndpoint_NotFound verifies unknown task IDs return 404.
+func TestJobKillEndpoint_NotFound(t *testing.T) {
+	t.Parallel()
+
+	tracker, _ := newTrackedJobManager(t)
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), JobTracker: tracker})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	for _, id := range []string{"jm999:job_1", "jm1:job_999", "no-separator"} {
+		code, _ := doSubagentRequest(t, ts, http.MethodPost, "", "/v1/jobs/"+id+"/kill", nil)
+		if code != http.StatusNotFound {
+			t.Errorf("POST /v1/jobs/%s/kill: status %d, want 404", id, code)
+		}
+	}
+}
+
+// TestJobKillEndpoint_CrossTenant verifies a caller cannot kill another
+// tenant's bash job (404, not 403, matching subagent cancel semantics).
+func TestJobKillEndpoint_CrossTenant(t *testing.T) {
+	t.Parallel()
+
+	ms := store.NewMemoryStore()
+	_, keyA := newSubagentTenantAPIKey(t, "tenant-alpha", "key A")
+	tokenB, keyB := newSubagentTenantAPIKey(t, "tenant-bravo", "key B")
+	if err := ms.CreateAPIKey(context.Background(), keyA); err != nil {
+		t.Fatalf("CreateAPIKey A: %v", err)
+	}
+	if err := ms.CreateAPIKey(context.Background(), keyB); err != nil {
+		t.Fatalf("CreateAPIKey B: %v", err)
+	}
+
+	tracker, mgr := newTrackedJobManager(t)
+	shellID := startBashJob(t, mgr, tenantJobCtx("tenant-alpha"), "sleep 30")
+	var taskID string
+	for _, tj := range tracker.List() {
+		taskID = tj.TaskID
+	}
+
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), Store: ms, JobTracker: tracker})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, body := doSubagentRequest(t, ts, http.MethodPost, tokenB, "/v1/jobs/"+taskID+"/kill", nil)
+	if code != http.StatusNotFound {
+		t.Fatalf("cross-tenant kill: status %d, body %s; want 404", code, body)
+	}
+	out, err := mgr.Output(shellID, false)
+	if err != nil {
+		t.Fatalf("Output(%s): %v", shellID, err)
+	}
+	if running, _ := out["running"].(bool); !running {
+		t.Fatal("cross-tenant kill terminated the job")
+	}
+}
+
+// TestJobKillEndpoint_AuthEnforced verifies the kill endpoint requires
+// authentication and runs:write when auth is enabled.
+func TestJobKillEndpoint_AuthEnforced(t *testing.T) {
+	t.Parallel()
+
+	ms := store.NewMemoryStore()
+	rawRead, keyRead, err := store.GenerateAPIKey("tenant-alpha", "reader", []string{store.ScopeRunsRead})
+	if err != nil {
+		t.Fatalf("GenerateAPIKey: %v", err)
+	}
+	keyRead = minCostRehash(t, rawRead, keyRead)
+	if err := ms.CreateAPIKey(context.Background(), keyRead); err != nil {
+		t.Fatalf("CreateAPIKey reader: %v", err)
+	}
+	tokenWrite, keyWrite := newSubagentTenantAPIKey(t, "tenant-alpha", "writer")
+	if err := ms.CreateAPIKey(context.Background(), keyWrite); err != nil {
+		t.Fatalf("CreateAPIKey writer: %v", err)
+	}
+
+	tracker, mgr := newTrackedJobManager(t)
+	startBashJob(t, mgr, tenantJobCtx("tenant-alpha"), "sleep 30")
+	var taskID string
+	for _, tj := range tracker.List() {
+		taskID = tj.TaskID
+	}
+
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), Store: ms, JobTracker: tracker})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	if code, _ := doSubagentRequest(t, ts, http.MethodPost, "", "/v1/jobs/"+taskID+"/kill", nil); code != http.StatusUnauthorized {
+		t.Fatalf("kill without token: status %d, want 401", code)
+	}
+	if code, _ := doSubagentRequest(t, ts, http.MethodPost, rawRead, "/v1/jobs/"+taskID+"/kill", nil); code != http.StatusForbidden {
+		t.Fatalf("kill with read-only token: status %d, want 403", code)
+	}
+	if code, _ := doSubagentRequest(t, ts, http.MethodPost, tokenWrite, "/v1/jobs/"+taskID+"/kill", nil); code != http.StatusOK {
+		t.Fatalf("kill with runs:write token: status %d, want 200", code)
+	}
+}
+
+// TestJobKillEndpoint_MethodNotAllowed verifies non-POST methods are rejected.
+func TestJobKillEndpoint_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	tracker, _ := newTrackedJobManager(t)
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), JobTracker: tracker})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, _ := doSubagentRequest(t, ts, http.MethodGet, "", "/v1/jobs/jm1:job_1/kill", nil)
+	if code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET /v1/jobs/jm1:job_1/kill: status %d, want 405", code)
+	}
+}
+
+// TestJobKillEndpoint_NotConfigured verifies 501 when no tracker is wired.
+func TestJobKillEndpoint_NotConfigured(t *testing.T) {
+	t.Parallel()
+
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t)})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, _ := doSubagentRequest(t, ts, http.MethodPost, "", "/v1/jobs/jm1:job_1/kill", nil)
+	if code != http.StatusNotImplemented {
+		t.Fatalf("kill with unconfigured tracker: status %d, want 501", code)
+	}
+}
