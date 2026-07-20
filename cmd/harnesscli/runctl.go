@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"go-agent-harness/internal/harness"
 )
 
 // runListResponse is the JSON shape returned by GET /v1/runs.
@@ -400,10 +402,10 @@ func runContinue(args []string) int {
 	terminalEvent, err := streamRunEvents(context.Background(), streamHTTPClient, *baseURL, created.RunID, stdout)
 	if err != nil {
 		fmt.Fprintf(stderr, "harnesscli continue: stream events: %v\n", err)
-		return 1
+		return exitClientError
 	}
 	fmt.Fprintf(stdout, "terminal_event=%s\n", terminalEvent)
-	return 0
+	return exitCodeForTerminalEvent(harness.EventType(terminalEvent))
 }
 
 // runReplay implements "harnesscli replay <run-id-or-rollout-path>".

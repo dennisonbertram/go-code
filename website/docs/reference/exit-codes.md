@@ -8,8 +8,8 @@ import { Callout } from '@site/src/components/ui';
 
 This page is the **exit-code contract for headless `harnesscli` usage** — the one-shot streaming mode (`harnesscli -prompt ...`) and the streaming `continue` subcommand. It exists so shell scripts and CI pipelines can branch on a run's outcome via `$?` instead of parsing stdout.
 
-<Callout type="warning">
-**Contract status.** This page ratifies the target contract (tracking issue: epic #823, part of the kimi-code parity program #803). The implementation lands in later slices of that epic — see the [current vs. contracted behavior](#current-vs-contracted-behavior) table below for exactly which process outcomes change and which are already in effect. Until the implementation slices merge, treat the **Current** column as ground truth.
+<Callout type="info">
+**Contract status.** Tracking issue: epic #823 (part of the kimi-code parity program #803). The run terminal-event mapping (`0`/`1`/`2`/`6`/`130`) is **implemented and in effect**; the blocked exit `3` is ratified here and lands with slice 3 of the epic — until then a blocked headless run keeps streaming. See the [current vs. contracted behavior](#current-vs-contracted-behavior) table below for the per-outcome status. The single source of truth in code is `cmd/harnesscli/exitcodes.go`.
 </Callout>
 
 The contract adopts [kimi-code](https://github.com/MoonshotAI/kimi-code)'s headless codes where semantics align: kimi's `kimi -p` exits `0` when a goal completes, `3` when it blocks, `6` when it pauses, and non-zero on turn failure. Aligning on the same numbers means scripts written against one CLI keep working against the other.
@@ -113,16 +113,16 @@ This goal mapping is **documentation-only in this epic**. There is no goal-scope
 
 ## Current vs. contracted behavior
 
-This table is the reviewer-facing diff of process outcomes. Rows marked **unchanged** are already in effect; rows marked **changes** land with the implementation slices of epic #823.
+This table is the reviewer-facing diff of process outcomes. Rows marked **implemented** are in effect today; rows marked **changes** land with the remaining implementation slices of epic #823.
 
-| Outcome | Current exit code | Contracted exit code | Status |
+| Outcome | Pre-epic exit code | Contracted exit code | Status |
 |---|---|---|---|
-| `run.completed` (success) | `0` | `0` | Unchanged |
-| Client/usage/transport error | `1` | `1` | Unchanged |
-| SIGINT/SIGTERM interrupt | `130` | `130` | Unchanged |
-| `run.failed` | `0` | `2` | **Changes** — today every terminal event exits `0` (`cmd/harnesscli/main.go:219-220`, `cmd/harnesscli/runctl.go:324-330`) |
-| `run.cancelled` | `0` | `6` | **Changes** — same unconditional-`0` paths |
-| Blocked, stdin non-interactive | (streams forever) | `3` | **Changes** — today the CLI waits on the SSE stream indefinitely |
+| `run.completed` (success) | `0` | `0` | Implemented (unchanged) |
+| Client/usage/transport error | `1` | `1` | Implemented (unchanged) |
+| SIGINT/SIGTERM interrupt | `130` | `130` | Implemented (unchanged) |
+| `run.failed` | `0` | `2` | **Implemented** (epic #823 slice 2) — was an unconditional `0` at the old `cmd/harnesscli/main.go:219-220` and `cmd/harnesscli/runctl.go:324-330` paths |
+| `run.cancelled` | `0` | `6` | **Implemented** (epic #823 slice 2) — same former unconditional-`0` paths |
+| Blocked, stdin non-interactive | (streams forever) | `3` | **Changes** (epic #823 slice 3) — today the CLI waits on the SSE stream indefinitely |
 
 ### stdout contract is unchanged
 

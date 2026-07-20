@@ -161,7 +161,7 @@ func run(args []string) int {
 
 	if err := flags.Parse(args); err != nil {
 		fmt.Fprintf(stderr, "harnesscli: parse failed: %v\n", err)
-		return 1
+		return exitClientError
 	}
 
 	if *listProfiles {
@@ -173,14 +173,14 @@ func run(args []string) int {
 	if *enableTUI {
 		if err := runTUI(*baseURL, workspacePath, *resume); err != nil {
 			fmt.Fprintf(stderr, "harnesscli: tui: %v\n", err)
-			return 1
+			return exitClientError
 		}
-		return 0
+		return exitSuccess
 	}
 
 	if strings.TrimSpace(*prompt) == "" {
 		fmt.Fprintln(stderr, "harnesscli: prompt is required")
-		return 1
+		return exitClientError
 	}
 
 	var extensions *runCreatePromptSettings
@@ -208,7 +208,7 @@ func run(args []string) int {
 	})
 	if err != nil {
 		fmt.Fprintf(stderr, "harnesscli: start run: %v\n", err)
-		return 1
+		return exitClientError
 	}
 
 	fmt.Fprintf(stdout, "run_id=%s\n", runID)
@@ -217,7 +217,7 @@ func run(args []string) int {
 		return handleStreamError(ctx, requestHTTPClient, *baseURL, runID, err)
 	}
 	fmt.Fprintf(stdout, "terminal_event=%s\n", terminalEvent)
-	return 0
+	return exitCodeForTerminalEvent(harness.EventType(terminalEvent))
 }
 
 // handleStreamError decides how to report a streamRunEvents failure. If ctx
@@ -230,10 +230,10 @@ func handleStreamError(ctx context.Context, client *http.Client, baseURL, runID 
 		fmt.Fprintln(stderr, "harnesscli: interrupted, cancelling run...")
 		cancelRunOnInterrupt(client, baseURL, runID)
 		fmt.Fprintf(stdout, "run %s cancelled\n", runID)
-		return 130
+		return exitInterrupted
 	}
 	fmt.Fprintf(stderr, "harnesscli: stream events: %v\n", streamErr)
-	return 1
+	return exitClientError
 }
 
 // cancelRunOnInterrupt best-effort POSTs /v1/runs/{id}/cancel using a fresh,
