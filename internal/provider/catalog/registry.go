@@ -79,6 +79,37 @@ func (r *ProviderRegistry) SetDiscovery(providerName string, discoverer ModelDis
 	r.discoverers[providerName] = discoverer
 }
 
+// HasDiscovery reports whether providerName has a registered live discoverer.
+func (r *ProviderRegistry) HasDiscovery(providerName string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.discoverers[providerName]
+	return ok
+}
+
+// DiscoveryCredentials returns the already-configured credentials and base URL
+// for providerName. It follows the same runtime-override/environment precedence
+// as GetClient without constructing a completion client.
+func (r *ProviderRegistry) DiscoveryCredentials(providerName string) (apiKey, baseURL string, ok bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, found := r.catalog.Providers[providerName]
+	if !found {
+		return "", "", false
+	}
+	apiKey = r.overrideKeys[providerName]
+	if apiKey == "" {
+		apiKey = r.getenv(entry.APIKeyEnv)
+	}
+	if apiKey == "" && !entry.APIKeyOptional {
+		return "", "", false
+	}
+	if apiKey == "" {
+		apiKey = providerName
+	}
+	return apiKey, entry.BaseURL, true
+}
+
 // SetAPIKey stores a runtime API key override for the named provider.
 // When set, GetClient uses this key instead of the environment variable.
 func (r *ProviderRegistry) SetAPIKey(provider, key string) {
