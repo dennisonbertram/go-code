@@ -8,8 +8,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
+
+	"go-agent-harness/internal/provider"
+	"go-agent-harness/internal/provider/tokencache"
 )
 
 const (
@@ -19,6 +24,89 @@ const (
 	ClientID     = "kimi-code"
 	SafetyMargin = 30 * time.Second
 )
+
+// Credentials is the minimal compatible vendor credential shape. Values are
+// deliberately never formatted into errors or log messages.
+type Credentials struct {
+	AccessToken  string `json:"access_token"`
+	RefreshToken string `json:"refresh_token"`
+	ExpiresAt    int64  `json:"expires_at"`
+	ExpiresIn    int64  `json:"expires_in,omitempty"`
+}
+
+func DefaultStorePath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".harness", "subscription-auth", "kimi.json")
+	}
+	return filepath.Join(home, ".harness", "subscription-auth", "kimi.json")
+}
+
+func VendorCredentialPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".kimi-code", "credentials", "kimi-code.json")
+	}
+	return filepath.Join(home, ".kimi-code", "credentials", "kimi-code.json")
+}
+
+// Load reads a credential without exposing its values in errors.
+func Load(path string) (Credentials, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return Credentials{}, fmt.Errorf("read Kimi subscription credential: %w", err)
+	}
+	var creds Credentials
+	if err := json.Unmarshal(raw, &creds); err != nil {
+		return Credentials{}, fmt.Errorf("decode Kimi subscription credential: %w", err)
+	}
+	if creds.AccessToken == "" || creds.RefreshToken == "" || creds.ExpiresAt <= 0 {
+		return Credentials{}, fmt.Errorf("Kimi subscription credential is incomplete")
+	}
+	return creds, nil
+}
+
+func save(path string, creds Credentials) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create Kimi subscription credential directory: %w", err)
+	}
+	raw, err := json.MarshalIndent(creds, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encode Kimi subscription credential")
+	}
+	if err := os.WriteFile(path, append(raw, '\n'), 0o600); err != nil {
+		return fmt.Errorf("write Kimi subscription credential: %w", err)
+	}
+	return os.Chmod(path, 0o600)
+}
+
+// Import performs a read-only vendor-file import into a separate harness file.
+func Import(vendorPath, storePath string) error {
+	creds, err := Load(vendorPath)
+	if err != nil {
+		return fmt.Errorf("Kimi Code credential unavailable; run kimi-code login then harnesscli auth kimi login")
+	}
+	return save(storePath, creds)
+}
+
+// NewTokenSource persists rotated credentials only to the harness-owned store.
+func NewTokenSource(storePath, endpoint string, client *http.Client) (provider.TokenSource, error) {
+	creds, err := Load(storePath)
+	if err != nil {
+		return nil, err
+	}
+	refresh := RefreshFunc(endpoint, client)
+	return tokencache.New(creds.AccessToken, creds.RefreshToken, time.Unix(creds.ExpiresAt, 0), SafetyMargin, func(ctx context.Context, refreshToken string) (string, string, time.Time, error) {
+		token, next, expiry, err := refresh(ctx, refreshToken)
+		if err != nil {
+			return "", "", time.Time{}, err
+		}
+		if err := save(storePath, Credentials{AccessToken: token, RefreshToken: next, ExpiresAt: expiry.Unix(), ExpiresIn: int64(time.Until(expiry).Seconds())}); err != nil {
+			return "", "", time.Time{}, err
+		}
+		return token, next, expiry, nil
+	}), nil
+}
 
 // ExtraHeaders identifies go-code to Kimi's subscription API on every request.
 // Values are intentionally static and contain no user credentials.
