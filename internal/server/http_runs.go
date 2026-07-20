@@ -637,6 +637,8 @@ func (s *Server) handleRunCompact(w http.ResponseWriter, r *http.Request, runID 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":               true,
 		"messages_removed": result.MessagesRemoved,
+		"mode":             result.Mode,
+		"summary":          result.Summary,
 	})
 }
 

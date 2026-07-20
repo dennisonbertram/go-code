@@ -286,3 +286,197 @@ func TestCompactEndpointWithoutInstructionUnchanged(t *testing.T) {
 
 	close(releaseCh)
 }
+
+// TestCompactEndpointReturnsSummaryForSummarizeMode verifies the compact
+// endpoint response carries mode and the produced summary for summarize mode
+// (epic #817 slice 2): {"ok":true,"messages_removed":N,"mode":"summarize","summary":"..."}.
+func TestCompactEndpointReturnsSummaryForSummarizeMode(t *testing.T) {
+	t.Parallel()
+
+	blockCh := make(chan struct{})
+	releaseCh := make(chan struct{})
+
+	provider := &compactInstructionCaptureProvider{
+		results: []harness.CompletionResult{
+			{ToolCalls: []harness.ToolCall{{ID: "call-1", Name: "echo_json", Arguments: `{"message":"s1"}`}}},
+			{ToolCalls: []harness.ToolCall{{ID: "call-2", Name: "echo_json", Arguments: `{"message":"s2"}`}}},
+			{ToolCalls: []harness.ToolCall{{ID: "call-3", Name: "echo_json", Arguments: `{"message":"s3"}`}}},
+			{Content: "done"},
+			{Content: "a compact summary"},
+		},
+		beforeCall: func(idx int) {
+			if idx == 3 {
+				close(blockCh)
+				<-releaseCh
+			}
+		},
+	}
+
+	registry := harness.NewRegistry()
+	if err := registry.Register(harness.ToolDefinition{
+		Name:        "echo_json",
+		Description: "echoes payload",
+		Parameters:  map[string]any{"type": "object"},
+	}, func(_ context.Context, _ json.RawMessage) (string, error) {
+		return `{"echo":"ok"}`, nil
+	}); err != nil {
+		t.Fatalf("register tool: %v", err)
+	}
+
+	runner := harness.NewRunner(provider, registry, harness.RunnerConfig{
+		DefaultModel: "test-model",
+		MaxSteps:     6,
+	})
+	ts := httptest.NewServer(New(runner))
+	defer ts.Close()
+
+	res, err := http.Post(ts.URL+"/v1/runs", "application/json",
+		bytes.NewBufferString(`{"prompt":"hello"}`))
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	defer res.Body.Close()
+
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	<-blockCh
+
+	compactRes, err := http.Post(
+		ts.URL+"/v1/runs/"+created.RunID+"/compact",
+		"application/json",
+		bytes.NewBufferString(`{"mode":"summarize","keep_last":1}`),
+	)
+	if err != nil {
+		t.Fatalf("compact request: %v", err)
+	}
+	defer compactRes.Body.Close()
+
+	if compactRes.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(compactRes.Body)
+		t.Fatalf("expected 200, got %d: %s", compactRes.StatusCode, string(body))
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(compactRes.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode compact response: %v", err)
+	}
+
+	if resp["ok"] != true {
+		t.Errorf("expected ok=true, got %v", resp["ok"])
+	}
+	removed, ok := resp["messages_removed"].(float64)
+	if !ok || removed <= 0 {
+		t.Errorf("expected messages_removed > 0, got %v", resp["messages_removed"])
+	}
+	if resp["mode"] != "summarize" {
+		t.Errorf("expected mode=%q, got %v", "summarize", resp["mode"])
+	}
+	if resp["summary"] != "a compact summary" {
+		t.Errorf("expected summary=%q, got %v", "a compact summary", resp["summary"])
+	}
+
+	close(releaseCh)
+}
+
+// TestCompactEndpointStripModeReturnsEmptySummary verifies strip mode returns
+// mode="strip" and an empty summary while messages_removed stays populated,
+// and that the response remains additive-only (ok/messages_removed intact).
+func TestCompactEndpointStripModeReturnsEmptySummary(t *testing.T) {
+	t.Parallel()
+
+	blockCh := make(chan struct{})
+	releaseCh := make(chan struct{})
+
+	provider := &compactInstructionCaptureProvider{
+		results: []harness.CompletionResult{
+			{ToolCalls: []harness.ToolCall{{ID: "call-1", Name: "echo_json", Arguments: `{"message":"s1"}`}}},
+			{ToolCalls: []harness.ToolCall{{ID: "call-2", Name: "echo_json", Arguments: `{"message":"s2"}`}}},
+			{ToolCalls: []harness.ToolCall{{ID: "call-3", Name: "echo_json", Arguments: `{"message":"s3"}`}}},
+			{Content: "done"},
+		},
+		beforeCall: func(idx int) {
+			if idx == 3 {
+				close(blockCh)
+				<-releaseCh
+			}
+		},
+	}
+
+	registry := harness.NewRegistry()
+	if err := registry.Register(harness.ToolDefinition{
+		Name:        "echo_json",
+		Description: "echoes payload",
+		Parameters:  map[string]any{"type": "object"},
+	}, func(_ context.Context, _ json.RawMessage) (string, error) {
+		return `{"echo":"ok"}`, nil
+	}); err != nil {
+		t.Fatalf("register tool: %v", err)
+	}
+
+	runner := harness.NewRunner(provider, registry, harness.RunnerConfig{
+		DefaultModel: "test-model",
+		MaxSteps:     6,
+	})
+	ts := httptest.NewServer(New(runner))
+	defer ts.Close()
+
+	res, err := http.Post(ts.URL+"/v1/runs", "application/json",
+		bytes.NewBufferString(`{"prompt":"hello"}`))
+	if err != nil {
+		t.Fatalf("start run: %v", err)
+	}
+	defer res.Body.Close()
+
+	var created struct {
+		RunID string `json:"run_id"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+
+	<-blockCh
+
+	compactRes, err := http.Post(
+		ts.URL+"/v1/runs/"+created.RunID+"/compact",
+		"application/json",
+		bytes.NewBufferString(`{"mode":"strip","keep_last":1}`),
+	)
+	if err != nil {
+		t.Fatalf("compact request: %v", err)
+	}
+	defer compactRes.Body.Close()
+
+	if compactRes.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(compactRes.Body)
+		t.Fatalf("expected 200, got %d: %s", compactRes.StatusCode, string(body))
+	}
+
+	var resp map[string]any
+	if err := json.NewDecoder(compactRes.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode compact response: %v", err)
+	}
+
+	if resp["ok"] != true {
+		t.Errorf("expected ok=true, got %v", resp["ok"])
+	}
+	removed, ok := resp["messages_removed"].(float64)
+	if !ok || removed <= 0 {
+		t.Errorf("expected messages_removed > 0, got %v", resp["messages_removed"])
+	}
+	if resp["mode"] != "strip" {
+		t.Errorf("expected mode=%q, got %v", "strip", resp["mode"])
+	}
+	summaryVal, present := resp["summary"]
+	if !present {
+		t.Error("expected summary key to be present (additive field), got missing")
+	} else if summaryVal != "" {
+		t.Errorf("strip mode must return an empty summary, got %v", summaryVal)
+	}
+
+	close(releaseCh)
+}

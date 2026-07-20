@@ -311,7 +311,7 @@ func TestCompactStripHTTP(t *testing.T) {
 		{Index: 4, Role: "assistant", Content: "done"},
 	}
 
-	result, err := compactMessagesHTTP(context.Background(), msgs, "strip", 2, nil)
+	result, _, err := compactMessagesHTTP(context.Background(), msgs, "strip", 2, nil)
 	if err != nil {
 		t.Fatalf("compactMessagesHTTP strip: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestCompactSummarizeHTTP(t *testing.T) {
 	}
 
 	summarizer := &fixedSummarizer{summary: "a summary"}
-	result, err := compactMessagesHTTP(context.Background(), msgs, "summarize", 2, summarizer)
+	result, _, err := compactMessagesHTTP(context.Background(), msgs, "summarize", 2, summarizer)
 	if err != nil {
 		t.Fatalf("compactMessagesHTTP summarize: %v", err)
 	}
@@ -370,7 +370,7 @@ func TestCompactHybridHTTP(t *testing.T) {
 	}
 
 	summarizer := &fixedSummarizer{summary: "hybrid summary"}
-	result, err := compactMessagesHTTP(context.Background(), msgs, "hybrid", 2, summarizer)
+	result, _, err := compactMessagesHTTP(context.Background(), msgs, "hybrid", 2, summarizer)
 	if err != nil {
 		t.Fatalf("compactMessagesHTTP hybrid: %v", err)
 	}
@@ -389,7 +389,7 @@ func TestCompactMessagesHTTP_NoOp(t *testing.T) {
 		{Index: 1, Role: "assistant", Content: "done"},
 	}
 
-	result, err := compactMessagesHTTP(context.Background(), msgs, "strip", 4, nil)
+	result, _, err := compactMessagesHTTP(context.Background(), msgs, "strip", 4, nil)
 	if err != nil {
 		t.Fatalf("compactMessagesHTTP: %v", err)
 	}
@@ -1161,7 +1161,7 @@ func TestCompactMessagesHTTP_SummarizeNilSummarizer(t *testing.T) {
 		{Index: 3, Role: "assistant", Content: "d"},
 	}
 
-	_, err := compactMessagesHTTP(context.Background(), msgs, "summarize", 1, nil)
+	_, _, err := compactMessagesHTTP(context.Background(), msgs, "summarize", 1, nil)
 	if err == nil {
 		t.Fatal("expected error when summarizer is nil in summarize mode")
 	}
@@ -1181,7 +1181,7 @@ func TestCompactMessagesHTTP_StripPreservesAssistantText(t *testing.T) {
 		{Index: 4, Role: "assistant", Content: "final"},
 	}
 
-	result, err := compactMessagesHTTP(context.Background(), msgs, "strip", 1, nil)
+	result, _, err := compactMessagesHTTP(context.Background(), msgs, "strip", 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1219,7 +1219,7 @@ func TestCompactMessagesHTTP_HybridNilSummarizer(t *testing.T) {
 		{Index: 4, Role: "assistant", Content: "done"},
 	}
 
-	result, err := compactMessagesHTTP(context.Background(), msgs, "hybrid", 1, nil)
+	result, _, err := compactMessagesHTTP(context.Background(), msgs, "hybrid", 1, nil)
 	if err != nil {
 		t.Fatalf("hybrid with nil summarizer should not error: %v", err)
 	}
@@ -1249,7 +1249,7 @@ func TestCompactMessagesHTTP_HybridSummarizerError(t *testing.T) {
 	}
 
 	errorSummarizer := &errorSummarizer{}
-	result, err := compactMessagesHTTP(context.Background(), msgs, "hybrid", 1, errorSummarizer)
+	result, _, err := compactMessagesHTTP(context.Background(), msgs, "hybrid", 1, errorSummarizer)
 	// hybrid does not propagate summarizer errors; it falls back to a marker.
 	if err != nil {
 		t.Fatalf("hybrid should not propagate summarizer error: %v", err)
@@ -1274,7 +1274,7 @@ func TestCompactMessagesHTTP_StripCompactSummaryInPrefix(t *testing.T) {
 		{Index: 5, Role: "assistant", Content: "final"},
 	}
 
-	result, err := compactMessagesHTTP(context.Background(), msgs, "strip", 1, nil)
+	result, _, err := compactMessagesHTTP(context.Background(), msgs, "strip", 1, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1302,7 +1302,7 @@ func TestCompactMessagesHTTP_UnknownMode(t *testing.T) {
 		{Index: 3, Role: "assistant", Content: "d"},
 	}
 
-	_, err := compactMessagesHTTP(context.Background(), msgs, "bogusmode", 1, nil)
+	_, _, err := compactMessagesHTTP(context.Background(), msgs, "bogusmode", 1, nil)
 	if err == nil {
 		t.Fatal("expected error for unknown mode")
 	}
