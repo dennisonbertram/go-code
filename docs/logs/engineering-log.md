@@ -118,6 +118,14 @@
 - TDD: failing-first tests cover all three blocked signals × (non-interactive → exit 3 + stderr content + no cancel POST; simulated TTY → stream continues to the terminal event's code), plus `runContinue()` blocked → 3 and unit tables for `isBlockedEvent`/`blockedEventReason`.
 - Validation: `go test ./cmd/harnesscli/... ./internal/harness/... ./test/e2e/... -count=1` green; gofmt/vet clean.
 
+## 2026-07-20 (Mid-Turn Steering — Epic #820, Slice 3)
+
+- `ctrl+g` now steers the active run with the input-box content: new `Steer` binding in `cmd/harnesscli/tui/keys.go` (ctrl+s stays copy; ctrl+r stays reserved for future history search — re-grepped unbound), included in `ShortHelp`/`FullHelp` and the `buildHelpDialog` key list.
+- `cmd/harnesscli/tui/model.go` KeyMsg handler: gated on `runActive && RunID != "" && TrimSpace(input) != ""` → clears the input (`input.Clear()`, cursor/history-pos safe), sets "Steering sent", fires slice 1's `steerRunCmd`; ungated presses are status hints only ("No active run to steer" / "Type a message to steer into the run"), never errors, never HTTP. New `SteerErrorMsg` case maps kinds via `steerErrorStatusText` (409 → "run already finished", 429 → "steering buffer full — try again shortly", 404 → "run not found"); `SteerAcceptedMsg` is consumed as a documented no-op for slice 4 to hook.
+- `website/docs/cli/tui.md`: `Ctrl+G` keybinding row + a "Mid-turn steering" section (step-boundary injection, buffer-of-10 limit, `steered ⟂` marker, `harnesscli steer` one-shot).
+- Strict TDD: `steer_key_test.go` drives `tea.KeyCtrlG` through the model against an httptest daemon (POST path/body observed, input cleared, `RunActive()` true, `cancelRun` not called), plus idle/empty-input no-HTTP hints and the error-kind mapping table. The 3s per-test cost is the existing `statusTickCmd(3s)` driven synchronously by the shared `runCmd` helper — same trade the ctrl+c/cancel tests already make.
+- Validation: `go test ./cmd/harnesscli/... -count=1` all ok; regression guards (`keys_test.go`, `escape_test.go`, `cancel_test.go`, `ctrlc_server_cancel_test.go`, `clipboard_test.go`, `sse_events_test.go`) green; `go test ./internal/server/ ./internal/harness/ -count=1` ok; gofmt/vet clean.
+
 ## 2026-07-20 (Issue #875 Shell-Mode Test-Seam Coverage Fix)
 
 - Symptom: post-merge regression gate (`scripts/test-regression.sh`) failed after PR #870 landed: `coveragegate` flagged `(*Model).ShellCommandRunning` and `(*Model).WithShellExecTimeout` (cmd/harnesscli/tui/model.go) at 0.0%.

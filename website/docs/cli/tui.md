@@ -102,6 +102,7 @@ Press `?` or `Ctrl+H` at any time to open the built-in help dialog with the full
 | `Ctrl+O` | Expand/collapse active tool card, or toggle plan mode when idle |
 | `Ctrl+E` | Open `$EDITOR` for multi-line prompt editing |
 | `Ctrl+S` | Copy last assistant response to clipboard |
+| `Ctrl+G` | Steer the active run: inject the input-box text into the running turn (see below) |
 | `Ctrl+U` | Clear the input (when no overlay is open) |
 | `Ctrl+C` | Two-stage interrupt (see below) |
 | `Esc` | Multi-priority close: dropdown → overlay → cancel run → clear input |
@@ -126,6 +127,17 @@ Accidentally pressing `Ctrl+C` mid-run would be frustrating, so the TUI requires
 Pressing `Esc` when no banner is showing cancels the run directly (without the two-step confirmation).
 
 When idle (no run active), `Ctrl+C` quits the TUI immediately.
+
+### Mid-turn steering
+
+While a run is in flight, type corrective input and press `Ctrl+G` to inject it into the running turn — the run keeps going (it is not cancelled or restarted). The steered text is delivered to the agent as a user message at the **next step boundary**, not instantaneously, so the current tool call or model response finishes first.
+
+- The input box clears on send and the status bar confirms with "Steering sent".
+- The transcript shows the steered message with a `steered ⟂` marker once the server confirms it, distinguishing it from a typed prompt.
+- Steering is queued server-side with a buffer of 10 pending messages per run; if the buffer is full or the run has already finished, the status bar says so and nothing is dropped silently.
+- With no active run or an empty input box, `Ctrl+G` is a no-op with a status hint.
+- The same path is available outside the TUI as `harnesscli steer <run-id> <prompt>`.
+- `Ctrl+S` (copy) and `Esc` (cancel) are unchanged.
 
 ---
 
