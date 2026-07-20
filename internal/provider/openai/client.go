@@ -33,8 +33,11 @@ type Config struct {
 	TokenSource provider.TokenSource
 	// ExtraHeaders are static headers sent with every request. NewClient copies
 	// the map so later caller mutations cannot affect a long-lived client.
-	ExtraHeaders      map[string]string
-	BaseURL           string
+	ExtraHeaders map[string]string
+	BaseURL      string
+	// SkipV1Path keeps a provider base URL's existing namespace and appends
+	// endpoint paths directly (for example, /backend-api/codex/responses).
+	SkipV1Path        bool
 	Model             string
 	Client            *http.Client
 	PricingResolver   pricing.Resolver
@@ -61,6 +64,7 @@ type Client struct {
 	tokenSource       provider.TokenSource
 	extraHeaders      map[string]string
 	baseURL           string
+	skipV1Path        bool
 	model             string
 	client            *http.Client
 	pricingResolver   pricing.Resolver
@@ -100,12 +104,15 @@ func NewClient(config Config) (*Client, error) {
 	// and get the same behavior — path segments (/v1/chat/completions etc.) are
 	// always appended by this client.
 	baseURL = strings.TrimRight(baseURL, "/")
-	baseURL = strings.TrimSuffix(baseURL, "/v1")
+	if !config.SkipV1Path {
+		baseURL = strings.TrimSuffix(baseURL, "/v1")
+	}
 	return &Client{
 		apiKey:            config.APIKey,
 		tokenSource:       config.TokenSource,
 		extraHeaders:      cloneHeaders(config.ExtraHeaders),
 		baseURL:           baseURL,
+		skipV1Path:        config.SkipV1Path,
 		model:             model,
 		client:            httpClient,
 		pricingResolver:   config.PricingResolver,
@@ -119,6 +126,14 @@ func NewClient(config Config) (*Client, error) {
 		openRouterTitle:   config.OpenRouterTitle,
 		retry:             config.Retry,
 	}, nil
+}
+
+func (c *Client) endpointURL(path string) string {
+	prefix := "/v1"
+	if c.skipV1Path {
+		prefix = ""
+	}
+	return c.baseURL + prefix + "/" + strings.TrimLeft(path, "/")
 }
 
 func cloneHeaders(headers map[string]string) map[string]string {
@@ -336,7 +351,7 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
 
-	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, c.baseURL+"/v1/chat/completions", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, c.endpointURL("chat/completions"), bytes.NewReader(body))
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("create request: %w", err)
 	}
@@ -1415,7 +1430,7 @@ func (c *Client) completeWithResponsesAPI(ctx context.Context, req harness.Compl
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	defer cancelStream()
 
-	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, c.baseURL+"/v1/responses", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(streamCtx, http.MethodPost, c.endpointURL("responses"), bytes.NewReader(body))
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("create responses request: %w", err)
 	}

@@ -16,6 +16,7 @@ import (
 	"go-agent-harness/internal/harness"
 	htools "go-agent-harness/internal/harness/tools"
 	"go-agent-harness/internal/provider/catalog"
+	"go-agent-harness/internal/provider/codex"
 	openai "go-agent-harness/internal/provider/openai"
 	"go-agent-harness/internal/relay"
 	"go-agent-harness/internal/subagents"
@@ -111,6 +112,45 @@ func TestBuildCatalogBootstrapRegistersDiscoverersOnlyForConfiguredProviders(t *
 // 16384) instead of silently falling back to the package's defaultMaxTokens
 // (4096). Without the catalog wired in, a response that legitimately needed
 // more than 4096 output tokens gets truncated by the outgoing request itself.
+func TestBuildCatalogBootstrapWiresCodexSubscriptionSourceAndHeaders(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.MkdirAll(workspace+"/catalog", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	catalogJSON := `{"catalog_version":"1","providers":{"openai":{"base_url":"https://api.openai.com/v1","api_key_env":"OPENAI_API_KEY","protocol":"openai_compat","models":{"gpt":{"context_window":1}}},"codex-subscription":{"base_url":"https://chatgpt.com/backend-api/codex","api_key_optional":true,"token_source_required":true,"protocol":"openai_compat","models_from":"openai"}}}`
+	if err := os.WriteFile(workspace+"/catalog/models.json", []byte(catalogJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	store := codex.NewStore(filepath.Join(t.TempDir(), "codex.json"))
+	if err := store.Save(codex.Credential{AccessToken: "test-access", RefreshToken: "test-refresh", AccountID: "acct-test", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	var captured openai.Config
+	bootstrap, err := buildCatalogBootstrap(catalogBootstrapOptions{
+		workspace:  workspace,
+		getenv:     func(string) string { return "" },
+		codexStore: store,
+		newProvider: func(cfg openai.Config) (harness.Provider, error) {
+			captured = cfg
+			return &noopProvider{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildCatalogBootstrap: %v", err)
+	}
+	if !bootstrap.providerRegistry.IsConfigured("codex-subscription") {
+		t.Fatal("Codex subscription is not configured from harness credential")
+	}
+	if _, err := bootstrap.providerRegistry.GetClient("codex-subscription"); err != nil {
+		t.Fatalf("GetClient(codex-subscription): %v", err)
+	}
+	if captured.TokenSource == nil || !captured.SkipV1Path || captured.ExtraHeaders["chatgpt-account-id"] != "acct-test" {
+		t.Fatalf("Codex provider config is incomplete: %#v", captured)
+	}
+}
+
 func TestBuildCatalogBootstrapAnthropicFactoryUsesCatalogMaxTokens(t *testing.T) {
 	t.Parallel()
 
