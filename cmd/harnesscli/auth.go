@@ -213,6 +213,8 @@ func dispatch(args []string) int {
 		return runStatus(args[1:])
 	case "show":
 		return runStatus(args[1:])
+	case "viz":
+		return runViz(args[1:])
 	case "continue":
 		return runContinue(args[1:])
 	case "replay":

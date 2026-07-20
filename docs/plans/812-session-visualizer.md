@@ -1,6 +1,8 @@
-# Plan: Session Visualizer — Slice 1: embedded /viz static shell behind Bearer auth
+# Plan: Session Visualizer — Slices 1–2
 
-Epic: #812 (parent #803). This plan covers **Slice 1 only**.
+Epic: #812 (parent #803).
+
+## Slice 1 (merged, PR #829): embedded /viz static shell behind Bearer auth
 
 ## Context
 
@@ -51,9 +53,49 @@ Epic: #812 (parent #803). This plan covers **Slice 1 only**.
 - [x] Tests green; gofmt/go vet clean.
 - [x] Update `docs/plans/INDEX.md`.
 - [x] Run touched-package tests.
-- [ ] Commit, push `epic/812-session-visualizer`, open PR against repo.
+- [x] Commit, push `epic/812-session-visualizer`, open PR against repo.
 
 ## Risks and Mitigations
 
 - Risk: issue text says runs:write-only key → 403, but `hasScope` grants runs:write → runs:read (superscope, tested in `auth_scope_test.go`).
 - Mitigation: assert 200 for runs:write and 403 for a scope-less key; document the deviation in the PR body.
+
+---
+
+## Slice 2 (this branch): `feat(harnesscli): add viz subcommand that prints/opens the visualizer URL`
+
+### Context
+
+- Problem: users must know the `/viz/` URL exists to use the shell from slice 1.
+- User impact: one-command path into the UI: `harnesscli viz` / `harnesscli viz --open`.
+- Constraints: no real browser launch in tests (inject the opener); base URL resolved the same way `runStatus`/`runList` do (`-base-url` flag, default `http://localhost:8080`); no token in the printed URL.
+
+### Scope
+
+- In scope:
+  - `cmd/harnesscli/auth.go` `dispatch`: add `case "viz": return runViz(args[1:])`.
+  - New `cmd/harnesscli/viz.go`: `runViz` prints `<base>/viz/`; `--open` launches the OS browser (`open` on darwin, `xdg-open` elsewhere) via an injectable package var (precedent: `servicePlatform`/`serviceRunLifecycle` in `service.go`), falling back to the already-printed URL on failure.
+- Out of scope: slices 3–6; embedding tokens in the URL; probing the daemon's reachability.
+
+### Test Plan (TDD)
+
+- New failing tests (`cmd/harnesscli/viz_test.go`):
+  - `viz` prints `http://localhost:8080/viz/` by default.
+  - `viz -base-url http://host:9000/` trims the trailing slash and prints `http://host:9000/viz/`.
+  - positional args → exit 1 with usage on stderr.
+  - `viz --open` invokes the injected opener with the URL; success → exit 0.
+  - opener failure → exit 1, stderr diagnostic, URL still printed (fallback).
+  - `vizOpenerName`: darwin → `open`, linux → `xdg-open`.
+  - dispatch routes `viz` to `runViz`.
+- Existing tests to update: none.
+- Regression tests required: `go test ./cmd/harnesscli/... -count=1`.
+
+### Implementation Checklist
+
+- [x] Define acceptance criteria in tests.
+- [x] Write failing tests first; watch them fail (undefined symbols).
+- [x] Implement `cmd/harnesscli/viz.go` and the dispatch case.
+- [x] Tests green; gofmt/go vet clean.
+- [x] Update this plan.
+- [x] Run touched-package tests.
+- [ ] Commit, push `epic/812-session-visualizer-s2`, open PR against repo.
