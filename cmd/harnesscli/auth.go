@@ -207,6 +207,8 @@ func dispatch(args []string) int {
 		return runList(args[1:])
 	case "cancel":
 		return runCancel(args[1:])
+	case "steer":
+		return runSteer(args[1:])
 	case "status":
 		return runStatus(args[1:])
 	case "show":

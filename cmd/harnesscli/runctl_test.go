@@ -808,3 +808,212 @@ func TestDispatch_DailyAliasesRouted(t *testing.T) {
 		t.Fatalf("dispatch show returned %d", code)
 	}
 }
+
+// --- BT-010: steer posts prompt to /v1/runs/{id}/steer and confirms ---
+
+// TestRunSteer_Success verifies the one-shot steer path: POST to
+// /v1/runs/{id}/steer with JSON body {"prompt": ...}, and a confirmation on
+// stdout when the server answers 202.
+func TestRunSteer_Success(t *testing.T) {
+	var gotMethod, gotPath, gotPrompt, gotContentType string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotContentType = r.Header.Get("Content-Type")
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode steer body: %v", err)
+		}
+		gotPrompt = body["prompt"]
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, `{"status":"accepted"}`)
+	}))
+	defer ts.Close()
+
+	outBuf, errBuf, restore := captureOutput(t)
+	defer restore()
+
+	origClient := requestHTTPClient
+	requestHTTPClient = ts.Client()
+	defer func() { requestHTTPClient = origClient }()
+
+	code := runSteer([]string{"-base-url=" + ts.URL, "run_xyz", "focus on", "tests"})
+	if code != 0 {
+		t.Fatalf("expected exit code 0, got %d (stderr=%s)", code, errBuf.String())
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want POST", gotMethod)
+	}
+	if gotPath != "/v1/runs/run_xyz/steer" {
+		t.Errorf("path = %q, want /v1/runs/run_xyz/steer", gotPath)
+	}
+	if gotPrompt != "focus on tests" {
+		t.Errorf("prompt = %q, want %q (positional args joined with spaces)", gotPrompt, "focus on tests")
+	}
+	if gotContentType != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", gotContentType)
+	}
+	if !strings.Contains(outBuf.String(), "run_xyz") || !strings.Contains(outBuf.String(), "steer") {
+		t.Errorf("expected confirmation naming the run and steering, got: %s", outBuf.String())
+	}
+}
+
+// TestRunSteer_MissingArgs verifies usage errors: no run ID, and run ID with
+// no prompt, both exit 1 with a clear message and no HTTP request.
+func TestRunSteer_MissingArgs(t *testing.T) {
+	t.Run("no run id", func(t *testing.T) {
+		_, errBuf, restore := captureOutput(t)
+		defer restore()
+
+		code := runSteer([]string{})
+		if code != 1 {
+			t.Fatalf("expected exit code 1 for missing run ID, got %d", code)
+		}
+		if !strings.Contains(errBuf.String(), "run ID") {
+			t.Errorf("expected usage error about run ID, got: %s", errBuf.String())
+		}
+	})
+
+	t.Run("no prompt", func(t *testing.T) {
+		var calls int32
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.WriteHeader(http.StatusAccepted)
+		}))
+		defer ts.Close()
+
+		_, errBuf, restore := captureOutput(t)
+		defer restore()
+
+		origClient := requestHTTPClient
+		requestHTTPClient = ts.Client()
+		defer func() { requestHTTPClient = origClient }()
+
+		code := runSteer([]string{"-base-url=" + ts.URL, "run_xyz"})
+		if code != 1 {
+			t.Fatalf("expected exit code 1 for missing prompt, got %d", code)
+		}
+		if !strings.Contains(errBuf.String(), "prompt") {
+			t.Errorf("expected usage error about prompt, got: %s", errBuf.String())
+		}
+		if calls != 0 {
+			t.Errorf("server received %d request(s); want 0 for missing prompt", calls)
+		}
+	})
+}
+
+// TestRunSteer_RejectsWhitespacePrompt verifies a whitespace-only prompt is
+// rejected client-side before any HTTP request is issued (the server contract
+// is 400 invalid_request; the client must not send it).
+func TestRunSteer_RejectsWhitespacePrompt(t *testing.T) {
+	var calls int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer ts.Close()
+
+	_, errBuf, restore := captureOutput(t)
+	defer restore()
+
+	origClient := requestHTTPClient
+	requestHTTPClient = ts.Client()
+	defer func() { requestHTTPClient = origClient }()
+
+	code := runSteer([]string{"-base-url=" + ts.URL, "run_xyz", "   "})
+	if code != 1 {
+		t.Fatalf("expected exit code 1 for whitespace prompt, got %d", code)
+	}
+	if !strings.Contains(errBuf.String(), "prompt") {
+		t.Errorf("expected error about prompt, got: %s", errBuf.String())
+	}
+	if calls != 0 {
+		t.Errorf("server received %d request(s); want 0 for whitespace prompt", calls)
+	}
+}
+
+// TestRunSteer_ErrorStatuses verifies the documented steer failure statuses
+// surface as clear stderr messages with exit code 1.
+func TestRunSteer_ErrorStatuses(t *testing.T) {
+	cases := []struct {
+		name     string
+		status   int
+		body     string
+		wantText string
+	}{
+		{"not found", http.StatusNotFound, `{"error":{"code":"not_found","message":"run \"run_nope\" not found"}}`, "not found"},
+		{"run not active", http.StatusConflict, `{"error":{"code":"run_not_active","message":"run \"run_done\" is not active"}}`, "not active"},
+		{"buffer full", http.StatusTooManyRequests, `{"error":{"code":"steering_buffer_full","message":"steering buffer full"}}`, "buffer full"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer ts.Close()
+
+			_, errBuf, restore := captureOutput(t)
+			defer restore()
+
+			origClient := requestHTTPClient
+			requestHTTPClient = ts.Client()
+			defer func() { requestHTTPClient = origClient }()
+
+			code := runSteer([]string{"-base-url=" + ts.URL, "run_xyz", "focus"})
+			if code != 1 {
+				t.Fatalf("expected exit code 1 for HTTP %d, got %d", tc.status, code)
+			}
+			if !strings.Contains(errBuf.String(), tc.wantText) {
+				t.Errorf("expected stderr to contain %q, got: %s", tc.wantText, errBuf.String())
+			}
+		})
+	}
+}
+
+// TestRunSteer_PathEscapesRunID mirrors the cancel path-traversal regression:
+// a "/" in the run ID must be percent-encoded on the wire.
+func TestRunSteer_PathEscapesRunID(t *testing.T) {
+	var capturedRawPath string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedRawPath = r.URL.RawPath
+		if capturedRawPath == "" {
+			capturedRawPath = r.URL.Path
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.WriteString(w, `{"status":"accepted"}`)
+	}))
+	defer ts.Close()
+
+	_, _, restore := captureOutput(t)
+	defer restore()
+
+	origClient := requestHTTPClient
+	requestHTTPClient = ts.Client()
+	defer func() { requestHTTPClient = origClient }()
+
+	runSteer([]string{"-base-url=" + ts.URL, "../admin", "focus"})
+
+	if strings.Contains(capturedRawPath, "/admin") {
+		t.Errorf("path traversal not escaped: raw path %q contains literal /admin; run ID slash must be %%2F-encoded", capturedRawPath)
+	}
+}
+
+// TestDispatch_SteerRouted verifies dispatch routes "steer" to runSteer and
+// not to the default run() path (which would print "prompt is required" for
+// the TUI-less one-shot run path).
+func TestDispatch_SteerRouted(t *testing.T) {
+	_, errBuf, restore := captureOutput(t)
+	defer restore()
+
+	code := dispatch([]string{"steer"})
+	if code != 1 {
+		t.Fatalf("dispatch steer with no args should return 1; got %d", code)
+	}
+	if strings.Contains(errBuf.String(), "prompt is required") && !strings.Contains(errBuf.String(), "harnesscli steer") {
+		t.Errorf("dispatch('steer') should route to runSteer, not run(); got: %s", errBuf.String())
+	}
+}

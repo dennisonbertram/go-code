@@ -199,6 +199,53 @@ func cancelRunCmd(baseURL, runID, apiKey string) tea.Cmd {
 	}
 }
 
+// steerRunCmd POSTs a steering message to /v1/runs/{id}/steer for the active
+// run (server: internal/server/http_runs.go handleRunSteer). The server queues
+// the message and the harness injects it as a user message at the next step
+// boundary — the run is neither cancelled nor restarted. Empty/whitespace
+// prompts are rejected client-side (SteerErrorMsg Kind "invalid_prompt")
+// without issuing a request; 202 maps to SteerAcceptedMsg and the documented
+// failure statuses map to SteerErrorMsg kinds (see messages.go).
+func steerRunCmd(baseURL, runID, prompt, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		if strings.TrimSpace(prompt) == "" {
+			return SteerErrorMsg{RunID: runID, Kind: "invalid_prompt", Err: "prompt is required"}
+		}
+		body, err := json.Marshal(map[string]string{"prompt": prompt})
+		if err != nil {
+			return SteerErrorMsg{RunID: runID, Kind: "transport", Err: "encode request: " + err.Error()}
+		}
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/steer"
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body), apiKey)
+		if err != nil {
+			return SteerErrorMsg{RunID: runID, Kind: "transport", Err: "build request: " + err.Error()}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return SteerErrorMsg{RunID: runID, Kind: "transport", Err: "request failed: " + err.Error()}
+		}
+		defer resp.Body.Close()
+		responseBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return SteerErrorMsg{RunID: runID, Kind: "transport", Err: "read response: " + err.Error()}
+		}
+		if resp.StatusCode >= 300 {
+			kind := "http"
+			switch resp.StatusCode {
+			case http.StatusNotFound:
+				kind = "not_found"
+			case http.StatusConflict:
+				kind = "run_not_active"
+			case http.StatusTooManyRequests:
+				kind = "steering_buffer_full"
+			}
+			return SteerErrorMsg{RunID: runID, Kind: kind, Err: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))}
+		}
+		return SteerAcceptedMsg{RunID: runID}
+	}
+}
+
 func replayRunCmd(baseURL, target, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		body, err := json.Marshal(map[string]any{

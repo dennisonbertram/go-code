@@ -88,6 +88,16 @@
   land with their owning slices (3+); no pre-existing subagent design doc
   exists to update in this slice.
 
+## 2026-07-19 (Mid-Turn Steering — Epic #820, Slice 1)
+
+- Added the client plumbing for the existing `POST /v1/runs/{id}/steer` route, strict TDD:
+  - `cmd/harnesscli/tui/api.go`: `steerRunCmd(baseURL, runID, prompt, apiKey)` mirroring `cancelRunCmd`; routes through `newHarnessRequest` so harnessd auth is preserved (pinned by the `api_auth_test.go` audit table + static routing regression).
+  - `cmd/harnesscli/tui/messages.go`: `SteerAcceptedMsg` (202) and `SteerErrorMsg` with stable `Kind` strings (`not_found`, `run_not_active`, `steering_buffer_full`, `invalid_prompt`, `http`, `transport`) for slice 3's status-bar mapping.
+  - `cmd/harnesscli/runctl.go` + `auth.go` dispatch: `harnesscli steer <run-id> <prompt>` one-shot subcommand mirroring `runCancel` (`-base-url` only — the epic's `-api-key` parenthetical does not match `runCancel`, which has no such flag; noted in the PR).
+  - Empty/whitespace prompts are rejected client-side in both paths before any HTTP request (the server would 400).
+- Live-daemon smoke: `harnessd` with `HARNESS_PROVIDER=fake` + a scripted bash turn held active via `HARNESS_TOOL_APPROVAL_MODE=all`; `harnesscli steer <id> "focus on X"` printed `Run <id> steering accepted` (exit 0); unknown run → `not found` (exit 1); finished run → `not active` (exit 1).
+- Validation: `go test ./cmd/harnesscli/... -count=1` all ok; `go test ./internal/server/ ./internal/harness/ -count=1` ok; `go vet ./cmd/harnesscli/...` clean; gofmt clean on touched files (repo-wide gofmt drift on unrelated files pre-exists on main).
+
 ## 2026-07-19 (ACP Server Mode — Epic #746)
 
 - Added `cmd/harness-acp` and `internal/harnessacp`, using pinned
