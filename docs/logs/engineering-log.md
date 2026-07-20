@@ -66,6 +66,13 @@
 - `plugin update` re-stages from the recorded source, and for remote bundles re-prints surfaces and re-requires confirmation only when the declared surfaces changed; unchanged remote updates skip confirmation and preserve trust (pinned by tests).
 - TDD: failing-first tests cover Stage/Promote/Discard residue discipline, trust/untrust round-trip with `plugins.TrustedBundles` gating proof, declined/non-TTY/`--yes`/prompt-accept install paths, and update trust preservation on both unchanged and changed surfaces. Remote fixtures use local `file://` git remotes (no network).
 
+## 2026-07-20 (Mid-Turn Steering — Epic #820, Slice 2)
+
+- The TUI no longer drops `steering.received` SSE events: `cmd/harnesscli/tui/model.go`'s dispatch switch gained a `case "steering.received"` that parses the fixed `{"message": "..."}` payload (harness `drainSteering` contract) and appends a user bubble + transcript entry (role `user`) via a new `appendSteeringMarker` helper.
+- Both viewport and transcript/export carry a `steered ⟂ ` marker prefix so steered input reads distinctly from a typed prompt; the helper is the rendering slice 4's local echo will reuse. Malformed/empty payloads are dropped without panic; `m.lastEventID` bookkeeping is untouched (the case sits after ID tracking in the existing switch).
+- Strict TDD: `cmd/harnesscli/tui/steer_events_test.go` (package `tui_test`, `sse_events_test.go` pattern) drives scripted `SSEEventMsg`s — marker+message in viewport, exactly one role-`user` transcript entry, distinction from a typed prompt, five malformed-payload shapes (no panic, no marker, transcript unchanged, run stays active).
+- Validation: `go test ./cmd/harnesscli/... -count=1` all ok (incl. `sse_events_test.go`, `escape_test.go`, `cancel_test.go`, `ctrlc_server_cancel_test.go`, `clipboard_test.go`, `keys_test.go` guards); `go test ./internal/server/ ./internal/harness/ -count=1` ok; gofmt/vet clean.
+
 ## 2026-07-20 (Issue #854 TUI Subscription Credential Import)
 
 - Replaced the stale `/keys` startup hint based on nonexistent `KIMI_SUBSCRIPTION_AUTH` with synchronous, local-only reads of both harness-owned Codex and Kimi credential stores. The TUI stores only a non-secret availability marker.

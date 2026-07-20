@@ -864,6 +864,26 @@ func (m *Model) appendMessageBubble(role messagebubble.Role, content string) {
 	m.vp.AppendLines(lines)
 }
 
+// steeringMarkerPrefix labels input that was steered into a running turn
+// (POST /v1/runs/{id}/steer, confirmed by the steering.received SSE event) so
+// it reads distinctly from a typed prompt both in the viewport and in
+// exported transcripts.
+const steeringMarkerPrefix = "steered ⟂ "
+
+// appendSteeringMarker renders a server-confirmed steering injection as a
+// user bubble and records it in the transcript as a role "user" entry, both
+// carrying the steering marker. Slice 4 reuses this for the local echo of
+// TUI-originated steers.
+func (m *Model) appendSteeringMarker(message string) {
+	marked := steeringMarkerPrefix + message
+	m.transcript = append(m.transcript, transcriptexport.TranscriptEntry{
+		Role:      "user",
+		Content:   marked,
+		Timestamp: time.Now(),
+	})
+	m.appendMessageBubble(messagebubble.RoleUser, marked)
+}
+
 func (m *Model) appendToolUseView(view tooluse.Model) {
 	view.Width = m.width
 	lines := renderedBlockLines(view.View())
@@ -3286,6 +3306,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "run.resumed":
 			// Dismiss the ask-user overlay when the run resumes.
 			m.askUser = askUserState{}
+		case "steering.received":
+			// Server-confirmed steering injection (harness drainSteering): the
+			// steered text was appended to the run as a user message at the last
+			// step boundary. Show it marked as steered input so it is not
+			// mistaken for a typed prompt. Malformed/empty payloads are dropped.
+			var p struct {
+				Message string `json:"message"`
+			}
+			if err := json.Unmarshal(msg.Raw, &p); err == nil && strings.TrimSpace(p.Message) != "" {
+				m.appendSteeringMarker(p.Message)
+			}
 		}
 		// Continue polling the SSE channel.
 		if m.sseCh != nil {
