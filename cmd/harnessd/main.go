@@ -82,6 +82,7 @@ type runDeps struct {
 }
 
 type runnerConfigOptions struct {
+	DefaultProviderName  string
 	DefaultSystemPrompt  string
 	DefaultAgentIntent   string
 	AskUserTimeout       time.Duration
@@ -123,6 +124,7 @@ func buildRunnerConfig(harnessCfg config.Config, opts runnerConfigOptions) harne
 
 	return harness.RunnerConfig{
 		DefaultModel:                  harnessCfg.Model,
+		DefaultProviderName:           opts.DefaultProviderName,
 		DefaultSystemPrompt:           opts.DefaultSystemPrompt,
 		DefaultAgentIntent:            opts.DefaultAgentIntent,
 		MaxSteps:                      harnessCfg.MaxSteps,
@@ -783,6 +785,13 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		log.Printf("rollout recording enabled: %s", rolloutDir)
 	}
 	runnerCfg := buildRunnerConfig(harnessCfg, runnerConfigOptions{
+		DefaultProviderName: func() string {
+			name := strings.TrimSpace(getenv("HARNESS_PROVIDER"))
+			if name == "fake" {
+				return ""
+			}
+			return name
+		}(),
 		DefaultSystemPrompt:  systemPrompt,
 		DefaultAgentIntent:   defaultAgentIntent,
 		AskUserTimeout:       time.Duration(askUserTimeoutSeconds) * time.Second,

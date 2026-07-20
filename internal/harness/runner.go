@@ -1189,7 +1189,11 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 		primaryModel = roleModels.Primary
 	}
 
-	candidates, err := r.resolveProviderCandidates(runID, model, req.ProviderName, req.AllowFallback, req.FallbackProviders)
+	preferredProvider := req.ProviderName
+	if preferredProvider == "" {
+		preferredProvider = r.config.DefaultProviderName
+	}
+	candidates, err := r.resolveProviderCandidates(runID, model, preferredProvider, req.AllowFallback, req.FallbackProviders)
 	if err != nil {
 		return nil, err
 	}
