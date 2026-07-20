@@ -1386,7 +1386,7 @@ func TestRunnerRoutesDynamicOpenRouterSlugViaRegistry(t *testing.T) {
 		}
 		return ""
 	})
-	reg.SetOpenRouterDiscovery(runnerTestOpenRouterDiscovery{
+	reg.SetDiscovery("openrouter", runnerTestOpenRouterDiscovery{
 		models: []catalog.DiscoveredModel{
 			{ID: "moonshotai/kimi-k2.5", Name: "Kimi K2.5", ContextWindow: 262144},
 		},

@@ -35,7 +35,7 @@ func TestProviderRegistryResolveProviderUsesOpenRouterDiscovery(t *testing.T) {
 	}
 
 	reg := NewProviderRegistry(cat)
-	reg.SetOpenRouterDiscovery(stubOpenRouterDiscovery{
+	reg.SetDiscovery("openrouter", stubOpenRouterDiscovery{
 		models: []DiscoveredModel{
 			{ID: "moonshotai/kimi-k2.5", Name: "Kimi K2.5", ContextWindow: 262144},
 		},
@@ -88,7 +88,7 @@ func TestProviderRegistryListModelsMergesStaticAndOpenRouterDiscovery(t *testing
 	}
 
 	reg := NewProviderRegistry(cat)
-	reg.SetOpenRouterDiscovery(stubOpenRouterDiscovery{
+	reg.SetDiscovery("openrouter", stubOpenRouterDiscovery{
 		models: []DiscoveredModel{
 			{ID: "openai/gpt-4.1-mini", Name: "Live GPT-4.1 Mini", ContextWindow: 999999},
 			{ID: "moonshotai/kimi-k2.5", Name: "Kimi K2.5", ContextWindow: 262144},
@@ -154,7 +154,7 @@ func TestProviderRegistryListModelsFallsBackToStaticWhenDiscoveryFails(t *testin
 	}
 
 	reg := NewProviderRegistry(cat)
-	reg.SetOpenRouterDiscovery(stubOpenRouterDiscovery{err: context.DeadlineExceeded})
+	reg.SetDiscovery("openrouter", stubOpenRouterDiscovery{err: context.DeadlineExceeded})
 
 	models := reg.ListModelsContext(context.Background())
 	if len(models) != 1 {
@@ -162,5 +162,45 @@ func TestProviderRegistryListModelsFallsBackToStaticWhenDiscoveryFails(t *testin
 	}
 	if models[0].ModelID != "openai/gpt-4.1-mini" {
 		t.Fatalf("expected static openrouter model, got %q", models[0].ModelID)
+	}
+}
+
+func TestProviderRegistrySetDiscoveryMergesNonOpenRouterAndFallsBackToStatic(t *testing.T) {
+	t.Parallel()
+
+	cat := &Catalog{CatalogVersion: "1.0", Providers: map[string]ProviderEntry{
+		"openai": {
+			DisplayName: "OpenAI", Models: map[string]Model{
+				"gpt-curated": {
+					DisplayName: "Curated GPT", ContextWindow: 128000, CostTier: "premium",
+					BestFor: []string{"coding"}, Pricing: &ModelPricing{InputPer1MTokensUSD: 1},
+				},
+			},
+		},
+	}}
+
+	reg := NewProviderRegistry(cat)
+	reg.SetDiscovery("openai", stubOpenRouterDiscovery{models: []DiscoveredModel{
+		{ID: "gpt-curated", Name: "Live GPT", ContextWindow: 1},
+		{ID: "gpt-live", Name: "Live GPT", ContextWindow: 256000},
+	}})
+	reg.SetDiscovery("missing", stubOpenRouterDiscovery{models: []DiscoveredModel{{ID: "ignored"}}})
+
+	byID := make(map[string]ModelResult)
+	for _, result := range reg.ListModelsContext(context.Background()) {
+		byID[result.ModelID] = result
+	}
+	curated := byID["gpt-curated"].Model
+	if curated.DisplayName != "Curated GPT" || curated.ContextWindow != 128000 || curated.Pricing == nil || curated.CostTier != "premium" || len(curated.BestFor) != 1 {
+		t.Fatalf("expected curated metadata to win, got %+v", curated)
+	}
+	if got := byID["gpt-live"].Model.ContextWindow; got != 256000 {
+		t.Fatalf("expected live-only model to be merged, got context %d", got)
+	}
+
+	reg.SetDiscovery("openai", stubOpenRouterDiscovery{err: context.DeadlineExceeded})
+	models := reg.ListModelsContext(context.Background())
+	if len(models) != 1 || models[0].ModelID != "gpt-curated" {
+		t.Fatalf("expected first-attempt discovery failure to retain static models, got %+v", models)
 	}
 }

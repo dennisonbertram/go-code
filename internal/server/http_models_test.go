@@ -248,7 +248,7 @@ func TestModelsEndpointIncludesDiscoveredOpenRouterModels(t *testing.T) {
 		},
 	}
 	reg := catalog.NewProviderRegistry(cat)
-	reg.SetOpenRouterDiscovery(testOpenRouterDiscovery{
+	reg.SetDiscovery("openrouter", testOpenRouterDiscovery{
 		models: []catalog.DiscoveredModel{
 			{ID: "openai/gpt-4.1-mini", Name: "Live GPT-4.1 Mini", ContextWindow: 999999},
 			{ID: "moonshotai/kimi-k2.5", Name: "Kimi K2.5", ContextWindow: 262144},

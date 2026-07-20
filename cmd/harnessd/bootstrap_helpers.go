@@ -118,7 +118,7 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 
 	if bootstrap.providerRegistry != nil {
 		if _, ok := bootstrap.modelCatalog.Providers["openrouter"]; ok {
-			bootstrap.providerRegistry.SetOpenRouterDiscovery(catalog.NewDiscovery(catalog.DiscoveryOptions{
+			bootstrap.providerRegistry.SetDiscovery("openrouter", catalog.NewDiscovery(catalog.DiscoveryOptions{
 				TTL: 5 * time.Minute,
 			}))
 		}
