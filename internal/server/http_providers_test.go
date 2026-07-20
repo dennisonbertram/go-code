@@ -113,6 +113,54 @@ func TestImportSubscriptionProviderMissingVendorLoginIsActionable(t *testing.T) 
 	}
 }
 
+func TestImportKimiSubscriptionProviderReloadsLiveRegistry(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	vendorPath := filepath.Join(home, ".kimi-code", "credentials", "kimi-code.json")
+	if err := os.MkdirAll(filepath.Dir(vendorPath), 0o700); err != nil {
+		t.Fatalf("mkdir vendor path: %v", err)
+	}
+	if err := os.WriteFile(vendorPath, []byte(`{"access_token":"fake-access","refresh_token":"fake-refresh","expires_at":4102444800}`), 0o600); err != nil {
+		t.Fatalf("write Kimi vendor fixture: %v", err)
+	}
+	cat := subscriptionProviderCatalog()
+	reg := catalog.NewProviderRegistryWithEnv(cat, func(string) string { return "" })
+	ts := httptest.NewServer(NewWithOptions(ServerOptions{Runner: testRunnerForProviders(t), Catalog: cat, ProviderRegistry: reg, AuthDisabled: true}))
+	defer ts.Close()
+	if subscriptionConfigured(t, ts, "kimi-subscription") {
+		t.Fatal("Kimi subscription must be unconfigured before import")
+	}
+
+	res, err := http.Post(ts.URL+"/v1/providers/kimi-subscription/import-subscription", "", nil)
+	if err != nil {
+		t.Fatalf("POST import: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(res.Body)
+		t.Fatalf("POST import status = %d: %s", res.StatusCode, body)
+	}
+	if !subscriptionConfigured(t, ts, "kimi-subscription") {
+		t.Fatal("GET /v1/providers must report Kimi configured after live import")
+	}
+}
+
+func TestImportSubscriptionProviderRejectsNonSubscriptionName(t *testing.T) {
+	cat := subscriptionProviderCatalog()
+	reg := catalog.NewProviderRegistryWithEnv(cat, func(string) string { return "" })
+	ts := httptest.NewServer(NewWithOptions(ServerOptions{Runner: testRunnerForProviders(t), Catalog: cat, ProviderRegistry: reg, AuthDisabled: true}))
+	defer ts.Close()
+
+	res, err := http.Post(ts.URL+"/v1/providers/openai/import-subscription", "", nil)
+	if err != nil {
+		t.Fatalf("POST import: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusNotFound {
+		t.Fatalf("POST non-subscription import status = %d, want 404", res.StatusCode)
+	}
+}
+
 // testCatalogForProviders returns a catalog with two providers for provider endpoint tests.
 // The "openai" provider uses env var TEST_OPENAI_KEY_149 and "anthropic" uses TEST_ANTHROPIC_KEY_149
 // so tests can control configured status without interfering with real env vars.
