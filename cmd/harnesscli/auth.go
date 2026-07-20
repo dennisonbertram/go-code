@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"go-agent-harness/internal/provider/kimi"
 	"go-agent-harness/internal/store"
 )
 
@@ -90,8 +92,49 @@ func runAuth(args []string) int {
 	switch args[0] {
 	case "login":
 		return runAuthLogin(args[1:])
+	case "kimi":
+		return runAuthKimi(args[1:])
 	default:
 		fmt.Fprintf(stderr, "harnesscli auth: unknown subcommand %q\n", args[0])
+		return 1
+	}
+}
+
+func runAuthKimi(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "harnesscli auth kimi: subcommand required (login, status, or logout)")
+		return 1
+	}
+	storePath := kimi.DefaultStorePath()
+	switch args[0] {
+	case "login":
+		if err := kimi.Import(kimi.VendorCredentialPath(), storePath); err != nil {
+			fmt.Fprintln(stderr, "harnesscli auth kimi: run kimi-code login, then retry harnesscli auth kimi login")
+			return 1
+		}
+		fmt.Fprintln(stdout, "Kimi Code subscription credential imported.")
+		return 0
+	case "status":
+		creds, err := kimi.Load(storePath)
+		if err != nil {
+			fmt.Fprintln(stdout, "Kimi Code subscription: not configured (run kimi-code login, then harnesscli auth kimi login)")
+			return 1
+		}
+		if time.Unix(creds.ExpiresAt, 0).After(time.Now()) {
+			fmt.Fprintln(stdout, "Kimi Code subscription: configured (access credential valid)")
+		} else {
+			fmt.Fprintln(stdout, "Kimi Code subscription: configured (access credential will refresh on use)")
+		}
+		return 0
+	case "logout":
+		if err := os.Remove(storePath); err != nil && !os.IsNotExist(err) {
+			fmt.Fprintf(stderr, "harnesscli auth kimi: remove stored credential: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "Kimi Code subscription credential removed.")
+		return 0
+	default:
+		fmt.Fprintf(stderr, "harnesscli auth kimi: unknown subcommand %q\n", args[0])
 		return 1
 	}
 }
