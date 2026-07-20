@@ -1,14 +1,16 @@
-# Plan: ACP slice 1 — stdio JSON-RPC framing and initialize handshake
+# Plan: ACP epic #806 — stdio ACP server mode
 
-Epic: #806 (parent #803). Slice 1 of 5. Branch: `epic/806-acp-server`.
+Epic: #806 (parent #803). Branches: `epic/806-acp-server` (slice 1, merged), `epic/806-acp-server-s2` (slice 2).
 
-## Context
+## Slice 1 — stdio JSON-RPC framing and initialize handshake (MERGED)
+
+### Context
 
 - Problem: go-code has no Agent Client Protocol surface; editors (Zed, JetBrains) cannot spawn or drive it.
 - User impact: without ACP, go-code is invisible to ACP clients.
-- Constraints: this slice only covers newline-delimited JSON-RPC 2.0 framing over stdio plus the `initialize` handshake and spec-correct error handling. No sessions, no runs API, no SSE — those are slices 2–4. Stdlib only (`encoding/json`); no new dependencies. stdout carries protocol messages only; diagnostics go to stderr. A pre-existing `internal/harnessacp` + `cmd/harness-acp` adapter (based on `github.com/coder/acp-go-sdk`) exists; the epic deliberately specifies a new stdlib-only `internal/acp` package and a `harness acp` subcommand — do not touch the existing adapter.
+- Constraints: slice 1 covers newline-delimited JSON-RPC 2.0 framing over stdio plus the `initialize` handshake and spec-correct error handling. Stdlib only (`encoding/json`); no new dependencies. stdout carries protocol messages only; diagnostics go to stderr. A pre-existing `internal/harnessacp` + `cmd/harness-acp` adapter (based on `github.com/coder/acp-go-sdk`) exists; the epic deliberately specifies a new stdlib-only `internal/acp` package and a `harness acp` subcommand — do not touch the existing adapter.
 
-## Scope
+### Scope (slice 1)
 
 - In scope:
   - New `internal/acp` package: framed reader/writer over `io.Reader`/`io.Writer` (newline-delimited JSON), goroutine-safe writer, JSON-RPC 2.0 envelope types and error codes (`-32700`, `-32600`, `-32601`, `-32602`).
@@ -16,35 +18,53 @@ Epic: #806 (parent #803). Slice 1 of 5. Branch: `epic/806-acp-server`.
   - New `cmd/harnesscli/acp.go` with `runACP(args)`; `case "acp"` in `dispatch` (`cmd/harnesscli/auth.go`).
 - Out of scope: `session/new`, `session/prompt`, `session/cancel`, `session/update`, `session/request_permission`, `--server` flag / runs API wiring (slices 2–4), docs/e2e (slice 5).
 
+## Slice 2 — session/new and session/prompt over the runs API (IN IMPLEMENTATION)
+
+### Scope (slice 2)
+
+- In scope:
+  - `internal/acp/client.go`: stdlib `RunsClient` — `StartRun` (POST `/v1/runs` with `{"prompt": ...}`), `CancelRun` (POST `/v1/runs/{id}/cancel`), `WaitTerminal` (GET `/v1/runs/{id}/events` SSE scan until a terminal event, tracking `run.cost_limit_reached`). Bearer auth from config. Two HTTP clients: bounded timeout for request/response, no timeout for SSE.
+  - `internal/acp/session.go`: mutex-guarded session store (sessionId -> runId, one run per session); `session/new` (unique `sess_<hex>` ids, accepts cwd/mcpServers without acting on them); `session/prompt` (content-block text extraction: `text` blocks joined, `resource_link` contributes its URI; empty extraction -> `-32602`); `session/cancel` notification -> cancel POST.
+  - Stop reasons: `run.completed` -> `end_turn`, `run.cost_limit_reached` + completed -> `max_turn_requests`, `run.failed` -> `refusal`, `run.cancelled` -> `cancelled`.
+  - Concurrent dispatch in `server.go`: `session/prompt` holds its response open until the run terminates, so handlers must run in goroutines or a mid-turn `session/cancel` could never be read. Writes stay serialized by the Conn mutex; `Serve` drains in-flight handlers before returning at EOF. `-32603` internal error code added.
+  - `cmd/harnesscli/acp.go`: `--server` flag; resolution flag > `loadConfig().Server` > `http://localhost:8080`; API key from `loadConfig()`; `EnableSessions(client)` on the server.
+- Out of scope: `session/update` translation (slice 3), `session/request_permission` (slice 4), multi-turn (one run per ACP session — second `session/prompt` on the same session errors), MCP-server wiring from `session/new` params, docs/e2e (slice 5).
+
+### Test Plan (TDD, slice 2)
+
+- New failing tests:
+  - `internal/acp`: RunsClient against httptest (start/cancel/auth header/error paths; SSE terminal wait incl. cost-limit flag, ping/retry lines skipped, stream-ended-early error); content-block extraction table; stop-reason table; `session/new` uniqueness; `session/prompt` unknown session / second prompt rejected; full flows over scripted stdio (prompt -> `end_turn`; cancel mid-run -> cancel POST + `cancelled` stop reason via `io.Pipe` staging); concurrent sessions isolated; handler-concurrency proof (blocked handler does not stall `initialize`).
+  - `cmd/harnesscli`: scripted initialize -> session/new -> session/prompt against an httptest harnessd double via `--server`; config-driven server URL + Bearer key; cancel mid-run issues the cancel POST.
+- Existing tests to update: `TestServerSequentialRequestsAnsweredInOrder` — responses are correlated by id instead of slice position (concurrent dispatch does not guarantee response order; JSON-RPC clients correlate by id).
+
+### Acceptance (slice 2)
+
+- Scripted stdio exchange — `initialize`, `session/new`, `session/prompt` against the fake server — returns a `session/prompt` result whose `stopReason` matches the fake's terminal SSE event; cancel mid-run issues the cancel POST.
+- `go test ./internal/acp/... ./cmd/harnesscli/... -count=1` green.
+
 ## Documentation Contract
 
-- Feature status: `in implementation`
+- Feature status: slice 1 `implemented` (PR #835); slice 2 `in implementation`.
 - Public docs affected: none (user-facing docs land in slice 5).
 - Spec docs to update before code: this plan.
 - Implementation notes to add after code: engineering-log entry.
 
-## Test Plan (TDD)
-
-- New failing tests to add first:
-  - `internal/acp`: framing (single message, partial line across reads, multiple messages per read, oversized line, goroutine-safe concurrent writes); `initialize` response shape + version negotiation; invalid params `-32602`; malformed JSON `-32700`; valid JSON / invalid request `-32600` table; unknown method `-32601`; notifications and response-shaped messages produce no output; EOF exits cleanly.
-  - `cmd/harnesscli`: `runACP` serves `initialize` over injected stdin/stdout and exits 0 on EOF; `dispatch(["acp"])` routes to `runACP`.
-- Existing tests to update: none.
-- Regression tests required: none beyond the above (new feature).
-
 ## Cross-Surface Impact Map
 
-- None — no provider/model flow, gateway routing, model catalog, API-key, or TUI provider plumbing changes. New leaf package + one dispatch case only.
+- None — no provider/model flow, gateway routing, model catalog, API-key, or TUI provider plumbing changes. New leaf package + dispatch case + CLI flags only. The runs API is consumed as an HTTP client; no server-side changes.
 
 ## Implementation Checklist
 
-- [x] Define acceptance criteria in tests (listed above; epic acceptance: `printf '...initialize...' | harness acp` prints a single JSON-RPC result with capabilities).
-- [ ] Write failing tests first.
-- [ ] Implement minimal code changes.
-- [ ] gofmt + go vet clean; `go test ./internal/acp/... ./cmd/harnesscli/... -count=1` green.
-- [ ] Update docs indexes (plans INDEX) and engineering log.
-- [ ] Push branch and open PR (no merge — sibling agents continue later slices).
+- [x] Slice 1: framing + initialize, merged via PR #835.
+- [x] Slice 2: write failing tests first (red: `undefined: NewRunsClient`; CLI red: `-server` flag undefined).
+- [x] Slice 2: implement minimal code changes (`client.go`, `session.go`, concurrent dispatch in `server.go`, flags in `acp.go`).
+- [ ] Slice 2: gofmt + go vet clean; `go test ./internal/acp/... ./cmd/harnesscli/... -count=1` green.
+- [x] Slice 2: update engineering log.
+- [ ] Slice 2: push branch `epic/806-acp-server-s2` and open PR (no merge).
 
 ## Risks and Mitigations
 
 - Risk: collision/confusion with existing `internal/harnessacp` (SDK-based adapter).
 - Mitigation: keep new code strictly in `internal/acp` + `cmd/harnesscli/acp.go`; do not modify the existing adapter; note the distinction in the PR body.
+- Risk: concurrent dispatch regresses slice-1 ordering assumptions.
+- Mitigation: responses correlated by id in the updated test; writer stays mutex-serialized; handler-concurrency proof test.

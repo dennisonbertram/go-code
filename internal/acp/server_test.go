@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
+	"time"
 )
 
 // serveOnce drives a Server over the given input until EOF and returns the
@@ -267,7 +270,11 @@ func TestServerResponseShapedMessagesAreIgnored(t *testing.T) {
 	}
 }
 
-func TestServerSequentialRequestsAnsweredInOrder(t *testing.T) {
+// TestServerPipelinedRequestsAllAnswered replaces the slice-1 ordering test:
+// handlers now run concurrently (so a mid-turn session/cancel can be read
+// while session/prompt is open), which means pipelined responses may arrive
+// in any order. JSON-RPC clients correlate responses by id, not position.
+func TestServerPipelinedRequestsAllAnswered(t *testing.T) {
 	input := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":1}}` + "\n" +
 		`{"jsonrpc":"2.0","id":2,"method":"bogus/method"}` + "\n" +
 		"garbage\n" +
@@ -277,18 +284,62 @@ func TestServerSequentialRequestsAnsweredInOrder(t *testing.T) {
 	if len(resps) != 4 {
 		t.Fatalf("got %d responses, want 4: %v", len(resps), lines)
 	}
-	if string(resps[0].ID) != "1" || resps[0].Error != nil {
-		t.Errorf("resp 0: want initialize result id=1, got %+v", resps[0])
+	byID := map[string]rpcResponse{}
+	for _, r := range resps {
+		byID[string(r.ID)] = r
 	}
-	if string(resps[1].ID) != "2" || resps[1].Error == nil || resps[1].Error.Code != CodeMethodNotFound {
-		t.Errorf("resp 1: want -32601 id=2, got %+v", resps[1])
+	if r, ok := byID["1"]; !ok || r.Error != nil {
+		t.Errorf("want initialize result id=1, got %+v", r)
 	}
-	if string(resps[2].ID) != "null" || resps[2].Error == nil || resps[2].Error.Code != CodeParseError {
-		t.Errorf("resp 2: want -32700 id=null, got %+v", resps[2])
+	if r, ok := byID["2"]; !ok || r.Error == nil || r.Error.Code != CodeMethodNotFound {
+		t.Errorf("want -32601 id=2, got %+v", r)
 	}
-	if string(resps[3].ID) != "4" || resps[3].Error != nil {
-		t.Errorf("resp 3: want initialize result id=4, got %+v", resps[3])
+	if r, ok := byID["null"]; !ok || r.Error == nil || r.Error.Code != CodeParseError {
+		t.Errorf("want -32700 id=null, got %+v", r)
 	}
+	if r, ok := byID["4"]; !ok || r.Error != nil {
+		t.Errorf("want initialize result id=4, got %+v", r)
+	}
+}
+
+// TestServerHandlersRunConcurrently proves a blocked handler does not stall
+// later requests — the property session/cancel relies on while session/prompt
+// is holding its response open.
+func TestServerHandlersRunConcurrently(t *testing.T) {
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	t.Cleanup(func() { inR.Close(); outR.Close(); outW.Close() })
+
+	srv := NewServer(inR, outW, io.Discard)
+	unblock := make(chan struct{})
+	started := make(chan struct{})
+	srv.Handle("test/block", func(ctx context.Context, params json.RawMessage) (any, *rpcError) {
+		close(started)
+		<-unblock
+		return map[string]any{"done": true}, nil
+	})
+
+	c := newScriptedClient(t, srv, inW, outR)
+
+	blockedID := c.send("test/block", nil)
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("blocked handler never started")
+	}
+
+	// While test/block is stuck, initialize must still be answered.
+	initResp := c.request("initialize", map[string]any{"protocolVersion": 1})
+	if initResp.Error != nil {
+		t.Fatalf("initialize failed while handler blocked: %+v", initResp.Error)
+	}
+
+	close(unblock)
+	blockedResp := c.readResponse()
+	if string(blockedResp.ID) != fmt.Sprintf("%d", blockedID) || blockedResp.Error != nil {
+		t.Fatalf("blocked request response = %+v, want result id=%d", blockedResp, blockedID)
+	}
+	c.close()
 }
 
 func TestServerOversizedMessageRejectedStreamStaysAligned(t *testing.T) {

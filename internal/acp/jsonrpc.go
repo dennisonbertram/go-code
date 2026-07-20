@@ -28,6 +28,9 @@ const (
 	CodeMethodNotFound = -32601
 	// CodeInvalidParams is returned when a request's params fail validation.
 	CodeInvalidParams = -32602
+	// CodeInternalError is returned when the agent itself fails (e.g. the
+	// harnessd runs API is unreachable or a session state invariant breaks).
+	CodeInternalError = -32603
 )
 
 // request is the wire shape of a JSON-RPC 2.0 request or notification.
