@@ -28,6 +28,12 @@ func NewModelDiscovery(config Config) catalog.ModelDiscoverer {
 	})
 }
 
+// NewDeepSeekModelDiscovery returns a cached discoverer for DeepSeek's
+// OpenAI-compatible GET /v1/models endpoint.
+func NewDeepSeekModelDiscovery(config Config) catalog.ModelDiscoverer {
+	return NewModelDiscovery(config)
+}
+
 func fetchModels(ctx context.Context, client *http.Client, endpoint, apiKey string) ([]catalog.DiscoveredModel, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

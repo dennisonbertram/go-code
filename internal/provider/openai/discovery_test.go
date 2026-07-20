@@ -35,3 +35,23 @@ func TestNewModelDiscoveryListsOpenAIModels(t *testing.T) {
 		t.Fatalf("models = %+v, want %+v", models, want)
 	}
 }
+
+func TestNewDeepSeekModelDiscoveryListsOpenAICompatibleModels(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" || r.Header.Get("Authorization") != "Bearer deepseek-key" {
+			t.Fatalf("unexpected DeepSeek discovery request: %s auth=%q", r.URL.Path, r.Header.Get("Authorization"))
+		}
+		_, _ = fmt.Fprint(w, `{"object":"list","data":[{"id":"deepseek-chat","object":"model","owned_by":"deepseek"}]}`)
+	}))
+	defer srv.Close()
+
+	models, err := NewDeepSeekModelDiscovery(Config{APIKey: "deepseek-key", BaseURL: srv.URL + "/v1", Client: srv.Client(), ProviderName: "deepseek"}).Models(context.Background())
+	if err != nil {
+		t.Fatalf("Models() error: %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "deepseek-chat" {
+		t.Fatalf("expected DeepSeek's live model, got %+v", models)
+	}
+}
