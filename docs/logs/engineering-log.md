@@ -1607,3 +1607,9 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
 
 - Added validated, versioned installable bundles with explicit enabled versus trusted lifecycle state, CLI/TUI management, marketplace indexes, and runtime reuse of the existing skills, profiles, MCP, and hooks paths.
 - Remote installs default untrusted; hook and MCP execution are unreachable until explicit trust.
+
+## 2026-07-20 (Epic #849 Live Model Discovery)
+
+- Generalized the catalog's OpenRouter-only cache into provider-agnostic live model discovery.
+- OpenRouter, OpenAI, Anthropic, and DeepSeek now have five-minute cached listings when configured; failures retain stale cached results when present and otherwise leave the static catalog untouched.
+- Live listings add models while curated catalog metadata remains authoritative on matching IDs.

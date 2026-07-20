@@ -48,9 +48,9 @@ script.
 ## Implementation Checklist
 
 - [x] refactor(catalog): generalize OpenRouterModelDiscoverer/Discovery/OpenRouterModel to provider-agnostic ModelDiscoverer/Discovery/DiscoveredModel, OpenRouter behavior unchanged (regression-tested)
-- [ ] refactor(catalog): ProviderRegistry.discoverers map + SetDiscovery, effectiveCatalog/merge logic generalized across every registered discoverer
-- [ ] feat(provider/openai): live model discovery via GET /v1/models
-- [ ] feat(provider/anthropic): live model discovery via GET /v1/models
-- [ ] feat(provider): live model discovery for one additional OpenAI-compatible provider from the existing catalog (confirm which during implementation)
-- [ ] feat(harnessd): wire discoverers at startup for every configured provider
-- [ ] docs(provider): document the discovery mechanism, TTL, and fallback policy
+- [x] refactor(catalog): ProviderRegistry.discoverers map + SetDiscovery, effectiveCatalog/merge logic generalized across every registered discoverer
+- [x] feat(provider/openai): live model discovery via GET /v1/models
+- [x] feat(provider/anthropic): live model discovery via GET /v1/models
+- [x] feat(provider): live model discovery for one additional OpenAI-compatible provider from the existing catalog (confirm which during implementation)
+- [x] feat(harnessd): wire discoverers at startup for every configured provider
+- [x] docs(provider): document the discovery mechanism, TTL, and fallback policy
