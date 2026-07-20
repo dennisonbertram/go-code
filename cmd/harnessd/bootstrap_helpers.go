@@ -446,6 +446,7 @@ type serverBootstrapOptions struct {
 	triggers         triggerRuntime
 	rolloutDir       string
 	hooksSummary     hooks.Summary
+	callbackMgr      *htools.CallbackManager
 }
 
 func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
@@ -473,5 +474,6 @@ func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
 		LinearAdapter:    opts.triggers.linear,
 		RolloutDir:       opts.rolloutDir,
 		HooksSummary:     opts.hooksSummary,
+		CallbackLister:   opts.callbackMgr,
 	}
 }

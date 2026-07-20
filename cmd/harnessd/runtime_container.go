@@ -82,6 +82,7 @@ type httpRuntimeOptions struct {
 	triggers             triggerRuntime
 	callbackStarter      *callbackRunStarter
 	callbackBridge       *harness.CallbackEventBridge
+	callbackMgr          *htools.CallbackManager
 	msgSummarizer        *lazySummarizer
 	skillManager         server.SkillManager
 	hooksSummary         hooks.Summary
@@ -282,6 +283,7 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		triggers:         opts.triggers,
 		rolloutDir:       opts.runnerCfg.RolloutDir,
 		hooksSummary:     opts.hooksSummary,
+		callbackMgr:      opts.callbackMgr,
 	}))
 
 	// Mount the MCP server at /mcp so external MCP clients can drive the harness.

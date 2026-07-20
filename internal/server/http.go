@@ -86,8 +86,12 @@ type ServerOptions struct {
 	HTTPClient        *http.Client
 	MCPConnector      MCPConnector
 	SubagentManager   subagents.Manager
-	ProviderRegistry  *catalog.ProviderRegistry
-	Checkpoints       checkpointManager
+	// CallbackLister enumerates pending delayed callbacks across all
+	// conversations for GET /v1/tasks (epic #814). Optional; when nil the
+	// tasks union simply contains no callback entries.
+	CallbackLister   CallbackLister
+	ProviderRegistry *catalog.ProviderRegistry
+	Checkpoints      checkpointManager
 	// Store is an optional persistence layer for run state.
 	// When provided, GET /v1/runs supports filtering and completed runs are
 	// retrievable after the runner forgets them.
@@ -207,6 +211,7 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		httpClient:        opts.HTTPClient,
 		mcpConnector:      opts.MCPConnector,
 		subagentManager:   opts.SubagentManager,
+		callbackLister:    opts.CallbackLister,
 		checkpoints:       opts.Checkpoints,
 		runStore:          opts.Store,
 		approvalBroker:    opts.ApprovalBroker,
@@ -289,6 +294,11 @@ func (s *Server) buildMux() http.Handler {
 	// /v1/cron — mixed methods; scope enforced inside handler.
 	mux.Handle("/v1/cron/jobs", auth(http.HandlerFunc(s.handleCronJobsRoot)))
 	mux.Handle("/v1/cron/jobs/", auth(http.HandlerFunc(s.handleCronJobByID)))
+
+	// GET /v1/tasks — unified list of background work (subagents, cron jobs,
+	// pending delayed callbacks; epic #814). Requires runs:read, consistent
+	// with the per-source list routes above.
+	mux.Handle("/v1/tasks", auth(read(http.HandlerFunc(s.handleTasks))))
 
 	// /v1/skills — GET requires runs:read; POST /verify requires runs:write.
 	mux.Handle("/v1/skills", auth(read(http.HandlerFunc(s.handleSkillsRoot))))
@@ -408,6 +418,11 @@ type Server struct {
 	mcpServers   map[string]connectedMCPServer
 
 	subagentManager subagents.Manager
+
+	// callbackLister enumerates pending delayed callbacks across all
+	// conversations for GET /v1/tasks (epic #814). When nil, callbacks are
+	// simply absent from the union.
+	callbackLister CallbackLister
 
 	// runStore is an optional persistence layer for run state (issue #7).
 	// When non-nil, GET /v1/runs supports filtering and run history survives restarts.
