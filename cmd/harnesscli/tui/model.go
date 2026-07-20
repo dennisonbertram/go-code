@@ -327,8 +327,19 @@ type Model struct {
 
 	// shellMode tracks whether the input area is in shell mode (entered with
 	// "!" on an empty input, exited with Backspace/Esc on an empty input or on
-	// submit). Slice 1 of epic #811 ships input state only — no execution.
+	// submit).
 	shellMode bool
+
+	// shellExecs tracks running shell-mode commands by call ID (epic #811,
+	// slice 2). Each executor streams output into its tool-style card.
+	shellExecs map[string]*shellExec
+	// shellRunningID is the call ID of the most recently started shell-mode
+	// command; Esc/Ctrl-C interrupt it while set.
+	shellRunningID string
+	// shellExecSeq numbers shell-mode commands for stable call IDs.
+	shellExecSeq int
+	// shellExecTimeout bounds shell-mode commands (default 120s).
+	shellExecTimeout time.Duration
 
 	// pluginsDir is the directory from which custom slash-command plugins are loaded.
 	// Defaults to ~/.config/harnesscli/plugins when empty.
@@ -352,16 +363,17 @@ func spinnerSeed(cfg TUIConfig) int64 {
 
 func New(cfg TUIConfig) Model {
 	m := Model{
-		config:          cfg,
-		keys:            DefaultKeyMap(),
-		theme:           DefaultTheme(),
-		contextGrid:     contextgrid.New(),
-		statsPanel:      statspanel.New(nil),
-		costDisplay:     costdisplay.New(),
-		spinner:         spinner.New(spinnerSeed(cfg)),
-		thinkingBar:     thinkingbar.New(),
-		interruptBanner: interruptui.New(),
-		selectedModel:   cfg.Model,
+		config:           cfg,
+		keys:             DefaultKeyMap(),
+		theme:            DefaultTheme(),
+		contextGrid:      contextgrid.New(),
+		statsPanel:       statspanel.New(nil),
+		costDisplay:      costdisplay.New(),
+		spinner:          spinner.New(spinnerSeed(cfg)),
+		thinkingBar:      thinkingbar.New(),
+		interruptBanner:  interruptui.New(),
+		selectedModel:    cfg.Model,
+		shellExecTimeout: defaultShellExecTimeout,
 	}
 	m.modelSwitcher = modelswitcher.New(cfg.Model)
 	// Initialize history store with defaults.
@@ -700,6 +712,73 @@ func (m *Model) enterShellMode() {
 func (m *Model) exitShellMode() {
 	m.shellMode = false
 	m.input = m.input.SetShellMode(false)
+}
+
+// ShellCommandRunning reports whether a shell-mode command is currently
+// running (for testing).
+func (m Model) ShellCommandRunning() bool {
+	return m.shellRunningID != ""
+}
+
+// WithShellExecTimeout returns a copy of the Model with the shell-mode
+// execution timeout set (for tests; default is 120s).
+func (m Model) WithShellExecTimeout(d time.Duration) Model {
+	m.shellExecTimeout = d
+	return m
+}
+
+// startShellCommand launches a shell-mode command locally and opens its
+// tool-style "shell" card. The returned cmds poll the executor so output
+// streams into the card; Update() itself never blocks on the process.
+func (m *Model) startShellCommand(command string) []tea.Cmd {
+	m.shellExecSeq++
+	callID := fmt.Sprintf("shell-%d", m.shellExecSeq)
+
+	inputJSON, _ := json.Marshal(map[string]string{"command": command})
+	m.handleToolStart(callID, "shell", json.RawMessage(inputJSON))
+	// Shell cards render expanded so the streamed output is visible live.
+	if m.toolExpanded == nil {
+		m.toolExpanded = make(map[string]bool)
+	}
+	m.toolExpanded[callID] = true
+	if view, ok := m.toolViews[callID]; ok {
+		view.Expanded = true
+		m.toolViews[callID] = view
+		m.appendToolUseView(view)
+	}
+
+	ex, err := startShellExec(callID, command, m.shellExecTimeout)
+	if err != nil {
+		m.handleToolError(callID, err.Error(), 0)
+		return nil
+	}
+	if m.shellExecs == nil {
+		m.shellExecs = make(map[string]*shellExec)
+	}
+	m.shellExecs[callID] = ex
+	m.shellRunningID = callID
+	return []tea.Cmd{waitShellExecMsg(ex)}
+}
+
+// interruptShellCommand kills the currently running shell-mode command, if
+// any. The executor's done message finalizes the card as interrupted.
+func (m *Model) interruptShellCommand() {
+	if m.shellRunningID == "" {
+		return
+	}
+	if ex, ok := m.shellExecs[m.shellRunningID]; ok {
+		ex.kill()
+	}
+}
+
+// shellErrorText composes the error-card text for a failed, timed-out, or
+// interrupted shell command: the summary first, then the bounded output so it
+// is not lost (the tooluse ErrorView renders only ErrorText).
+func shellErrorText(summary, output string) string {
+	if strings.TrimSpace(output) == "" {
+		return summary
+	}
+	return summary + "\n" + output
 }
 
 // InterruptBannerVisible returns true when the interrupt confirmation banner is
@@ -1095,7 +1174,8 @@ func parseToolParams(raw json.RawMessage) []tooluse.Param {
 }
 
 func extractToolCommand(toolName string, raw json.RawMessage, fallback string) string {
-	if !strings.EqualFold(toolName, "bash") {
+	lowerName := strings.ToLower(toolName)
+	if !strings.EqualFold(toolName, "bash") && lowerName != "shell" && lowerName != "run_shell_cmd" {
 		return ""
 	}
 	var command string
@@ -2004,6 +2084,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.setStatusMsg("Run interrupted — press ctrl+c again to quit"))
 				return m, tea.Batch(cmds...)
 			}
+			// A running shell-mode command is killed first (epic #811,
+			// slice 2) — Ctrl+C must not quit the TUI out from under it.
+			if m.shellRunningID != "" {
+				m.interruptShellCommand()
+				cmds = append(cmds, m.setStatusMsg("Shell command interrupted — press ctrl+c again to quit"))
+				return m, tea.Batch(cmds...)
+			}
 			// No active run: hide banner if somehow visible, then quit.
 			m.interruptBanner = m.interruptBanner.Hide()
 			return m, tea.Quit
@@ -2145,6 +2232,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.cancelRun = nil
 				m.interruptActiveToolCall()
 				cmds = append(cmds, m.setStatusMsg("Interrupted"))
+				return m, tea.Batch(cmds...)
+			}
+			// A running shell-mode command is interrupted before anything
+			// input-related (epic #811, slice 2). The executor's done message
+			// finalizes the card.
+			if m.shellRunningID != "" {
+				m.interruptShellCommand()
+				cmds = append(cmds, m.setStatusMsg("Interrupting shell command..."))
 				return m, tea.Batch(cmds...)
 			}
 			// Shell mode: Esc on an already-empty input exits shell mode
@@ -2865,12 +2960,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Close the dropdown whenever a command is submitted.
 		m.slashComplete = m.slashComplete.Close()
-		// Shell mode (epic #811, slice 1): local execution is not implemented
-		// yet — acknowledge the command with a stub status message and return
-		// to normal mode. Slice 2 replaces this stub with real execution.
+		// Shell mode (epic #811, slice 2): run the command locally from the TUI
+		// process and stream output into a tool-style "shell" card. Submitting
+		// returns to normal mode (kimi behavior).
 		if m.shellMode {
 			m.exitShellMode()
-			cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("shell: %q not executed (execution arrives in the next slice)", msg.Value)))
+			cmds = append(cmds, m.startShellCommand(msg.Value)...)
 			return m, tea.Batch(cmds...)
 		}
 		// Check if it's a slash command; dispatch if so.
@@ -2960,6 +3055,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ToolCallChunkMsg:
 		m.handleToolChunk(msg.CallID, msg.Chunk)
+
+	case shellExecOutputMsg:
+		// Streamed shell-mode output: append to the card and keep polling.
+		m.handleToolChunk(msg.CallID, msg.Chunk)
+		if ex, ok := m.shellExecs[msg.CallID]; ok {
+			cmds = append(cmds, waitShellExecMsg(ex))
+		}
+
+	case shellExecDoneMsg:
+		// Terminal message for a shell-mode command — finalize its card. No
+		// re-poll: the executor emits nothing after done.
+		delete(m.shellExecs, msg.CallID)
+		if m.shellRunningID == msg.CallID {
+			m.shellRunningID = ""
+		}
+		switch {
+		case msg.Interrupted:
+			m.handleToolError(msg.CallID, shellErrorText("interrupted", msg.Output), 0)
+		case msg.TimedOut:
+			m.handleToolError(msg.CallID, shellErrorText(fmt.Sprintf("timed out after %v", msg.Timeout), msg.Output), 0)
+		case msg.Err != nil:
+			m.handleToolError(msg.CallID, shellErrorText(msg.Err.Error(), msg.Output), 0)
+		case msg.ExitCode != 0:
+			m.handleToolError(msg.CallID, shellErrorText(fmt.Sprintf("exit status %d", msg.ExitCode), msg.Output), 0)
+		default:
+			m.handleToolResult(msg.CallID, msg.Output, 0)
+		}
 
 	case RunStartedMsg:
 		m.RunID = msg.RunID
