@@ -23,6 +23,7 @@ import (
 	htools "go-agent-harness/internal/harness/tools"
 	om "go-agent-harness/internal/observationalmemory"
 	"go-agent-harness/internal/profiles"
+	"go-agent-harness/internal/provider"
 	"go-agent-harness/internal/provider/catalog"
 	openai "go-agent-harness/internal/provider/openai"
 	"go-agent-harness/internal/skills"
@@ -327,6 +328,34 @@ func TestResolveDefaultProviderUsesOpenRouterForDynamicSlashModel(t *testing.T) 
 	named, ok := provider.(*namedProvider)
 	if !ok || named.name != "openrouter" {
 		t.Fatalf("unexpected provider: %#v", provider)
+	}
+}
+
+func TestResolveDefaultProviderUsesConfiguredCodexSubscriptionOverride(t *testing.T) {
+	t.Parallel()
+	cat := &catalog.Catalog{CatalogVersion: "1", Providers: map[string]catalog.ProviderEntry{
+		"codex-subscription": {BaseURL: "https://chatgpt.com/backend-api/codex", APIKeyOptional: true, TokenSourceRequired: true, Models: map[string]catalog.Model{"gpt": {ContextWindow: 1}}},
+	}}
+	registry := catalog.NewProviderRegistryWithEnv(cat, func(string) string { return "" })
+	registry.SetTokenSource("codex-subscription", provider.StaticToken("test-subscription-access"))
+	registry.SetClientFactory(func(_ string, _ string, providerName string) (catalog.ProviderClient, error) {
+		return &namedProvider{name: providerName}, nil
+	})
+	resolved, err := resolveDefaultProvider(resolveDefaultProviderOptions{
+		getenv: func(key string) string {
+			if key == "HARNESS_PROVIDER" {
+				return "codex-subscription"
+			}
+			return ""
+		},
+		registry: registry,
+		model:    "gpt",
+	})
+	if err != nil {
+		t.Fatalf("resolveDefaultProvider: %v", err)
+	}
+	if named, ok := resolved.(*namedProvider); !ok || named.name != "codex-subscription" {
+		t.Fatalf("resolved provider = %#v, want codex subscription", resolved)
 	}
 }
 

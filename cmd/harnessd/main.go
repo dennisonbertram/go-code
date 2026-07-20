@@ -1080,16 +1080,40 @@ func resolveDefaultProvider(opts resolveDefaultProviderOptions) (harness.Provide
 		opts.getenv = os.Getenv
 	}
 
-	// Path 0: env-gated fake provider for key-free deterministic shell smoke.
-	// Activated only when HARNESS_PROVIDER=="fake"; default behavior is
-	// unchanged when the env var is absent.
-	if strings.TrimSpace(opts.getenv("HARNESS_PROVIDER")) == "fake" {
+	// Path 0: explicit provider override. The fake provider remains a
+	// key-free deterministic shell-smoke special case; catalog providers such
+	// as codex-subscription resolve through their configured registry source.
+	providerOverride := strings.TrimSpace(opts.getenv("HARNESS_PROVIDER"))
+	if providerOverride == "fake" {
 		turnsPath := strings.TrimSpace(opts.getenv("HARNESS_FAKE_TURNS"))
 		turns, err := loadFakeTurns(turnsPath)
 		if err != nil {
 			return nil, fmt.Errorf("fake provider: %w", err)
 		}
 		return fakeprovider.New(turns), nil
+	}
+	if providerOverride != "" {
+		if opts.registry == nil || opts.registry.Catalog() == nil {
+			return nil, fmt.Errorf("configured provider %q is unavailable: model catalog is not loaded", providerOverride)
+		}
+		if _, ok := opts.registry.Catalog().Providers[providerOverride]; !ok {
+			return nil, fmt.Errorf("configured provider %q is not in the model catalog", providerOverride)
+		}
+		if !opts.registry.IsConfigured(providerOverride) {
+			if providerOverride == "codex-subscription" {
+				return nil, fmt.Errorf("Codex subscription is not configured; run `codex login`, then `harnesscli auth codex login`")
+			}
+			return nil, fmt.Errorf("configured provider %q has no credentials", providerOverride)
+		}
+		client, err := opts.registry.GetClient(providerOverride)
+		if err != nil {
+			return nil, fmt.Errorf("create configured provider %q: %w", providerOverride, err)
+		}
+		resolved, ok := client.(harness.Provider)
+		if !ok {
+			return nil, fmt.Errorf("provider %q client does not implement harness.Provider", providerOverride)
+		}
+		return resolved, nil
 	}
 
 	model := strings.TrimSpace(opts.model)
