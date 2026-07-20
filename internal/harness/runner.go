@@ -4104,6 +4104,11 @@ type CompactRunRequest struct {
 // CompactRunResult holds the result of a CompactRun call.
 type CompactRunResult struct {
 	MessagesRemoved int `json:"messages_removed"`
+	// Mode is the resolved compaction mode that ran (strip/summarize/hybrid).
+	Mode string `json:"mode"`
+	// Summary is the text produced by the summarizer in summarize/hybrid
+	// modes. Empty for strip mode or when nothing was summarized.
+	Summary string `json:"summary"`
 }
 
 // CompactRun triggers in-memory context compaction on an active run.
@@ -4148,7 +4153,7 @@ func (r *Runner) CompactRun(ctx context.Context, runID string, req CompactRunReq
 	// Convert messages to TranscriptMessages for the compaction logic.
 	snap := messagesAsTranscriptSnapshot(messages)
 	if len(snap) == 0 {
-		return CompactRunResult{}, nil
+		return CompactRunResult{Mode: mode}, nil
 	}
 
 	// Snapshot the per-request Summarizer model from runState so that manual
@@ -4165,7 +4170,7 @@ func (r *Runner) CompactRun(ctx context.Context, runID string, req CompactRunReq
 		// strip never invokes the summarizer, so it ignores the instruction).
 		summarizer = r.newMessageSummarizerWithInstruction(summarizerModel, inst)
 	}
-	compacted, err := compactMessagesHTTP(ctx, snap, mode, keepLast, summarizer)
+	compacted, summary, err := compactMessagesHTTP(ctx, snap, mode, keepLast, summarizer)
 	if err != nil {
 		return CompactRunResult{}, fmt.Errorf("compaction failed: %w", err)
 	}
@@ -4178,7 +4183,7 @@ func (r *Runner) CompactRun(ctx context.Context, runID string, req CompactRunReq
 	if removed < 0 {
 		removed = 0
 	}
-	return CompactRunResult{MessagesRemoved: removed}, nil
+	return CompactRunResult{MessagesRemoved: removed, Mode: mode, Summary: summary}, nil
 }
 
 // messagesForStep returns a fresh snapshot of the canonical state.messages
@@ -4219,10 +4224,10 @@ func (r *Runner) autoCompactMessages(ctx context.Context, runID string, messages
 	// override is empty, preserving existing behaviour.
 	summarizer := r.newMessageSummarizerWithModel(state.resolvedRoleModels.Summarizer)
 
-	compacted, err := compactMessagesHTTP(ctx, snap, mode, keepLast, summarizer)
+	compacted, _, err := compactMessagesHTTP(ctx, snap, mode, keepLast, summarizer)
 	if err != nil && mode != "strip" {
 		// Fallback to strip mode if hybrid/summarize fails.
-		compacted, err = compactMessagesHTTP(ctx, snap, "strip", keepLast, nil)
+		compacted, _, err = compactMessagesHTTP(ctx, snap, "strip", keepLast, nil)
 	}
 	if err != nil {
 		return nil, err
@@ -4287,35 +4292,36 @@ func transcriptMessagesToHarness(msgs []htools.TranscriptMessage) []Message {
 // compactMessagesHTTP applies the compaction strategy to transcript messages.
 // It mirrors the logic inside the compact_history tool handler but operates
 // directly on slices without a context-based reader/replacer.
+// It also returns the summary produced by the summarizer in summarize/hybrid
+// modes ("" for strip mode, when nothing was compacted, or when the
+// summarizer produced no text).
 func compactMessagesHTTP(
 	ctx context.Context,
 	msgs []htools.TranscriptMessage,
 	mode string,
 	keepLast int,
 	summarizer htools.MessageSummarizer,
-) ([]htools.TranscriptMessage, error) {
+) ([]htools.TranscriptMessage, string, error) {
 	turns := parseTurnsHTTP(msgs)
 	prefixEnd, compactEnd := findCompactionBoundsHTTP(turns, keepLast)
 
 	if compactEnd <= prefixEnd {
 		// Nothing to compact — return the original slice.
-		return msgs, nil
+		return msgs, "", nil
 	}
 
 	switch mode {
 	case "strip":
-		return compactStripHTTP(turns, prefixEnd, compactEnd), nil
+		return compactStripHTTP(turns, prefixEnd, compactEnd), "", nil
 	case "summarize":
 		if summarizer == nil {
-			return nil, fmt.Errorf("summarize mode requires a message summarizer (not configured)")
+			return nil, "", fmt.Errorf("summarize mode requires a message summarizer (not configured)")
 		}
-		result, _, err := compactSummarizeHTTP(ctx, turns, prefixEnd, compactEnd, summarizer)
-		return result, err
+		return compactSummarizeHTTP(ctx, turns, prefixEnd, compactEnd, summarizer)
 	case "hybrid":
-		result, _, err := compactHybridHTTP(ctx, turns, prefixEnd, compactEnd, summarizer)
-		return result, err
+		return compactHybridHTTP(ctx, turns, prefixEnd, compactEnd, summarizer)
 	default:
-		return nil, fmt.Errorf("unknown mode: %s", mode)
+		return nil, "", fmt.Errorf("unknown mode: %s", mode)
 	}
 }
 
