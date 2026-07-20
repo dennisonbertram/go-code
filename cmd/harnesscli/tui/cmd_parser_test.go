@@ -361,7 +361,7 @@ func TestTUI041_VisualSnapshot_200x50(t *testing.T) {
 func TestTUI041_BuiltinCommandsRegistered(t *testing.T) {
 	r := tui.NewCommandRegistry()
 	required := []string{
-		"clear", "context", "export", "help", "keys",
+		"clear", "compact", "context", "export", "help", "keys",
 		"model", "quit", "stats", "subagents",
 		"attach", "cancel", "doctor", "permissions", "replay", "resume", "runs",
 	}
@@ -396,7 +396,7 @@ func TestTUI041_BuiltinCommandsRegistered(t *testing.T) {
 func TestTUI364_RegistryCompleteness(t *testing.T) {
 	// These are the exact built-in slash commands the TUI exposes.
 	knownCommands := []string{
-		"attach", "cancel", "clear", "config", "context", "cost", "dashboard", "doctor", "export", "fork", "help", "history", "hooks", "init", "keys",
+		"attach", "cancel", "clear", "compact", "config", "context", "cost", "dashboard", "doctor", "export", "fork", "help", "history", "hooks", "init", "keys",
 		"model", "new", "permissions", "plugins", "profiles", "quit", "replay", "resume", "runs", "search",
 		"sessions", "stats", "subagents", "rewind", "theme", "title", "undo",
 	}

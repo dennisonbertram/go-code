@@ -284,6 +284,14 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeCancelCommand,
 		},
 		{
+			Name:        "compact",
+			Description: "Compact the active run's context (/compact [instruction])",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeCompactCommand,
+		},
+		{
 			Name:        "replay",
 			Description: "Replay a run",
 			Handler: func(cmd Command) CommandResult {

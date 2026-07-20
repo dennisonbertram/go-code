@@ -3,7 +3,8 @@
 Parent epic: #817 (`/compact [instruction]` + visible compaction summary), part of #803.
 
 - Slice 1 (`feat(harness): accept a preserve-instruction in CompactRun and the compact endpoint`): **implemented**, merged via PR #836.
-- Slice 2 (`feat(harness): return the compaction summary from the compact endpoint`): **in implementation** (branch `epic/817-compact-cmd-s2`).
+- Slice 2 (`feat(harness): return the compaction summary from the compact endpoint`): **implemented**, merged via PR #860.
+- Slice 3 (`feat(harnesscli): /compact [instruction] slash command`): **in implementation** (branch `epic/817-compact-cmd-s3`).
 
 ## Slice 1 (done)
 
@@ -100,3 +101,40 @@ Parent epic: #817 (`/compact [instruction]` + visible compaction summary), part 
 - [ ] gofmt + go vet clean.
 - [ ] `go test ./internal/harness/ ./internal/server/ -count=1` green.
 - [ ] Commit, push `epic/817-compact-cmd-s2`, open PR (no merge).
+
+---
+
+## Slice 3 (in implementation): /compact [instruction] slash command
+
+### Context
+
+- Problem: users cannot trigger compaction from the TUI; only the raw HTTP endpoint exists (slices 1–2).
+- Constraints: `/compact` always requests `hybrid` mode (strip stays raw-API-only); requires an active run; help and slash completion are registry-driven so the registry entry covers both; the registry completeness/builtin tests (`cmd_parser_test.go`) and the auth-coverage table (`api_auth_test.go`) are the snapshots the epic mandates updating.
+
+### Scope
+
+- In scope:
+  - `compact` entry in `builtinCommandEntries()` (`cmd/harnesscli/tui/cmd_parser.go`).
+  - `executeCompactCommand` beside `executeCancelCommand` (`cmd/harnesscli/tui/model.go`): active-run guard, args joined verbatim into the instruction, fires `compactRunCmd`; `CompactResultMsg` Update case reports "Compacted context — N messages removed" / "compact failed: ...".
+  - `compactRunCmd` (`cmd/harnesscli/tui/api.go`): POST `{"mode":"hybrid","instruction":...}` to `/v1/runs/{id}/compact` via `newHarnessRequest`; decodes `{ok,messages_removed,mode,summary}` into `CompactResultMsg` (`messages.go`) — `Mode`/`Summary` carried for slice 4.
+  - Snapshot updates: `TestTUI041_BuiltinCommandsRegistered` + `TestTUI364_RegistryCompleteness` lists; `api_auth_test.go` audit comment + table case; `TestBuildCommandRegistry_SlashCompleteShowsCommands` first-window list (`compact` takes a first-window slot, pushing `dashboard` below the fold).
+- Out of scope: slice 4 (transcript block, ctrl+o, auto_compact SSE); mode selection flag; one-shot CLI UX.
+
+### Test Plan (TDD)
+
+- New failing tests first (`cmd/harnesscli/tui/compact_command_test.go`):
+  - no active run → usage/active-run status, zero HTTP requests.
+  - active run → POST hybrid + instruction joined verbatim; success status reports messages removed; msg carries mode/summary.
+  - bare `/compact` → empty instruction sent.
+  - 409 → "compact failed" status.
+  - registry/help/slash-complete visibility.
+- Updated snapshot tests: registry lists + auth table (watched red before implementation).
+- Regression: `go test ./cmd/harnesscli/... -count=1`.
+
+### Implementation Checklist
+
+- [x] Write failing tests first (watched red: build failures on undefined `executeCompactCommand`/`compactRunCmd`/`CompactResultMsg` + registry list failures).
+- [x] Implement minimal code changes.
+- [ ] gofmt + go vet clean.
+- [ ] `go test ./cmd/harnesscli/... -count=1` green.
+- [ ] Commit, push `epic/817-compact-cmd-s3`, open PR (no merge).

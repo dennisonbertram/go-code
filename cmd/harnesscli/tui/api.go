@@ -217,6 +217,54 @@ func cancelRunCmd(baseURL, runID, apiKey string) tea.Cmd {
 	}
 }
 
+// compactRunCmd POSTs {"mode":"hybrid","instruction":...} to
+// /v1/runs/{id}/compact for the active run (server: internal/server/http_runs.go
+// handleRunCompact). The instruction is an optional free-text preserve-hint
+// for the summarizer (epic #817); mode is always hybrid — strip remains
+// available via the raw API only. The response carries the resolved mode, the
+// number of messages removed, and (for hybrid) the compaction summary.
+func compactRunCmd(baseURL, runID, instruction, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		body, err := json.Marshal(map[string]string{"mode": "hybrid", "instruction": instruction})
+		if err != nil {
+			return CompactResultMsg{RunID: runID, Err: "encode request: " + err.Error()}
+		}
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/compact"
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body), apiKey)
+		if err != nil {
+			return CompactResultMsg{RunID: runID, Err: "build request: " + err.Error()}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+		if err != nil {
+			return CompactResultMsg{RunID: runID, Err: "request failed: " + err.Error()}
+		}
+		defer resp.Body.Close()
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return CompactResultMsg{RunID: runID, Err: "read response: " + err.Error()}
+		}
+		if resp.StatusCode >= 300 {
+			return CompactResultMsg{RunID: runID, Err: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))}
+		}
+		var payload struct {
+			OK              bool   `json:"ok"`
+			MessagesRemoved int    `json:"messages_removed"`
+			Mode            string `json:"mode"`
+			Summary         string `json:"summary"`
+		}
+		if err := json.Unmarshal(respBody, &payload); err != nil {
+			return CompactResultMsg{RunID: runID, Err: "decode response: " + err.Error()}
+		}
+		return CompactResultMsg{
+			RunID:           runID,
+			Mode:            payload.Mode,
+			Summary:         payload.Summary,
+			MessagesRemoved: payload.MessagesRemoved,
+		}
+	}
+}
+
 // steerRunCmd POSTs a steering message to /v1/runs/{id}/steer for the active
 // run (server: internal/server/http_runs.go handleRunSteer). The server queues
 // the message and the harness injects it as a user message at the next step
