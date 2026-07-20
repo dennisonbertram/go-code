@@ -1,5 +1,11 @@
 # System Log
 
+## 2026-07-20 (Issue #854 — Live TUI subscription import)
+
+- System/component: `/keys` in `harnesscli`, `/v1/providers/{name}/import-subscription`, and the existing Codex/Kimi stores plus provider registry.
+- Flow: pressing `i` on a subscription row makes a bodyless authenticated POST to the daemon; the daemon reads its own vendor CLI file, writes only the harness-owned store through the existing importer, constructs the same token source as startup, and replaces the live registry entry. The TUI then refetches `GET /v1/providers`.
+- Failure mode and boundary: the vendor login must be present on the **harnessd host**. A remote TUI cannot import a credential located only on its own machine; the daemon reports the normal `codex login` or `kimi-code login` remediation instead. No credential value is accepted or returned by the endpoint.
+
 ## 2026-07-19 (ACP Server Mode — Epic #746)
 
 - System/component: `cmd/harness-acp` and `internal/harnessacp`.

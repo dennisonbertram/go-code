@@ -13,7 +13,7 @@
 
 ## Documentation Contract
 
-- Feature status: `in implementation`
+- Feature status: `implemented`
 - Public docs affected: `CLAUDE.md`
 - Spec docs to update before code: this plan and its linked impact map
 - Implementation notes to add after code: engineering and system logs
@@ -30,14 +30,14 @@
 
 ## Implementation Checklist
 
-- [ ] Define acceptance criteria in tests.
+- [x] Define acceptance criteria in tests.
 - [x] Document feature status and exact contract before code.
 - [x] Add the one-page provider/model impact map before implementation.
-- [ ] Slice 1: fix(tui) real local credential-store startup hints.
-- [ ] Slice 2: feat(server) import and reload subscription credentials.
-- [ ] Slice 3: feat(tui) import keybinding and provider refresh.
-- [ ] Slice 4: test coverage and endpoint request-shape regression guard.
-- [ ] Slice 5: docs operator workflow and same-host limitation.
+- [x] Slice 1: fix(tui) real local credential-store startup hints.
+- [x] Slice 2: feat(server) import and reload subscription credentials.
+- [x] Slice 3: feat(tui) import keybinding and provider refresh.
+- [x] Slice 4: test coverage and endpoint request-shape regression guard.
+- [x] Slice 5: docs operator workflow and same-host limitation.
 - [ ] Run scoped formatting, vet, and regression suite.
 
 ## Risks and Mitigations
