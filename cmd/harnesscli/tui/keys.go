@@ -17,6 +17,9 @@ type KeyMap struct {
 	// Commands
 	SlashCmd  key.Binding
 	AtMention key.Binding
+	// ShellMode is entered with "!" on an empty input and left with
+	// Backspace/Esc on an empty input (epic #811).
+	ShellMode key.Binding
 	// Actions
 	Interrupt key.Binding
 	Help      key.Binding
@@ -72,6 +75,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("@"),
 			key.WithHelp("@", "mention file"),
 		),
+		ShellMode: key.NewBinding(
+			key.WithKeys("!"),
+			key.WithHelp("!", "shell mode (esc/backspace on empty to exit)"),
+		),
 		Interrupt: key.NewBinding(
 			key.WithKeys("esc"),
 			key.WithHelp("esc", "interrupt"),
@@ -113,7 +120,7 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Submit, k.Newline, k.Interrupt, k.Quit},
 		{k.ScrollUp, k.ScrollDown, k.PageUp, k.PageDown, k.GotoTop, k.GotoBottom},
-		{k.SlashCmd, k.AtMention, k.Help, k.Dashboard},
+		{k.SlashCmd, k.AtMention, k.ShellMode, k.Help, k.Dashboard},
 		{k.EditMode, k.ExpandTool},
 	}
 }
