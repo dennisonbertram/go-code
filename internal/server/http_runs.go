@@ -607,8 +607,9 @@ func (s *Server) handleRunCompact(w http.ResponseWriter, r *http.Request, runID 
 	}
 
 	var req struct {
-		Mode     string `json:"mode"`
-		KeepLast int    `json:"keep_last"`
+		Mode        string `json:"mode"`
+		KeepLast    int    `json:"keep_last"`
+		Instruction string `json:"instruction"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
@@ -616,8 +617,9 @@ func (s *Server) handleRunCompact(w http.ResponseWriter, r *http.Request, runID 
 	}
 
 	result, err := s.runner.CompactRun(r.Context(), runID, harness.CompactRunRequest{
-		Mode:     req.Mode,
-		KeepLast: req.KeepLast,
+		Mode:        req.Mode,
+		KeepLast:    req.KeepLast,
+		Instruction: req.Instruction,
 	})
 	if err != nil {
 		if errors.Is(err, harness.ErrRunNotFound) {
