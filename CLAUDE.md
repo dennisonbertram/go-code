@@ -99,3 +99,7 @@ the SQLite conversation store persists the latest plan content per conversation.
 ACP session lifecycle, streamed updates, cancellation, and approvals to the
 existing harnessd HTTP/SSE API. See `docs/runbooks/acp.md` for setup and the
 manual Zed verification checklist.
+
+## 2026-07-20 — Live model discovery (Epic #849)
+
+- Live model discovery is provider-agnostic: configured OpenRouter, OpenAI, Anthropic, and DeepSeek entries refresh on a five-minute TTL. Discovery failures never remove static models; cached results are served stale after a failed refresh, and static metadata wins on ID conflicts.

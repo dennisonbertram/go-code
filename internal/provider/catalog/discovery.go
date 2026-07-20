@@ -10,41 +10,44 @@ import (
 	"time"
 )
 
-// OpenRouterModel is the minimal live metadata needed from OpenRouter's
-// public model listing endpoint.
-type OpenRouterModel struct {
+// DiscoveredModel is the minimal live metadata needed from a provider's model
+// listing endpoint.
+type DiscoveredModel struct {
 	ID            string
 	Name          string
 	ContextWindow int
 }
 
-// OpenRouterModelDiscoverer exposes cached live model lookup for OpenRouter.
-type OpenRouterModelDiscoverer interface {
-	Models(ctx context.Context) ([]OpenRouterModel, error)
+// ModelDiscoverer exposes cached live model lookup for a provider.
+type ModelDiscoverer interface {
+	Models(ctx context.Context) ([]DiscoveredModel, error)
 }
 
-// OpenRouterDiscoveryOptions configures OpenRouter live model discovery.
-type OpenRouterDiscoveryOptions struct {
+// DiscoveryOptions configures a provider's live model discovery.
+type DiscoveryOptions struct {
 	Endpoint string
 	Client   *http.Client
 	TTL      time.Duration
 	Now      func() time.Time
+	Fetch    func(ctx context.Context, client *http.Client, endpoint string) ([]DiscoveredModel, error)
 }
 
-// OpenRouterDiscovery fetches and caches live model data from OpenRouter.
-type OpenRouterDiscovery struct {
+// Discovery fetches and caches live model data from a provider.
+type Discovery struct {
 	endpoint string
 	client   *http.Client
 	ttl      time.Duration
 	now      func() time.Time
 
 	mu        sync.Mutex
-	cached    []OpenRouterModel
+	cached    []DiscoveredModel
 	expiresAt time.Time
+	fetchFn   func(ctx context.Context, client *http.Client, endpoint string) ([]DiscoveredModel, error)
 }
 
-// NewOpenRouterDiscovery creates an OpenRouter discovery client with in-memory TTL caching.
-func NewOpenRouterDiscovery(opts OpenRouterDiscoveryOptions) *OpenRouterDiscovery {
+// NewDiscovery creates a provider discovery client with in-memory TTL caching.
+// If Fetch is omitted, it decodes OpenRouter's public model-list response.
+func NewDiscovery(opts DiscoveryOptions) *Discovery {
 	client := opts.Client
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}
@@ -61,28 +64,33 @@ func NewOpenRouterDiscovery(opts OpenRouterDiscoveryOptions) *OpenRouterDiscover
 	if endpoint == "" {
 		endpoint = "https://openrouter.ai/api/v1/models"
 	}
-	return &OpenRouterDiscovery{
+	fetchFn := opts.Fetch
+	if fetchFn == nil {
+		fetchFn = FetchOpenRouterModels
+	}
+	return &Discovery{
 		endpoint: endpoint,
 		client:   client,
 		ttl:      ttl,
 		now:      now,
+		fetchFn:  fetchFn,
 	}
 }
 
-// Models returns cached live OpenRouter models when fresh, refreshes stale
+// Models returns cached live provider models when fresh, refreshes stale
 // cache entries, and returns stale cached data if a refresh attempt fails.
-func (d *OpenRouterDiscovery) Models(ctx context.Context) ([]OpenRouterModel, error) {
+func (d *Discovery) Models(ctx context.Context) ([]DiscoveredModel, error) {
 	if d == nil {
-		return nil, fmt.Errorf("openrouter discovery is nil")
+		return nil, fmt.Errorf("model discovery is nil")
 	}
 
 	d.mu.Lock()
 	if len(d.cached) > 0 && d.now().Before(d.expiresAt) {
-		models := cloneOpenRouterModels(d.cached)
+		models := cloneDiscoveredModels(d.cached)
 		d.mu.Unlock()
 		return models, nil
 	}
-	cached := cloneOpenRouterModels(d.cached)
+	cached := cloneDiscoveredModels(d.cached)
 	d.mu.Unlock()
 
 	models, err := d.fetch(ctx)
@@ -94,20 +102,25 @@ func (d *OpenRouterDiscovery) Models(ctx context.Context) ([]OpenRouterModel, er
 	}
 
 	d.mu.Lock()
-	d.cached = cloneOpenRouterModels(models)
+	d.cached = cloneDiscoveredModels(models)
 	d.expiresAt = d.now().Add(d.ttl)
-	fresh := cloneOpenRouterModels(d.cached)
+	fresh := cloneDiscoveredModels(d.cached)
 	d.mu.Unlock()
 	return fresh, nil
 }
 
-func (d *OpenRouterDiscovery) fetch(ctx context.Context) ([]OpenRouterModel, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, d.endpoint, nil)
+func (d *Discovery) fetch(ctx context.Context) ([]DiscoveredModel, error) {
+	return d.fetchFn(ctx, d.client, d.endpoint)
+}
+
+// FetchOpenRouterModels decodes OpenRouter's public model-list response.
+func FetchOpenRouterModels(ctx context.Context, client *http.Client, endpoint string) ([]DiscoveredModel, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create openrouter request: %w", err)
 	}
 
-	resp, err := d.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetch openrouter models: %w", err)
 	}
@@ -128,13 +141,13 @@ func (d *OpenRouterDiscovery) fetch(ctx context.Context) ([]OpenRouterModel, err
 		return nil, fmt.Errorf("decode openrouter models: %w", err)
 	}
 
-	models := make([]OpenRouterModel, 0, len(payload.Data))
+	models := make([]DiscoveredModel, 0, len(payload.Data))
 	for _, entry := range payload.Data {
 		id := strings.TrimSpace(entry.ID)
 		if id == "" {
 			continue
 		}
-		models = append(models, OpenRouterModel{
+		models = append(models, DiscoveredModel{
 			ID:            id,
 			Name:          strings.TrimSpace(entry.Name),
 			ContextWindow: entry.ContextLength,
@@ -143,11 +156,11 @@ func (d *OpenRouterDiscovery) fetch(ctx context.Context) ([]OpenRouterModel, err
 	return models, nil
 }
 
-func cloneOpenRouterModels(in []OpenRouterModel) []OpenRouterModel {
+func cloneDiscoveredModels(in []DiscoveredModel) []DiscoveredModel {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make([]OpenRouterModel, len(in))
+	out := make([]DiscoveredModel, len(in))
 	copy(out, in)
 	return out
 }

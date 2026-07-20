@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-func TestOpenRouterDiscoveryDecode(t *testing.T) {
+func TestDiscoveryDecodeOpenRouterResponse(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -32,7 +32,7 @@ func TestOpenRouterDiscoveryDecode(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	discovery := NewOpenRouterDiscovery(OpenRouterDiscoveryOptions{
+	discovery := NewDiscovery(DiscoveryOptions{
 		Endpoint: srv.URL,
 		Client:   srv.Client(),
 		TTL:      time.Minute,
@@ -56,7 +56,7 @@ func TestOpenRouterDiscoveryDecode(t *testing.T) {
 	}
 }
 
-func TestOpenRouterDiscoveryTTLCache(t *testing.T) {
+func TestDiscoveryTTLCache(t *testing.T) {
 	t.Parallel()
 
 	var hits atomic.Int32
@@ -68,7 +68,7 @@ func TestOpenRouterDiscoveryTTLCache(t *testing.T) {
 	defer srv.Close()
 
 	now := time.Date(2026, 3, 25, 10, 0, 0, 0, time.UTC)
-	discovery := NewOpenRouterDiscovery(OpenRouterDiscoveryOptions{
+	discovery := NewDiscovery(DiscoveryOptions{
 		Endpoint: srv.URL,
 		Client:   srv.Client(),
 		TTL:      time.Minute,
@@ -106,7 +106,7 @@ func TestOpenRouterDiscoveryTTLCache(t *testing.T) {
 	}
 }
 
-func TestOpenRouterDiscoveryReturnsCachedDataWhenRefreshFails(t *testing.T) {
+func TestDiscoveryReturnsCachedDataWhenRefreshFails(t *testing.T) {
 	t.Parallel()
 
 	var calls atomic.Int32
@@ -122,7 +122,7 @@ func TestOpenRouterDiscoveryReturnsCachedDataWhenRefreshFails(t *testing.T) {
 	defer srv.Close()
 
 	now := time.Date(2026, 3, 25, 10, 0, 0, 0, time.UTC)
-	discovery := NewOpenRouterDiscovery(OpenRouterDiscoveryOptions{
+	discovery := NewDiscovery(DiscoveryOptions{
 		Endpoint: srv.URL,
 		Client:   srv.Client(),
 		TTL:      time.Minute,
@@ -144,5 +144,14 @@ func TestOpenRouterDiscoveryReturnsCachedDataWhenRefreshFails(t *testing.T) {
 	}
 	if len(second) != 1 || second[0].ID != first[0].ID {
 		t.Fatalf("expected cached model %q, got %+v", first[0].ID, second)
+	}
+}
+
+func TestDiscoveryNilReturnsError(t *testing.T) {
+	t.Parallel()
+
+	var discovery *Discovery
+	if _, err := discovery.Models(context.Background()); err == nil {
+		t.Fatal("expected nil generic discovery to return an error")
 	}
 }

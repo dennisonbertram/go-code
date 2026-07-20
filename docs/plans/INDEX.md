@@ -9,6 +9,7 @@
 - `806-acp-server.md` — ACP server mode epic #806, slice 1: stdio JSON-RPC framing and initialize handshake in the stdlib-only `internal/acp` package plus the `harness acp` subcommand (in implementation).
 - `805-undo-prompts.md` — Epic #805 Slice 1 plan: `ConversationStore.UndoPrompts` with compaction-boundary guard (in implementation).
 - `2026-07-19-acp-epic-746-plan.md` — ACP server mode epic #746 (in implementation).
+- `2026-07-20-live-model-discovery-849-plan.md` — provider-agnostic cached live model discovery for Epic #849.
 
 - `PLAN_TEMPLATE.md`: Required template for pre-implementation planning with checklist.
 - `IMPACT_MAP_TEMPLATE.md`: One-page cross-surface impact map template for provider/model flow changes.

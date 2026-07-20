@@ -1614,3 +1614,9 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
 - Added `internal/provider/tokencache`: a provider-neutral mutex-single-flighted refresh cache. It reuses credentials outside a configurable expiry margin; if a refresh within that margin fails while the current credential remains valid, it returns the still-valid cache entry. Refresh transport, OAuth details, and persistence deliberately remain follow-on-provider responsibilities.
 - Added registry `SetTokenSource`: token sources satisfy configuration, evict cached clients on replacement, and reach the typed four-argument `catalog.ClientFactory`. `SetClientFactory` continues accepting existing three-argument static factories as a source-compatible bridge.
 - TDD validation: provider token-source, OpenAI dynamic-auth/header/static-header regression, token-cache concurrency/failure-policy, and registry propagation/eviction tests were all red before their implementations and green afterward. `go test ./internal/provider/... ./internal/harness/...` passed.
+
+## 2026-07-20 (Epic #849 Live Model Discovery)
+
+- Generalized the catalog's OpenRouter-only cache into provider-agnostic live model discovery.
+- OpenRouter, OpenAI, Anthropic, and DeepSeek now have five-minute cached listings when configured; failures retain stale cached results when present and otherwise leave the static catalog untouched.
+- Live listings add models while curated catalog metadata remains authoritative on matching IDs.

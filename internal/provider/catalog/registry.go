@@ -30,15 +30,16 @@ type ProviderRegistry struct {
 	tokenSources  map[string]provider.TokenSource
 	getenv        func(string) string
 	clientFactory ClientFactory
-	openRouter    OpenRouterModelDiscoverer
+	discoverers   map[string]ModelDiscoverer
 }
 
 // NewProviderRegistry creates a registry that uses os.Getenv for API key lookup.
 func NewProviderRegistry(catalog *Catalog) *ProviderRegistry {
 	return &ProviderRegistry{
-		catalog: catalog,
-		clients: make(map[string]ProviderClient),
-		getenv:  os.Getenv,
+		catalog:     catalog,
+		clients:     make(map[string]ProviderClient),
+		discoverers: make(map[string]ModelDiscoverer),
+		getenv:      os.Getenv,
 	}
 }
 
@@ -48,9 +49,10 @@ func NewProviderRegistryWithEnv(catalog *Catalog, getenv func(string) string) *P
 		getenv = os.Getenv
 	}
 	return &ProviderRegistry{
-		catalog: catalog,
-		clients: make(map[string]ProviderClient),
-		getenv:  getenv,
+		catalog:     catalog,
+		clients:     make(map[string]ProviderClient),
+		discoverers: make(map[string]ModelDiscoverer),
+		getenv:      getenv,
 	}
 }
 
@@ -77,12 +79,54 @@ func (r *ProviderRegistry) SetClientFactory(factory any) {
 	}
 }
 
-// SetOpenRouterDiscovery sets the live OpenRouter model discoverer used for
-// additive model resolution and merged model listing.
-func (r *ProviderRegistry) SetOpenRouterDiscovery(discoverer OpenRouterModelDiscoverer) {
+// SetDiscovery sets the live model discoverer used for additive model
+// resolution and merged model listing for providerName.
+func (r *ProviderRegistry) SetDiscovery(providerName string, discoverer ModelDiscoverer) {
+	providerName = strings.TrimSpace(providerName)
+	if providerName == "" {
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.openRouter = discoverer
+	if discoverer == nil {
+		delete(r.discoverers, providerName)
+		return
+	}
+	if r.discoverers == nil {
+		r.discoverers = make(map[string]ModelDiscoverer)
+	}
+	r.discoverers[providerName] = discoverer
+}
+
+// HasDiscovery reports whether providerName has a registered live discoverer.
+func (r *ProviderRegistry) HasDiscovery(providerName string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.discoverers[providerName]
+	return ok
+}
+
+// DiscoveryCredentials returns the already-configured credentials and base URL
+// for providerName. It follows the same runtime-override/environment precedence
+// as GetClient without constructing a completion client.
+func (r *ProviderRegistry) DiscoveryCredentials(providerName string) (apiKey, baseURL string, ok bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	entry, found := r.catalog.Providers[providerName]
+	if !found {
+		return "", "", false
+	}
+	apiKey = r.overrideKeys[providerName]
+	if apiKey == "" {
+		apiKey = r.getenv(entry.APIKeyEnv)
+	}
+	if apiKey == "" && !entry.APIKeyOptional {
+		return "", "", false
+	}
+	if apiKey == "" {
+		apiKey = providerName
+	}
+	return apiKey, entry.BaseURL, true
 }
 
 // SetAPIKey stores a runtime API key override for the named provider.
@@ -212,7 +256,7 @@ func (r *ProviderRegistry) ResolveProvider(modelID string) (string, bool) {
 }
 
 // ResolveProviderContext searches all providers to find which one has the given
-// model, including live OpenRouter discovery when configured.
+// model, including live discovery when configured.
 func (r *ProviderRegistry) ResolveProviderContext(ctx context.Context, modelID string) (string, bool) {
 	if r.catalog == nil {
 		return "", false
@@ -221,8 +265,8 @@ func (r *ProviderRegistry) ResolveProviderContext(ctx context.Context, modelID s
 	if providerName, found := r.resolveProviderFromCatalog(modelID); found {
 		return providerName, true
 	}
-	if r.hasOpenRouterDiscoveredModel(ctx, modelID) {
-		return "openrouter", true
+	if providerName, found := r.hasDiscoveredModel(ctx, modelID); found {
+		return providerName, true
 	}
 	// OpenRouter exposes a very large dynamic slug space (for example
 	// "moonshotai/kimi-k2.5"), so startup and run-time routing cannot depend on
@@ -309,27 +353,29 @@ func (r *ProviderRegistry) MaxContextTokensContext(ctx context.Context, modelID 
 	return m.ContextWindow, true
 }
 
-func (r *ProviderRegistry) hasOpenRouterDiscoveredModel(ctx context.Context, modelID string) bool {
+func (r *ProviderRegistry) hasDiscoveredModel(ctx context.Context, modelID string) (string, bool) {
 	modelID = strings.TrimSpace(modelID)
 	if modelID == "" {
-		return false
+		return "", false
 	}
-	if r == nil || r.catalog == nil || r.openRouter == nil {
-		return false
+	if r == nil || r.catalog == nil {
+		return "", false
 	}
-	if _, ok := r.catalog.Providers["openrouter"]; !ok {
-		return false
-	}
-	models, err := r.openRouter.Models(ctx)
-	if err != nil {
-		return false
-	}
-	for _, model := range models {
-		if strings.TrimSpace(model.ID) == modelID {
-			return true
+	for providerName, discoverer := range r.discoverySnapshot() {
+		if _, ok := r.catalog.Providers[providerName]; !ok {
+			continue
+		}
+		models, err := discoverer.Models(ctx)
+		if err != nil {
+			continue
+		}
+		for _, model := range models {
+			if strings.TrimSpace(model.ID) == modelID {
+				return providerName, true
+			}
 		}
 	}
-	return false
+	return "", false
 }
 
 func (r *ProviderRegistry) effectiveCatalog(ctx context.Context) *Catalog {
@@ -337,23 +383,34 @@ func (r *ProviderRegistry) effectiveCatalog(ctx context.Context) *Catalog {
 	if clone == nil {
 		return nil
 	}
-	if r == nil || r.openRouter == nil {
+	if r == nil {
 		return clone
 	}
-	entry, ok := clone.Providers["openrouter"]
-	if !ok {
-		return clone
+	for providerName, discoverer := range r.discoverySnapshot() {
+		entry, ok := clone.Providers[providerName]
+		if !ok {
+			continue
+		}
+		models, err := discoverer.Models(ctx)
+		if err != nil {
+			continue
+		}
+		clone.Providers[providerName] = mergeDiscoveredProvider(entry, models)
 	}
-	models, err := r.openRouter.Models(ctx)
-	if err != nil {
-		return clone
-	}
-	entry = mergeOpenRouterProvider(entry, models)
-	clone.Providers["openrouter"] = entry
 	return clone
 }
 
-func mergeOpenRouterProvider(static ProviderEntry, discovered []OpenRouterModel) ProviderEntry {
+func (r *ProviderRegistry) discoverySnapshot() map[string]ModelDiscoverer {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	discoverers := make(map[string]ModelDiscoverer, len(r.discoverers))
+	for providerName, discoverer := range r.discoverers {
+		discoverers[providerName] = discoverer
+	}
+	return discoverers
+}
+
+func mergeDiscoveredProvider(static ProviderEntry, discovered []DiscoveredModel) ProviderEntry {
 	merged := cloneProviderEntry(static)
 	if merged.Models == nil {
 		merged.Models = make(map[string]Model, len(discovered))

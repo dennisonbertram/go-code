@@ -73,6 +73,37 @@ func TestBuildCatalogBootstrapFallsBackToWorkspaceCatalog(t *testing.T) {
 	}
 }
 
+func TestBuildCatalogBootstrapRegistersDiscoverersOnlyForConfiguredProviders(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.MkdirAll(workspace+"/catalog", 0o755); err != nil {
+		t.Fatalf("mkdir catalog: %v", err)
+	}
+	if err := os.WriteFile(workspace+"/catalog/models.json", []byte(`{"catalog_version":"1.0","providers":{"openai":{"display_name":"OpenAI","base_url":"https://api.openai.com/v1","api_key_env":"OPENAI_API_KEY","protocol":"openai_compat","models":{"gpt":{"display_name":"GPT","context_window":1}}},"anthropic":{"display_name":"Anthropic","base_url":"https://api.anthropic.com/v1","api_key_env":"ANTHROPIC_API_KEY","protocol":"anthropic","models":{"claude":{"display_name":"Claude","context_window":1}}},"deepseek":{"display_name":"DeepSeek","base_url":"https://api.deepseek.com/v1","api_key_env":"DEEPSEEK_API_KEY","protocol":"openai_compat","models":{"deepseek":{"display_name":"DeepSeek","context_window":1}}}}}`), 0o644); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+	bootstrap, err := buildCatalogBootstrap(catalogBootstrapOptions{
+		workspace: workspace,
+		getenv: func(key string) string {
+			if key == "OPENAI_API_KEY" || key == "DEEPSEEK_API_KEY" {
+				return "test-key"
+			}
+			return ""
+		},
+		newProvider: func(openai.Config) (harness.Provider, error) { return &noopProvider{}, nil },
+	})
+	if err != nil {
+		t.Fatalf("buildCatalogBootstrap: %v", err)
+	}
+	if !bootstrap.providerRegistry.HasDiscovery("openai") || !bootstrap.providerRegistry.HasDiscovery("deepseek") {
+		t.Fatal("expected discoverers for configured providers")
+	}
+	if bootstrap.providerRegistry.HasDiscovery("anthropic") {
+		t.Fatal("did not expect a discoverer for unconfigured anthropic")
+	}
+}
+
 // TestBuildCatalogBootstrapAnthropicFactoryUsesCatalogMaxTokens is a BUG2(a)
 // regression guard: the anthropic client the registry's ClientFactory builds
 // must be constructed with the loaded model catalog wired in, so that
