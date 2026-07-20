@@ -43,11 +43,9 @@ func AutoInvokeHook(registry *Registry) func(lastUserMessage string) *SkillActiv
 			}
 			skill, ok := registry.Get(name)
 			if ok {
-				vars := buildVars(skill, args, "")
-				content := Interpolate(skill.Body, vars)
 				return &SkillActivation{
 					Name:    skill.Name,
-					Content: content,
+					Content: expandBody(skill, args, ""),
 					Context: skill.Context,
 					Agent:   skill.Agent,
 					Skill:   skill,
@@ -68,11 +66,9 @@ func AutoInvokeHook(registry *Registry) func(lastUserMessage string) *SkillActiv
 		// Exactly one match required to avoid ambiguity
 		if len(autoInvokeMatches) == 1 {
 			skill := autoInvokeMatches[0]
-			vars := buildVars(skill, msg, "")
-			content := Interpolate(skill.Body, vars)
 			return &SkillActivation{
 				Name:    skill.Name,
-				Content: content,
+				Content: expandBody(skill, msg, ""),
 				Context: skill.Context,
 				Agent:   skill.Agent,
 				Skill:   skill,
@@ -84,6 +80,7 @@ func AutoInvokeHook(registry *Registry) func(lastUserMessage string) *SkillActiv
 }
 
 // buildVars creates the variable map for skill body interpolation.
+// Positional variables are 0-based: $0 is the first argument token.
 func buildVars(skill *Skill, args, workspace string) map[string]string {
 	vars := map[string]string{
 		"$ARGUMENTS": args,
@@ -97,11 +94,23 @@ func buildVars(skill *Skill, args, workspace string) map[string]string {
 		// positional vars rather than mangling tokens.
 		fields = nil
 	}
-	for i := 1; i <= 9; i++ {
-		key := fmt.Sprintf("$%d", i)
-		if i-1 < len(fields) {
-			vars[key] = fields[i-1]
-		}
+	for i, field := range fields {
+		vars[fmt.Sprintf("$%d", i)] = field
 	}
 	return vars
+}
+
+// expandBody interpolates the skill body with the given arguments and
+// workspace, applying the shared expansion contract used by every invocation
+// path (AutoInvokeHook and Resolver.ResolveSkill): when the body references
+// no argument placeholder ($ARGUMENTS, $N, or — from slice 3 — a declared
+// named argument) and the raw args are non-empty, the raw args are appended
+// verbatim as a trailing "ARGUMENTS: <args>" line instead of being dropped.
+func expandBody(skill *Skill, args, workspace string) string {
+	vars := buildVars(skill, args, workspace)
+	content := Interpolate(skill.Body, vars)
+	if args != "" && !hasArgPlaceholder(skill.Body) {
+		content += "\nARGUMENTS: " + args
+	}
+	return content
 }

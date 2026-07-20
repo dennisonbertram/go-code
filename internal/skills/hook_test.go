@@ -35,7 +35,7 @@ func TestAutoInvokeHook_ExplicitWithArgs(t *testing.T) {
 	reg := NewRegistry()
 	reg.skills["deploy"] = &Skill{
 		Name:       "deploy",
-		Body:       "Deploy $1 to $2. Full: $ARGUMENTS",
+		Body:       "Deploy $0 to $1. Full: $ARGUMENTS",
 		FilePath:   "/skills/deploy/SKILL.md",
 		AutoInvoke: true,
 		Context:    ContextConversation,
@@ -315,10 +315,10 @@ func TestBuildVars(t *testing.T) {
 		{"$ARGUMENTS", "alpha beta gamma"},
 		{"$WORKSPACE", "/workspace"},
 		{"$SKILL_DIR", "/home/user/skills/my-skill"},
-		{"$1", "alpha"},
-		{"$2", "beta"},
-		{"$3", "gamma"},
-		{"$4", ""},
+		{"$0", "alpha"},
+		{"$1", "beta"},
+		{"$2", "gamma"},
+		{"$3", ""},
 		{"$9", ""},
 	}
 
@@ -343,8 +343,8 @@ func TestBuildVars_NoArgs(t *testing.T) {
 	if vars["$WORKSPACE"] != "" {
 		t.Errorf("expected empty $WORKSPACE, got %q", vars["$WORKSPACE"])
 	}
-	if vars["$1"] != "" {
-		t.Errorf("expected empty $1, got %q", vars["$1"])
+	if vars["$0"] != "" {
+		t.Errorf("expected empty $0, got %q", vars["$0"])
 	}
 }
 
@@ -360,10 +360,10 @@ func TestBuildVars_QuotedArgs(t *testing.T) {
 		want string
 	}{
 		{"$ARGUMENTS", `run "hello world" --fast`}, // raw args preserved untokenized
-		{"$1", "run"},
-		{"$2", "hello world"}, // quoted multi-word token stays one token
-		{"$3", "--fast"},
-		{"$4", ""},
+		{"$0", "run"},
+		{"$1", "hello world"}, // quoted multi-word token stays one token
+		{"$2", "--fast"},
+		{"$3", ""},
 	}
 
 	for _, tt := range tests {
@@ -378,7 +378,7 @@ func TestAutoInvokeHook_ExplicitWithQuotedArgs(t *testing.T) {
 	reg := NewRegistry()
 	reg.skills["deploy"] = &Skill{
 		Name:       "deploy",
-		Body:       "Deploy $1 to $2. Full: $ARGUMENTS",
+		Body:       "Deploy $0 to $1. Full: $ARGUMENTS",
 		FilePath:   "/skills/deploy/SKILL.md",
 		AutoInvoke: true,
 		Context:    ContextConversation,
@@ -391,6 +391,146 @@ func TestAutoInvokeHook_ExplicitWithQuotedArgs(t *testing.T) {
 		t.Fatal("expected non-nil activation")
 	}
 	want := `Deploy staging eu to fast. Full: "staging eu" fast`
+	if activation.Content != want {
+		t.Errorf("expected content %q, got %q", want, activation.Content)
+	}
+}
+
+func TestBuildVars_MoreThanNineArgs(t *testing.T) {
+	skill := &Skill{
+		FilePath: "/skills/test/SKILL.md",
+	}
+
+	vars := buildVars(skill, "a b c d e f g h i j k l", "")
+
+	tests := []struct {
+		key  string
+		want string
+	}{
+		{"$0", "a"},
+		{"$8", "i"},
+		{"$9", "j"}, // 0-based indexing goes beyond nine tokens
+		{"$10", "k"},
+		{"$11", "l"},
+		{"$12", ""},
+	}
+
+	for _, tt := range tests {
+		got := vars[tt.key]
+		if got != tt.want {
+			t.Errorf("buildVars[%s] = %q, want %q", tt.key, got, tt.want)
+		}
+	}
+}
+
+func TestAutoInvokeHook_FallbackAppendsRawArguments(t *testing.T) {
+	reg := NewRegistry()
+	reg.skills["deploy"] = &Skill{
+		Name:       "deploy",
+		Body:       "You are a deploy assistant.",
+		FilePath:   "/skills/deploy/SKILL.md",
+		AutoInvoke: true,
+		Context:    ContextConversation,
+	}
+
+	hook := AutoInvokeHook(reg)
+	activation := hook(`/deploy "staging eu" fast`)
+
+	if activation == nil {
+		t.Fatal("expected non-nil activation")
+	}
+	// Body references no argument placeholder: raw args are appended verbatim
+	// (untokenized, quotes preserved) as a trailing ARGUMENTS: line.
+	want := "You are a deploy assistant.\nARGUMENTS: \"staging eu\" fast"
+	if activation.Content != want {
+		t.Errorf("expected content %q, got %q", want, activation.Content)
+	}
+}
+
+func TestAutoInvokeHook_FallbackSkippedWhenArgumentsVarPresent(t *testing.T) {
+	reg := NewRegistry()
+	reg.skills["echo"] = &Skill{
+		Name:       "echo",
+		Body:       "Echo: $ARGUMENTS",
+		FilePath:   "/skills/echo/SKILL.md",
+		AutoInvoke: true,
+		Context:    ContextConversation,
+	}
+
+	hook := AutoInvokeHook(reg)
+	activation := hook("/echo hi there")
+
+	if activation == nil {
+		t.Fatal("expected non-nil activation")
+	}
+	want := "Echo: hi there"
+	if activation.Content != want {
+		t.Errorf("expected content %q (no fallback append), got %q", want, activation.Content)
+	}
+}
+
+func TestAutoInvokeHook_FallbackSkippedWhenPositionalPresent(t *testing.T) {
+	reg := NewRegistry()
+	reg.skills["greet"] = &Skill{
+		Name:       "greet",
+		Body:       "Hello $0!",
+		FilePath:   "/skills/greet/SKILL.md",
+		AutoInvoke: true,
+		Context:    ContextConversation,
+	}
+
+	hook := AutoInvokeHook(reg)
+	activation := hook("/greet world")
+
+	if activation == nil {
+		t.Fatal("expected non-nil activation")
+	}
+	want := "Hello world!"
+	if activation.Content != want {
+		t.Errorf("expected content %q (no fallback append), got %q", want, activation.Content)
+	}
+}
+
+func TestAutoInvokeHook_FallbackSkippedWhenArgsEmpty(t *testing.T) {
+	reg := NewRegistry()
+	reg.skills["deploy"] = &Skill{
+		Name:       "deploy",
+		Body:       "You are a deploy assistant.",
+		FilePath:   "/skills/deploy/SKILL.md",
+		AutoInvoke: true,
+		Context:    ContextConversation,
+	}
+
+	hook := AutoInvokeHook(reg)
+	activation := hook("/deploy")
+
+	if activation == nil {
+		t.Fatal("expected non-nil activation")
+	}
+	want := "You are a deploy assistant."
+	if activation.Content != want {
+		t.Errorf("expected content %q (no fallback append for empty args), got %q", want, activation.Content)
+	}
+}
+
+func TestAutoInvokeHook_AutoInvokeFallbackAppendsMessage(t *testing.T) {
+	reg := NewRegistry()
+	reg.skills["review"] = &Skill{
+		Name:       "review",
+		Body:       "You are a code reviewer.",
+		FilePath:   "/skills/review/SKILL.md",
+		AutoInvoke: true,
+		Triggers:   []string{"review my code"},
+		Context:    ContextConversation,
+	}
+
+	hook := AutoInvokeHook(reg)
+	activation := hook("please review my code today")
+
+	if activation == nil {
+		t.Fatal("expected non-nil activation")
+	}
+	want := "You are a code reviewer.\nARGUMENTS: please review my code today"
 	if activation.Content != want {
 		t.Errorf("expected content %q, got %q", want, activation.Content)
 	}
