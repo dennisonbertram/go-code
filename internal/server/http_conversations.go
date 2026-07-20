@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -154,6 +156,23 @@ func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleCompactConversation(w, r, parts[0])
+		return
+	}
+
+	// POST /v1/conversations/{id}/undo — drop recent prompts from the active context (runs:write) (Issue #805)
+	if len(parts) == 2 && parts[1] == "undo" {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		if !hasScope(r.Context(), store.ScopeRunsWrite) {
+			writeScopeError(w, store.ScopeRunsWrite)
+			return
+		}
+		if s.blockConversationCrossTenant(w, r, parts[0]) {
+			return
+		}
+		s.handleUndoConversation(w, r, parts[0])
 		return
 	}
 
@@ -393,6 +412,110 @@ func (s *Server) handleCompactConversation(w http.ResponseWriter, r *http.Reques
 		"compacted":     true,
 		"message_count": len(msgs),
 	})
+}
+
+// handleUndoConversation handles POST /v1/conversations/{id}/undo.
+// It removes the last N user prompts (default 1) and every message after them
+// from the persisted conversation (Issue #805). The body accepts either
+// {"count": N} or {"to_step": S} (undo back to the prompt at step S); an empty
+// or field-less body undoes the single most recent prompt.
+//
+// Like the compact route, this mutates only the persisted conversation; a
+// caller with an in-flight run (the TUI) refetches messages after success.
+func (s *Server) handleUndoConversation(w http.ResponseWriter, r *http.Request, convID string) {
+	store := s.runner.GetConversationStore()
+	if store == nil {
+		writeError(w, http.StatusNotImplemented, "not_implemented", "conversation persistence is not configured")
+		return
+	}
+
+	var req struct {
+		Count  *int `json:"count"`
+		ToStep *int `json:"to_step"`
+	}
+	// io.EOF (empty body) is accepted as an all-defaults request.
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		writeError(w, http.StatusBadRequest, "invalid_json", err.Error())
+		return
+	}
+	if req.Count != nil && req.ToStep != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request", "provide count or to_step, not both")
+		return
+	}
+
+	count := 1
+	if req.Count != nil {
+		count = *req.Count
+	}
+	if req.ToStep != nil {
+		resolved, err := undoCountForStep(r, store, convID, *req.ToStep)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("conversation %q not found", convID))
+				return
+			}
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+			return
+		}
+		count = resolved
+	}
+
+	removedFromStep, err := store.UndoPrompts(r.Context(), convID, count)
+	if err != nil {
+		switch {
+		case errors.Is(err, harness.ErrUndoCrossesCompaction):
+			writeError(w, http.StatusConflict, "undo_crosses_compaction", err.Error())
+		case errors.Is(err, harness.ErrUndoCountOutOfRange):
+			writeError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		case strings.Contains(err.Error(), "not found"):
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("conversation %q not found", convID))
+		default:
+			writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		}
+		return
+	}
+
+	msgs, err := store.LoadMessages(r.Context(), convID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"undone":             true,
+		"removed_from_step":  removedFromStep,
+		"remaining_messages": len(msgs),
+	})
+}
+
+// undoCountForStep converts a to_step undo request into a prompt count for
+// ConversationStore.UndoPrompts: the referenced step must exist and point at a
+// non-meta user prompt, and the count is the number of non-meta user prompts
+// from that step through the newest. The store's own range and compaction
+// guards still apply to the resolved count.
+func undoCountForStep(r *http.Request, store harness.ConversationStore, convID string, step int) (int, error) {
+	if step < 0 {
+		return 0, fmt.Errorf("to_step must be >= 0, got %d", step)
+	}
+	msgs, err := store.LoadMessages(r.Context(), convID)
+	if err != nil {
+		return 0, fmt.Errorf("load messages: %w", err)
+	}
+	if len(msgs) == 0 {
+		return 0, fmt.Errorf("conversation %q not found", convID)
+	}
+	if step >= len(msgs) {
+		return 0, fmt.Errorf("to_step %d is beyond the conversation history (%d messages)", step, len(msgs))
+	}
+	if msgs[step].Role != "user" || msgs[step].IsMeta {
+		return 0, fmt.Errorf("to_step %d does not reference a user prompt", step)
+	}
+	count := 0
+	for i := step; i < len(msgs); i++ {
+		if msgs[i].Role == "user" && !msgs[i].IsMeta {
+			count++
+		}
+	}
+	return count, nil
 }
 
 // handleConversationsCleanup handles POST /v1/conversations/cleanup.

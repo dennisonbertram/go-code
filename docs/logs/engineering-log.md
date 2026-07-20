@@ -35,6 +35,15 @@
 - Validation: `go test ./internal/subagents/... -count=1` and `-race` green;
   new tests repeated 5x without flakes; full regression suite (see PR body).
 
+## 2026-07-20 (`/undo` HTTP Route — Epic #805, Slice 2)
+
+- Added `POST /v1/conversations/{id}/undo` (`internal/server/http_conversations.go`), routed next to `compact` with the same guards: POST-only (405 otherwise), `runs:write` scope (403), and `blockConversationCrossTenant` (cross-tenant 404, verified non-mutating).
+- Handler `handleUndoConversation` delegates to Slice 1's `ConversationStore.UndoPrompts`. Body accepts `{"count": N}` (absent → default 1) or `{"to_step": S}`; empty body is treated as all-defaults. `to_step` is resolved to a count by `undoCountForStep`, which rejects steps that are negative, beyond history, or pointing at a non-prompt (non-`user` or `is_meta`) message with 400 before the store is called.
+- Error mapping: `ErrUndoCrossesCompaction` → 409 `undo_crosses_compaction`; `ErrUndoCountOutOfRange` → 400; unknown conversation → 404; missing store → 501. Success returns `{"undone": true, "removed_from_step": S, "remaining_messages": M}` where M counts the persisted messages including the `is_meta` undo-boundary marker.
+- Boundary semantics are store-enforced (Slice 1): the target prompt must sit strictly above the most recent `is_compact_summary` message; anything at or below the boundary is refused and the conversation is left untouched. This holds for both `count` and `to_step` forms.
+- In-memory caveat, same as the existing compact route: the mutation is store-only, so `GET {id}/messages` on a conversation still resident in the runner's memory shows the pre-undo snapshot until the run ends or the daemon restarts (the store fallback then serves the truncated history). The TUI slice refetches after undo.
+- Validation: failing-first tests in `internal/server/http_undo_test.go` (10 endpoint behavior tests) and `internal/server/http_undo_tenant_test.go` (cross-tenant 404 + no-mutation, `runs:read`-only 403); `go test ./internal/server/ -run 'Undo|TenantIsolation' -count=1` green. tmux smoke against `harnessd` (fake provider, `HARNESS_CONVERSATION_DB` set): `POST .../undo {"count":1}` → 200 `{"undone":true,"removed_from_step":2,"remaining_messages":3}`; after restart, `GET .../messages` serves the truncated history with the marker.
+
 ## 2026-07-20 (Issue #854 TUI Subscription Credential Import)
 
 - Replaced the stale `/keys` startup hint based on nonexistent `KIMI_SUBSCRIPTION_AUTH` with synchronous, local-only reads of both harness-owned Codex and Kimi credential stores. The TUI stores only a non-secret availability marker.
