@@ -65,6 +65,7 @@ type apiKeyProvider struct {
 	Name       string
 	Configured bool
 	APIKeyEnv  string
+	AuthType   string
 }
 
 var gatewayOptions = []gatewayOption{
@@ -2108,8 +2109,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.apiKeyInputMode = false
 					m.apiKeyInput = ""
 					cmds = append(cmds, setProviderKeyCmd(m.config.BaseURL, provider, apiKey, m.config.APIKey))
-				} else if !m.apiKeyInputMode && len(m.apiKeyProviders) > 0 {
+				} else if !m.apiKeyInputMode && len(m.apiKeyProviders) > 0 && m.apiKeyProviders[m.apiKeyCursor].AuthType != "subscription" {
 					m.apiKeyInputMode = true
+				} else if len(m.apiKeyProviders) > 0 {
+					cmds = append(cmds, m.setStatusMsg("Run `codex login`, then `harnesscli auth codex login` to configure this subscription."))
 				}
 				return m, tea.Batch(cmds...)
 			}
@@ -3325,7 +3328,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Gap 3 (#315): codex models use the OpenAI API key; surface a clear
 		// instruction when the model is selected but OpenAI is not configured.
-		if isCodexModel(msg.ModelID) && !m.providerKeyConfigured(msg.Provider) {
+		if msg.Provider == "codex-subscription" && !m.providerKeyConfigured(msg.Provider) {
+			cmds = append(cmds, m.setStatusMsg(
+				"Codex subscription needs `codex login`, then `harnesscli auth codex login`.",
+			))
+		} else if isCodexModel(msg.ModelID) && !m.providerKeyConfigured(msg.Provider) {
 			cmds = append(cmds, m.setStatusMsg(
 				"Codex uses your OpenAI API key. Set OPENAI_API_KEY or enter it via /keys.",
 			))
@@ -3352,6 +3359,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Name:       p.Name,
 				Configured: p.Configured,
 				APIKeyEnv:  p.APIKeyEnv,
+				AuthType:   p.AuthType,
 			}
 		}
 		m.apiKeyProviders = providers
@@ -3878,7 +3886,17 @@ func (m Model) viewAPIKeysOverlay() string {
 		if p.Configured {
 			status = configuredStyle.Render("\u25cf set")
 		}
-		label := style.Render(fmt.Sprintf("%s%-14s %-24s", cursor, p.Name, p.APIKeyEnv))
+		detail := p.APIKeyEnv
+		if p.AuthType == "subscription" {
+			detail = "ChatGPT subscription"
+		}
+		label := style.Render(fmt.Sprintf("%s%-14s %-24s", cursor, p.Name, detail))
+		if p.AuthType == "subscription" {
+			status = unsetStyle.Render("○ not connected")
+			if p.Configured {
+				status = configuredStyle.Render("● connected")
+			}
+		}
 		rows = append(rows, label+" "+status)
 	}
 
@@ -3886,7 +3904,7 @@ func (m Model) viewAPIKeysOverlay() string {
 		rows = append(rows, "  No providers available")
 	}
 
-	footer := lipgloss.NewStyle().Faint(true).Render(string('\u2191') + "/" + string('\u2193') + " navigate  enter edit  esc close")
+	footer := lipgloss.NewStyle().Faint(true).Render(string('\u2191') + "/" + string('\u2193') + " navigate  enter edit/setup  esc close")
 
 	content := strings.Join(rows, "\n") + "\n\n" + footer
 

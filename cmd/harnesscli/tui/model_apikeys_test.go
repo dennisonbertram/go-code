@@ -58,6 +58,24 @@ func TestKeysOverlay_ProvidersLoadedMsg(t *testing.T) {
 	}
 }
 
+func TestKeysOverlay_ShowsCodexSubscriptionStatusWithoutEditingAPIKey(t *testing.T) {
+	m := initModel(t, 80, 24)
+	m = sendSlashCommand(m, "/keys")
+	m2, _ := m.Update(tui.ProvidersLoadedMsg{Providers: []tui.ProviderInfo{
+		{Name: "codex-subscription", Configured: true, AuthType: "subscription"},
+	}})
+	m = m2.(tui.Model)
+	view := m.View()
+	if !strings.Contains(view, "ChatGPT subscription") || !strings.Contains(view, "connected") {
+		t.Fatalf("Codex subscription status missing from /keys view:\n%s", view)
+	}
+	m3, _ := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m3.(tui.Model)
+	if m.APIKeyInputMode() {
+		t.Fatal("subscription row must not open API-key editing")
+	}
+}
+
 // TestKeysOverlay_EnterInputMode verifies Enter with providers loaded enters input mode.
 func TestKeysOverlay_EnterInputMode(t *testing.T) {
 	m := initModel(t, 80, 24)
