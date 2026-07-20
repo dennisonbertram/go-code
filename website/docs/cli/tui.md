@@ -139,6 +139,7 @@ Type `/` to open the autocomplete dropdown. `Tab` completes to the common prefix
 | `/profiles` | View and select a capability profile |
 | `/sessions` | Browse and resume past sessions |
 | `/title [text]` | Set or show the current session's title (`/title clear` removes it). Shown in the status bar and the `/sessions` picker, persisted across restarts |
+| `/init [confirm]` | Generate an `AGENTS.md` for the current workspace via a harness run. If `AGENTS.md` already exists, run `/init confirm` to overwrite it |
 | `/new` | Start a fresh conversation (resets conversation ID) |
 | `/search <query>` | Search the current session transcript |
 | `/history <query>` | Search across stored session metadata |

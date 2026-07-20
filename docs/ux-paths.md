@@ -339,6 +339,10 @@ Registry (`cmd_parser.go:79-194`): clear, context, export, help, keys, model, qu
 | `/title <text>` | set session title; persists; shown in statusbar + picker | OK | `model.go` (`executeTitleCommand`); title_test.go |
 | `/title` (no args) | show current title / "No title set" hint | OK | title_test.go |
 | `/title clear` | remove session title | OK | title_test.go |
+| `/init` | run generation prompt; write `<workspace>/AGENTS.md` on completion | OK | `init_agents.go` (`executeInitCommand`); init_agents_test.go |
+| `/init` (AGENTS.md exists) | refuse overwrite; hint `/init confirm`; file untouched | OK | init_agents_test.go |
+| `/init confirm` | overwrite existing AGENTS.md | OK | init_agents_test.go |
+| `/init` (run active) | refuse; no write on the other run's completion | OK | init_agents_test.go |
 | `/search <q>` | search transcript | OK | `model.go:1055-1068`; search_test.go (12+) |
 | `/search` (no args) | usage hint | OK | `model.go:1056-1058`; `TestSearch_BT002_EmptyQueryStatusMessage` |
 | `/history <q>` | search session meta | OK | `model.go:1070-1083`; `TestSearch_BT006_HistorySearchOpensOverlay` |

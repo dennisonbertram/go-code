@@ -281,6 +281,11 @@ type Model struct {
 	// chars) so RunStartedMsg can record it on the session entry as LastMsg.
 	pendingLastMsg string
 
+	// pendingInitAgentsMd is true while a /init generation run is in flight;
+	// when the run completes, the assistant's markdown is written to
+	// <workspace>/AGENTS.md (see init_agents.go).
+	pendingInitAgentsMd bool
+
 	// Search overlay state (for /search and /history commands).
 	searchResults     []SearchResult
 	searchQuery       string
@@ -2997,6 +3002,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.runActive = false
 		m.cancelRun = nil
 		m.clearThinkingBar()
+		// A completed /init run writes its markdown to <workspace>/AGENTS.md.
+		if m.pendingInitAgentsMd {
+			m.pendingInitAgentsMd = false
+			cmds = append(cmds, m.completeInitAgentsMd())
+		}
 
 	case RunFailedMsg:
 		m.runActive = false
@@ -3005,6 +3015,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activeAssistantLineCount = 0
 		m.responseStarted = false
 		m.clearThinkingBar()
+		if m.pendingInitAgentsMd {
+			m.pendingInitAgentsMd = false
+			cmds = append(cmds, m.setStatusMsg("AGENTS.md generation failed"))
+		}
 		errMsg := "run failed"
 		if msg.Error != "" {
 			errMsg = msg.Error

@@ -12,6 +12,7 @@ Command Registry - 80x24
 /help — Show help dialog
 /history — Search across stored session metadata
 /hooks — List loaded and skipped lifecycle hooks
+/init — Generate an AGENTS.md for this workspace
 /keys — Manage provider API keys
 /model — Select AI model
 /new — Start a new session (resets conversation)
