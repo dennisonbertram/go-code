@@ -20,6 +20,7 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/configpanel"
 	"go-agent-harness/cmd/harnesscli/tui/components/contextgrid"
 	"go-agent-harness/cmd/harnesscli/tui/components/costdisplay"
+	"go-agent-harness/cmd/harnesscli/tui/components/diffview"
 	"go-agent-harness/cmd/harnesscli/tui/components/helpdialog"
 	"go-agent-harness/cmd/harnesscli/tui/components/inputarea"
 	"go-agent-harness/cmd/harnesscli/tui/components/interruptui"
@@ -87,6 +88,11 @@ type Model struct {
 	config TUIConfig
 	keys   KeyMap
 	ready  bool
+
+	// Styles derived from theme by applyThemeToComponents and reused when
+	// constructing ephemeral components (bubbles, tool-card diffs).
+	bubbleStyles *messagebubble.Styles
+	diffStyles   *diffview.Styles
 
 	// RunID is the current run being displayed.
 	RunID string
@@ -446,7 +452,29 @@ func New(cfg TUIConfig) Model {
 	if cfg.ResumeConversationID != "" {
 		m.conversationID = cfg.ResumeConversationID
 	}
+	m.applyThemeToComponents()
 	return m
+}
+
+// SetTheme replaces the active theme and re-distributes its styles to every
+// themed component — the foundation for live theme switching (epic #810).
+func (m *Model) SetTheme(t Theme) {
+	m.theme = t
+	m.applyThemeToComponents()
+}
+
+// applyThemeToComponents derives component styles from the current theme and
+// pushes them into live components (status bar, spinner) plus the stored
+// derivations used when constructing ephemeral components (message bubbles,
+// tool-card diffs). Called by SetTheme, by New, and after components are
+// re-created (window resize, run start).
+func (m *Model) applyThemeToComponents() {
+	m.statusBar.SetStyles(statusbarStylesFromTheme(m.theme))
+	m.spinner = m.spinner.WithStyles(spinnerStylesFromTheme(m.theme))
+	bubbles := messagebubbleStylesFromTheme(m.theme)
+	m.bubbleStyles = &bubbles
+	diffs := diffviewStylesFromTheme(m.theme)
+	m.diffStyles = &diffs
 }
 
 // defaultPluginsDir returns the default directory for user-defined plugin files.
@@ -937,6 +965,7 @@ func renderedBlockLines(rendered string) []string {
 func (m Model) renderMessageBubble(role messagebubble.Role, content string) []string {
 	bubble := messagebubble.New(role, content)
 	bubble.Width = m.width
+	bubble.Styles = m.bubbleStyles
 	return renderedBlockLines(bubble.View())
 }
 
@@ -971,6 +1000,7 @@ func (m *Model) appendSteeringMarker(message string) {
 
 func (m *Model) appendToolUseView(view tooluse.Model) {
 	view.Width = m.width
+	view.DiffStyles = m.diffStyles
 	lines := renderedBlockLines(view.View())
 	if len(lines) == 0 {
 		return
@@ -1999,6 +2029,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		// Initialize/resize components
 		m.statusBar = statusbar.New(msg.Width)
+		m.statusBar.SetStyles(statusbarStylesFromTheme(m.theme))
 		m.statusBar.SetModel(m.statusBarModelLabel())
 		m.statusBar.SetTitle(m.sessionTitle())
 		m.statusBar.SetCost(m.cumulativeCostUSD)
@@ -3113,7 +3144,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.RunID = msg.RunID
 		m.runActive = true
 		m.clearThinkingBar()
-		m.spinner = spinner.New(spinnerSeed(m.config)).Start()
+		m.spinner = spinner.New(spinnerSeed(m.config)).WithStyles(spinnerStylesFromTheme(m.theme)).Start()
 		cmds = append(cmds, spinnerTickCmd())
 		// The harness auto-assigns conversation_id = run_id when none is
 		// supplied. Record this as the conversationID for subsequent turns so

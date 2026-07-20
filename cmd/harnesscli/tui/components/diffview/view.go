@@ -16,6 +16,26 @@ const (
 	borderChar = "\u254c"
 )
 
+// Styles groups the styles used to render a diff view. Obtain defaults via
+// DefaultStyles() and override individual fields.
+type Styles struct {
+	Add    lipgloss.Style // added lines
+	Remove lipgloss.Style // removed lines
+	Hunk   lipgloss.Style // hunk headers and file headers
+	Border lipgloss.Style // dashed ╌ border rule
+}
+
+// DefaultStyles returns the palette diffview used before theming: #23A244
+// adds, #E05252 removes, dim hunks, faint border.
+func DefaultStyles() Styles {
+	return Styles{
+		Add:    lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#23A244", Dark: "#23A244"}),
+		Remove: lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#E05252", Dark: "#E05252"}),
+		Hunk:   lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#9B9B9B", Dark: "#5C5C5C"}).Faint(true),
+		Border: lipgloss.NewStyle().Faint(true),
+	}
+}
+
 // View renders a diff inside a ╌ bordered box.
 // MaxLines controls truncation (0 = no limit).
 // Width controls the rendering width (0 defaults to 80).
@@ -26,6 +46,16 @@ type View struct {
 	MaxLines int
 	// Width is the terminal rendering width (0 defaults to 80).
 	Width int
+	// Styles overrides the render palette when non-nil (theme injection
+	// point, epic #810); nil uses DefaultStyles().
+	Styles *Styles
+}
+
+func (v View) stylesOrDefault() Styles {
+	if v.Styles == nil {
+		return DefaultStyles()
+	}
+	return *v.Styles
 }
 
 // Render formats the diff as a bordered box string.
@@ -57,10 +87,11 @@ func (v View) Render() string {
 	clipped, truncated := Clip(lines, maxLines)
 
 	// Build styles (stateless — safe for concurrent use).
-	addStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#23A244", Dark: "#23A244"})
-	removeStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#E05252", Dark: "#E05252"})
-	hunkStyle := lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#9B9B9B", Dark: "#5C5C5C"}).Faint(true)
-	borderStyle := lipgloss.NewStyle().Faint(true)
+	styles := v.stylesOrDefault()
+	addStyle := styles.Add
+	removeStyle := styles.Remove
+	hunkStyle := styles.Hunk
+	borderStyle := styles.Border
 
 	var sb strings.Builder
 

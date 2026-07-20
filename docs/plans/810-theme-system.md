@@ -1,4 +1,13 @@
-# Plan: theme token schema and JSON loader (epic #810, slice 1)
+# Plan: theme system (epic #810)
+
+## Slice status
+
+- Slice 1 (token schema + JSON loader): **implemented**, merged via PR #833.
+- Slice 2 (thread resolved theme through components): **implemented** (this branch) —
+  see below.
+- Slices 3–5 (picker, persistence, docs/example): planned, not started.
+
+## Slice 1: token schema and JSON loader
 
 ## Context
 
@@ -74,3 +83,89 @@
 - Risk: reflection-heavy mapping drifts from the `Theme` struct. Mitigation:
   coverage test reflects over all `Theme` fields and asserts each is bound
   to a token, so adding a field without a binding fails the test.
+
+---
+
+## Slice 2: thread resolved theme through components
+
+## Context
+
+- Problem: `Model.theme` is set at init (`model.go:357`) and never read;
+  components hardcode styles — statusbar package vars
+  (`dimStyle`/`boldStyle`/`warnStyle`), diffview inline `AdaptiveColor`
+  literals (`view.go:60-63`), messagebubble package vars (user bg 237/fg 252,
+  assistant dot color 15), spinner inline `Faint(true)`, approval overlay
+  fully unstyled.
+- User impact: a resolved theme (slice 1 loader) changes nothing visible.
+- Constraints: default rendering must stay byte-identical for components
+  whose current styles have theme-token equivalents (statusbar, diffview,
+  spinner, messagebubble); the approval overlay is unstyled today, so styling
+  it from the theme is a deliberate, documented default change (its tests
+  assert via `strings.Contains` and stay green).
+
+## Scope
+
+- In scope:
+  - `components/statusbar`: `Styles{Dim,Bold,Warn}` + `DefaultStyles()` +
+    `SetStyles`; zero-value models fall back to defaults.
+  - `components/diffview`: `Styles{Add,Remove,Hunk,Border}` + `DefaultStyles()`;
+    `View.Styles`/`Model.Styles` optional pointer fields.
+  - `components/spinner`: `Styles{Dim}` + `WithStyles` (immutable).
+  - `components/messagebubble`: `Styles{User,AssistantDot,Title}` +
+    `DefaultStyles()`; optional `Styles` on `Model`, `UserBubble`,
+    `AssistantBubble`.
+  - `components/tooluse`: `DiffStyles *diffview.Styles` pass-through so the
+    TUI's diff rendering path is themed (tooluse's own styles stay as-is —
+    out of epic scope).
+  - `cmd/harnesscli/tui/theme_components.go` (new): derive component styles
+    from the resolved `Theme` (zero-drift mappings; colors extracted where
+    shapes differ, e.g. user-bubble fg from `roleUser` when set).
+  - `model.go`: `SetTheme(Theme)` keeps the current theme and re-distributes
+    styles to live components (statusbar, spinner) + stored derived styles
+    for per-render constructions (bubbles via `renderMessageBubble`, diffs
+    via `appendToolUseView`); re-apply after `WindowSizeMsg` statusbar
+    re-creation and spinner re-creation. Foundation for slice-3 hot reload.
+  - `approval.go`: render overlay chrome from theme (border token color for
+    the box, primary for the tool name, warning for the action line).
+- Out of scope: `/theme` picker (slice 3), persistence (slice 4), docs
+  (slice 5); tooluse collapsed/expanded chrome, plan-approval overlay,
+  inputarea, search highlight, and other overlays with hardcoded colors in
+  `model.go` (not named in the epic scope).
+- Mapping notes: diffview dashed border uses `DimStyle` (consistent with
+  slice 1 mapping `SeparatorStyle`←`textDim`; the dashed rule is a separator,
+  not a focusable box border) — keeps default diff snapshots byte-identical.
+
+## Test Plan (TDD)
+
+- New failing tests to add first:
+  - statusbar: injected `Warn` color appears on warning segments; `Dim`/`Bold`
+    injection; zero-value model renders with defaults.
+  - diffview: `View.Styles` custom colors on add/remove/hunk/border lines;
+    `Model.Styles` pass-through.
+  - messagebubble: custom user fg / assistant dot / title colors render;
+    defaults unchanged.
+  - spinner: `WithStyles` custom color in `View` and `CompletionLine`.
+  - tui (internal): `SetTheme` with a distinctive theme file (warning,
+    diffAdd, roleUser, textDim, accent) restyles statusbar view, themed diff
+    rendering through the tooluse funnel, user-bubble fg, spinner view, and
+    approval overlay chrome; styles survive `WindowSizeMsg` statusbar
+    re-creation.
+- Existing tests to update: none expected (zero-drift mappings); approval
+  overlay tests assert via `Contains` and must stay green.
+- Regression: `go test ./cmd/harnesscli/... -count=1` green.
+
+## Implementation Checklist
+
+- [x] Write failing tests first, confirm red.
+- [x] Implement component `Styles` injection + derivation + model wiring.
+- [x] Run `go test ./cmd/harnesscli/... -count=1` green; gofmt/vet clean.
+- [x] Update indexes/logs; commit, push `epic/810-theme-system-s2`, open PR #871.
+
+## Risks and Mitigations
+
+- Risk: default-appearance drift breaking golden snapshots. Mitigation:
+  zero-drift token mappings verified by the unchanged component suites;
+  `assertSameTheme`-style default tests per component.
+- Risk: ephemeral components (bubbles, tool cards) constructed in many
+  places miss styles. Mitigation: inject at the two render funnels
+  (`renderMessageBubble`, `appendToolUseView`) rather than every call site.

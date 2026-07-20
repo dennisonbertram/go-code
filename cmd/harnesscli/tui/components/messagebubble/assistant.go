@@ -3,8 +3,6 @@ package messagebubble
 import (
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"go-agent-harness/cmd/harnesscli/tui/components/streamrenderer"
 )
 
@@ -24,12 +22,6 @@ const (
 	assistantDotPrefixRunes = 2 // rune count of "⏺ "
 )
 
-// dotStyle renders the ⏺ symbol in bright white (color 15).
-var dotStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
-
-// titleStyle renders the optional title with bold + italic + underline.
-var titleStyle = lipgloss.NewStyle().Bold(true).Italic(true).Underline(true)
-
 // AssistantBubble renders an assistant message with ⏺ prefix.
 //
 // Rendering rules:
@@ -41,6 +33,9 @@ type AssistantBubble struct {
 	Title   string // optional bold/italic/underline title
 	Content string // main response text
 	Width   int    // available terminal width
+	// Styles overrides the bubble styles when non-nil (theme injection
+	// point, epic #810); nil uses DefaultStyles().
+	Styles *Styles
 }
 
 // View renders the assistant bubble.
@@ -53,15 +48,17 @@ func (b AssistantBubble) View() string {
 		width = 80
 	}
 
+	styles := stylesOrDefault(b.Styles)
+
 	var sb strings.Builder
 
-	dotRendered := dotStyle.Render("⏺")
+	dotRendered := styles.AssistantDot.Render("⏺")
 
 	if b.Title != "" {
 		// Title line: "⏺ " + styledTitle
 		sb.WriteString(dotRendered)
 		sb.WriteString(" ")
-		sb.WriteString(titleStyle.Render(b.Title))
+		sb.WriteString(styles.Title.Render(b.Title))
 		sb.WriteString("\n")
 	}
 

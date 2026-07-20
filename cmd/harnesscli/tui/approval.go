@@ -17,6 +17,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ─── Tool Approval State (stored on Model) ───────────────────────────────────
@@ -117,31 +118,40 @@ func (m Model) handleToolApprovalKey(msg tea.KeyMsg) (toolApprovalState, tea.Cmd
 }
 
 // renderToolApprovalOverlay renders the tool-approval overlay as a list of
-// lines. Returns nil if no overlay is active.
+// lines. Returns nil if no overlay is active. The overlay chrome renders from
+// the active theme (epic #810): box in the border-token color, tool name in
+// primary, action line in warning.
 func (m Model) renderToolApprovalOverlay() []string {
 	if !m.toolApproval.active {
 		return nil
 	}
+	chrome := lipgloss.NewStyle()
+	if fg := m.theme.BorderStyle.GetBorderTopForeground(); fg != nil {
+		if _, none := fg.(lipgloss.NoColor); !none {
+			chrome = chrome.Foreground(fg)
+		}
+	}
+	rule := func(s string) string { return chrome.Render(s) }
 	lines := []string{
 		"",
-		"┌─ Tool Approval Required ─────────────────────────",
-		"│  Tool: " + m.toolApproval.tool,
-		"│",
+		rule("┌─ Tool Approval Required ─────────────────────────"),
+		rule("│") + "  Tool: " + m.theme.ToolNameStyle.Render(m.toolApproval.tool),
+		rule("│"),
 	}
 	for _, line := range strings.Split(m.toolApproval.arguments, "\n") {
-		lines = append(lines, "│  "+line)
+		lines = append(lines, rule("│")+"  "+line)
 	}
-	lines = append(lines, "│")
-	lines = append(lines, "│  [a]pprove  [d]eny  (esc cancels the run)")
+	lines = append(lines, rule("│"))
+	lines = append(lines, rule("│")+"  "+m.theme.WarningStyle.Render("[a]pprove  [d]eny")+rule("  (esc cancels the run)"))
 	if !m.toolApproval.deadlineAt.IsZero() {
 		remaining := time.Until(m.toolApproval.deadlineAt)
 		if remaining > 0 {
-			lines = append(lines, fmt.Sprintf("│  Deadline: %s remaining", remaining.Round(time.Second)))
+			lines = append(lines, rule("│")+fmt.Sprintf("  Deadline: %s remaining", remaining.Round(time.Second)))
 		} else {
-			lines = append(lines, "│  Deadline: expired")
+			lines = append(lines, rule("│")+"  Deadline: expired")
 		}
 	}
-	lines = append(lines, "└────────────────────────────────────────")
+	lines = append(lines, rule("└────────────────────────────────────────"))
 	lines = append(lines, "")
 	return lines
 }

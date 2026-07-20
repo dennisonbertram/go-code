@@ -38,6 +38,10 @@ type Model struct {
 	Command string
 	// MaxLines limits bash output before truncation. 0 uses the component default.
 	MaxLines int
+	// DiffStyles overrides the palette used to render unified-diff results
+	// when non-nil (theme injection point, epic #810); nil uses
+	// diffview.DefaultStyles().
+	DiffStyles *diffview.Styles
 }
 
 // New creates a new tool use display model.
@@ -113,6 +117,7 @@ func (m Model) View() string {
 				FilePath: m.viewArgs(),
 				Diff:     m.Result,
 				Width:    width,
+				Styles:   m.DiffStyles,
 			}
 			if renderedDiff := diff.View(); renderedDiff != "" {
 				var sb strings.Builder

@@ -1,5 +1,12 @@
 # Long-Term Thinking Log
 
+## 2026-07-19 (Theme System Slice 2 — Epic #810)
+
+- Command intent: Implement only slice 2 of epic #810 — thread the resolved theme through statusbar, diffview, messagebubble, approval overlay, and spinner — on branch `epic/810-theme-system-s2`, strict TDD, push and open a PR without merging.
+- User intent: loading a theme (slice 1 loader) visibly restyles the TUI; `Model.theme` stops being write-only; slice 3's picker gets a working hot-reload foundation.
+- Success definition: each named component accepts injected styles (`Styles` + `DefaultStyles()`); `SetTheme` re-distributes to live and ephemeral components (render funnels `renderMessageBubble`/`appendToolUseView`); styles survive statusbar re-creation on resize and spinner re-creation on run start; injecting distinctive warning/diffAdd colors visibly changes statusbar and diff rendering in tests; default rendering stays byte-identical everywhere except the previously-unstyled approval overlay (deliberate, documented); `go test ./cmd/harnesscli/... -count=1` green.
+- Guardrails/constraints: slice 2 only — no picker (slice 3), no persistence (slice 4), no docs site/example (slice 5); tooluse chrome, plan-approval overlay, inputarea, and model.go overlay literals stay hardcoded (outside the epic's named set); zero-drift token mappings unless a path was unstyled before.
+
 ## 2026-07-20 (TUI Subscription Credential Import — Issue #854)
 
 - Command intent: make the existing Codex and Kimi subscription imports usable directly from `/keys`, reload the live daemon, test and document the exact same-host security boundary, then push and open a PR.
