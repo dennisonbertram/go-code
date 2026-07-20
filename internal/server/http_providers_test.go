@@ -129,6 +129,37 @@ func TestProvidersEndpointConfiguredAndUnconfigured(t *testing.T) {
 	}
 }
 
+func TestProvidersEndpointMarksCodexSubscriptionAuth(t *testing.T) {
+	t.Parallel()
+	cat := testCatalogForProviders()
+	cat.Providers["codex-subscription"] = catalog.ProviderEntry{
+		BaseURL: "https://chatgpt.com/backend-api/codex", APIKeyOptional: true, TokenSourceRequired: true,
+		Models: map[string]catalog.Model{"gpt": {ContextWindow: 1}},
+	}
+	ts := httptest.NewServer(NewWithCatalog(testRunnerForProviders(t), cat))
+	defer ts.Close()
+	res, err := http.Get(ts.URL + "/v1/providers")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	var body struct {
+		Providers []ProviderResponse `json:"providers"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	for _, provider := range body.Providers {
+		if provider.Name == "codex-subscription" {
+			if provider.AuthType != "subscription" || provider.Configured {
+				t.Fatalf("Codex response = %#v, want unconfigured subscription", provider)
+			}
+			return
+		}
+	}
+	t.Fatal("Codex subscription missing from provider response")
+}
+
 func TestProvidersEndpointNilCatalog(t *testing.T) {
 	t.Parallel()
 

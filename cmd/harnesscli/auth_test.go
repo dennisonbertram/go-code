@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunAuthLogin_GeneratesAndSavesKey(t *testing.T) {
@@ -84,6 +87,56 @@ func TestRunAuth_UnknownSubcommand(t *testing.T) {
 	code := runAuth([]string{"unknown"})
 	if code == 0 {
 		t.Error("expected non-zero exit for unknown subcommand")
+	}
+}
+
+func TestRunAuthCodexLoginStatusLogout(t *testing.T) {
+	origStdout, origStderr := stdout, stderr
+	defer func() { stdout, stderr = origStdout, origStderr }()
+	var outBuf, errBuf bytes.Buffer
+	stdout, stderr = &outBuf, &errBuf
+
+	tmpHome := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	defer os.Setenv("HOME", oldHome)
+	os.Setenv("HOME", tmpHome)
+	if err := os.MkdirAll(filepath.Join(tmpHome, ".codex"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	access := "test." + base64.RawURLEncoding.EncodeToString([]byte(fmt.Sprintf(`{"exp":%d}`, time.Now().Add(time.Hour).Unix()))) + ".signature"
+	vendorPath := filepath.Join(tmpHome, ".codex", "auth.json")
+	vendor := fmt.Sprintf(`{"auth_mode":"chatgpt","tokens":{"access_token":%q,"refresh_token":"test-cli-refresh","account_id":"acct-cli"}}`, access)
+	if err := os.WriteFile(vendorPath, []byte(vendor), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(vendorPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if code := runAuth([]string{"codex", "login"}); code != 0 {
+		t.Fatalf("codex login = %d, stderr=%s", code, errBuf.String())
+	}
+	if strings.Contains(outBuf.String(), "test-cli-refresh") || !strings.Contains(outBuf.String(), "acct-cli") {
+		t.Fatalf("login output is unsafe or incomplete: %q", outBuf.String())
+	}
+	after, err := os.ReadFile(vendorPath)
+	if err != nil || string(after) != string(before) {
+		t.Fatalf("vendor Codex credential was changed: %v", err)
+	}
+	outBuf.Reset()
+	if code := runAuth([]string{"codex", "status"}); code != 0 || !strings.Contains(outBuf.String(), "valid") || strings.Contains(outBuf.String(), "test-cli-refresh") {
+		t.Fatalf("codex status failed or exposed token: code=%d output=%q", code, outBuf.String())
+	}
+	outBuf.Reset()
+	if code := runAuth([]string{"codex", "logout"}); code != 0 {
+		t.Fatalf("codex logout = %d, stderr=%s", code, errBuf.String())
+	}
+	if _, err := os.Stat(filepath.Join(tmpHome, ".harness", "subscription-auth", "codex.json")); !os.IsNotExist(err) {
+		t.Fatalf("logout did not remove harness credential: %v", err)
+	}
+	if after, err := os.ReadFile(vendorPath); err != nil || string(after) != string(before) {
+		t.Fatalf("logout changed vendor Codex credential: %v", err)
 	}
 }
 

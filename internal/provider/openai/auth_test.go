@@ -114,6 +114,38 @@ func TestClientTokenSourceErrorFailsRequest(t *testing.T) {
 	}
 }
 
+func TestClientSubscriptionEndpointUsesCodexPathWithoutV1(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/codex/responses" {
+			t.Fatalf("Codex response path = %q, want /backend-api/codex/responses", r.URL.Path)
+		}
+		if r.Header.Get("chatgpt-account-id") != "acct-test" {
+			t.Fatal("Codex account header is absent")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"resp_test","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`))
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:      server.URL + "/backend-api/codex",
+		SkipV1Path:   true,
+		TokenSource:  tokenSourceFunc(func(context.Context) (string, error) { return "test-access", nil }),
+		ExtraHeaders: map[string]string{"chatgpt-account-id": "acct-test"},
+		ModelAPILookup: func(string, string) string {
+			return "responses"
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Complete(context.Background(), harness.CompletionRequest{Model: "gpt-test", Messages: []harness.Message{{Role: "user", Content: "hello"}}}); err != nil {
+		t.Fatalf("Complete() error: %v", err)
+	}
+}
+
 func headersEqual(got, want http.Header) bool {
 	if len(got) != len(want) {
 		return false

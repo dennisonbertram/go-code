@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,9 +21,11 @@ import (
 	"go-agent-harness/internal/provider"
 	"go-agent-harness/internal/provider/anthropic"
 	"go-agent-harness/internal/provider/catalog"
+	"go-agent-harness/internal/provider/codex"
 	"go-agent-harness/internal/provider/kimi"
 	openai "go-agent-harness/internal/provider/openai"
 	"go-agent-harness/internal/provider/pricing"
+	"go-agent-harness/internal/provider/tokencache"
 	"go-agent-harness/internal/relay"
 	"go-agent-harness/internal/server"
 	slackadapter "go-agent-harness/internal/slack"
@@ -34,10 +37,12 @@ import (
 )
 
 type catalogBootstrapOptions struct {
-	workspace   string
-	getenv      func(string) string
-	newProvider providerFactory
-	logger      func(string, ...any)
+	workspace    string
+	getenv       func(string) string
+	newProvider  providerFactory
+	logger       func(string, ...any)
+	codexStore   *codex.Store
+	codexRefresh tokencache.RefreshFunc
 }
 
 type catalogBootstrap struct {
@@ -122,6 +127,21 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 		if source, err := kimi.NewTokenSource(kimi.DefaultStorePath(), "", nil); err == nil {
 			bootstrap.providerRegistry.SetTokenSource("kimi-subscription", source)
 		}
+		store := opts.codexStore
+		if store == nil {
+			store = codex.DefaultStore()
+		}
+		refresh := opts.codexRefresh
+		if refresh == nil {
+			refresh = codex.NewRefreshFunc(nil, "", nil)
+		}
+		var codexSource *codex.Source
+		if source, err := codex.NewTokenSource(store, refresh); err == nil {
+			codexSource = source
+			bootstrap.providerRegistry.SetTokenSource("codex-subscription", source)
+		} else if !errors.Is(err, codex.ErrNotConfigured) {
+			return catalogBootstrap{}, fmt.Errorf("load Codex subscription credential: %w", err)
+		}
 		registerModelDiscoverers(bootstrap.providerRegistry)
 		bootstrap.providerRegistry.SetClientFactory(catalog.ClientFactory(func(apiKey, baseURL, providerName string, tokenSource provider.TokenSource) (catalog.ProviderClient, error) {
 			if providerName == "anthropic" {
@@ -173,6 +193,10 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 				}
 				cfg.OpenRouterReferer = referer
 				cfg.OpenRouterTitle = title
+			}
+			if providerName == "codex-subscription" && codexSource != nil {
+				cfg.SkipV1Path = true
+				cfg.ExtraHeaders = map[string]string{"chatgpt-account-id": codexSource.AccountID()}
 			}
 			return opts.newProvider(cfg)
 		}))

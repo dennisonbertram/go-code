@@ -3,6 +3,7 @@ package catalog
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -146,6 +147,38 @@ func TestLoadCatalogFromBytes_NoModels(t *testing.T) {
 	_, err := LoadCatalogFromBytes([]byte(data))
 	if err == nil {
 		t.Fatal("expected error for no models")
+	}
+}
+
+func TestLoadCatalogFromBytes_DerivesCodexSubscriptionModelsFromOpenAI(t *testing.T) {
+	t.Parallel()
+
+	cat, err := LoadCatalogFromBytes([]byte(`{
+  "catalog_version":"1",
+  "providers": {
+    "openai": {"base_url":"https://api.openai.com/v1","api_key_env":"OPENAI_API_KEY","protocol":"openai_compat","models":{"gpt-test":{"display_name":"GPT Test","context_window":123}}},
+    "codex-subscription": {"base_url":"https://chatgpt.com/backend-api/codex","api_key_optional":true,"token_source_required":true,"protocol":"openai_compat","models_from":"openai"}
+  }
+}`))
+	if err != nil {
+		t.Fatalf("LoadCatalogFromBytes() error: %v", err)
+	}
+	codex := cat.Providers["codex-subscription"]
+	if !codex.TokenSourceRequired || len(codex.Models) != 1 || codex.Models["gpt-test"].ContextWindow != 123 {
+		t.Fatalf("Codex provider did not inherit OpenAI model metadata: %#v", codex)
+	}
+	codex.Models["gpt-test"] = Model{ContextWindow: 999}
+	if got := cat.Providers["openai"].Models["gpt-test"].ContextWindow; got != 123 {
+		t.Fatalf("model inheritance shares mutable metadata: got %d", got)
+	}
+}
+
+func TestLoadCatalogFromBytes_RejectsMissingModelSource(t *testing.T) {
+	t.Parallel()
+
+	_, err := LoadCatalogFromBytes([]byte(`{"catalog_version":"1","providers":{"codex-subscription":{"base_url":"https://example.test","api_key_optional":true,"token_source_required":true,"protocol":"openai_compat","models_from":"openai"}}}`))
+	if err == nil || !strings.Contains(err.Error(), "models_from") {
+		t.Fatalf("LoadCatalogFromBytes() error = %v, want missing models_from error", err)
 	}
 }
 

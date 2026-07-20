@@ -24,6 +24,7 @@ type ProviderResponse struct {
 	Name       string `json:"name"`
 	Configured bool   `json:"configured"`
 	APIKeyEnv  string `json:"api_key_env"`
+	AuthType   string `json:"auth_type,omitempty"`
 	BaseURL    string `json:"base_url"`
 	ModelCount int    `json:"model_count"`
 }
@@ -73,6 +74,12 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 			Name:       name,
 			Configured: configured,
 			APIKeyEnv:  entry.APIKeyEnv,
+			AuthType: func() string {
+				if entry.TokenSourceRequired {
+					return "subscription"
+				}
+				return "api_key"
+			}(),
 			BaseURL:    entry.BaseURL,
 			ModelCount: len(entry.Models),
 		})

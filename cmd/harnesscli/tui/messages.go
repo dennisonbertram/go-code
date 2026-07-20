@@ -225,6 +225,7 @@ type ProviderInfo struct {
 	Name       string
 	Configured bool
 	APIKeyEnv  string
+	AuthType   string
 }
 
 // ProvidersLoadedMsg carries results from GET /v1/providers.

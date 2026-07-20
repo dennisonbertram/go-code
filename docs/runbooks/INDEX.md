@@ -1,5 +1,7 @@
 # Runbooks Index
 
+- `codex-subscription-auth.md`: Setup, credential ownership, and caveats for the ChatGPT-backed Codex subscription provider.
+
 - `acp.md` — configure and verify the `harness-acp` Agent Client Protocol stdio adapter.
 - [Session rewind](session-rewind.md) — destructive file-snapshot restore and conversation truncation.
 

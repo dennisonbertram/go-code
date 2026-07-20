@@ -428,6 +428,7 @@ type providersResponse struct {
 		Name       string `json:"name"`
 		Configured bool   `json:"configured"`
 		APIKeyEnv  string `json:"api_key_env"`
+		AuthType   string `json:"auth_type"`
 	} `json:"providers"`
 }
 
@@ -458,6 +459,7 @@ func fetchProvidersCmd(baseURL, apiKey string) tea.Cmd {
 				Name:       p.Name,
 				Configured: p.Configured,
 				APIKeyEnv:  p.APIKeyEnv,
+				AuthType:   p.AuthType,
 			}
 		}
 		return ProvidersLoadedMsg{Providers: providers}

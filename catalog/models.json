@@ -647,6 +647,14 @@
         "llama-4-maverick": "meta-llama/Llama-4-Maverick-17B-128E"
       }
     },
+    "codex-subscription": {
+      "display_name": "Codex (ChatGPT subscription)",
+      "base_url": "https://chatgpt.com/backend-api/codex",
+      "api_key_optional": true,
+      "token_source_required": true,
+      "protocol": "openai_compat",
+      "models_from": "openai"
+    },
     "anthropic": {
       "display_name": "Anthropic",
       "base_url": "https://api.anthropic.com/v1",

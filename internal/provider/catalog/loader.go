@@ -28,17 +28,8 @@ func LoadCatalogFromBytes(data []byte) (*Catalog, error) {
 	if err := json.Unmarshal(data, &cat); err != nil {
 		return nil, fmt.Errorf("decode catalog: %w", err)
 	}
-	for name, entry := range cat.Providers {
-		if entry.ModelsFrom == "" {
-			continue
-		}
-		source, ok := cat.Providers[entry.ModelsFrom]
-		if !ok {
-			return nil, fmt.Errorf("provider %q: models_from %q not found", name, entry.ModelsFrom)
-		}
-		entry.Models = cloneModels(source.Models)
-		entry.Aliases = cloneAliases(source.Aliases)
-		cat.Providers[name] = entry
+	if err := deriveProviderModels(&cat); err != nil {
+		return nil, err
 	}
 
 	if err := validateCatalog(&cat); err != nil {
@@ -48,23 +39,67 @@ func LoadCatalogFromBytes(data []byte) (*Catalog, error) {
 	return &cat, nil
 }
 
-func cloneModels(models map[string]Model) map[string]Model {
-	out := make(map[string]Model, len(models))
-	for name, model := range models {
-		out[name] = model
+func deriveProviderModels(cat *Catalog) error {
+	visiting := make(map[string]bool)
+	resolved := make(map[string]bool)
+	var resolve func(string) error
+	resolve = func(name string) error {
+		if resolved[name] {
+			return nil
+		}
+		entry, ok := cat.Providers[name]
+		if !ok {
+			return fmt.Errorf("provider %q: models_from source is not defined", name)
+		}
+		if entry.ModelsFrom == "" {
+			resolved[name] = true
+			return nil
+		}
+		if visiting[name] {
+			return fmt.Errorf("provider %q: models_from cycle", name)
+		}
+		visiting[name] = true
+		if err := resolve(entry.ModelsFrom); err != nil {
+			return fmt.Errorf("provider %q: models_from %q: %w", name, entry.ModelsFrom, err)
+		}
+		source, ok := cat.Providers[entry.ModelsFrom]
+		if !ok {
+			return fmt.Errorf("provider %q: models_from %q is not defined", name, entry.ModelsFrom)
+		}
+		entry.Models = cloneModels(source.Models)
+		if len(entry.Aliases) == 0 {
+			entry.Aliases = cloneAliases(source.Aliases)
+		}
+		cat.Providers[name] = entry
+		visiting[name] = false
+		resolved[name] = true
+		return nil
 	}
-	return out
+	for name := range cat.Providers {
+		if err := resolve(name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func cloneModels(models map[string]Model) map[string]Model {
+	cloned := make(map[string]Model, len(models))
+	for name, model := range models {
+		cloned[name] = cloneModel(model)
+	}
+	return cloned
 }
 
 func cloneAliases(aliases map[string]string) map[string]string {
-	if aliases == nil {
+	if len(aliases) == 0 {
 		return nil
 	}
-	out := make(map[string]string, len(aliases))
-	for from, to := range aliases {
-		out[from] = to
+	cloned := make(map[string]string, len(aliases))
+	for alias, target := range aliases {
+		cloned[alias] = target
 	}
-	return out
+	return cloned
 }
 
 func validateCatalog(cat *Catalog) error {

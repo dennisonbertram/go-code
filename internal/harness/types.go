@@ -525,6 +525,9 @@ type RoleModels struct {
 
 type RunnerConfig struct {
 	DefaultModel string
+	// DefaultProviderName is applied when a run does not explicitly select a
+	// provider, allowing startup configuration to disambiguate mirrored models.
+	DefaultProviderName string
 	// RoleModels optionally overrides the model used for specific roles within
 	// a run. Empty fields fall back to the run's Model (or DefaultModel).
 	RoleModels          RoleModels
