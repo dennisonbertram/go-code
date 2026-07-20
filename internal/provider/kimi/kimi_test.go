@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go-agent-harness/internal/harness"
+	openai "go-agent-harness/internal/provider/openai"
 )
 
 func TestRefreshUsesOAuthFormAndDoesNotExposeCredential(t *testing.T) {
@@ -74,5 +77,64 @@ func TestImportCopiesVendorCredentialToSeparateRestrictiveStore(t *testing.T) {
 	}
 	if data, err := os.ReadFile(vendor); err != nil || !strings.Contains(string(data), "fake-access") {
 		t.Fatal("vendor credential changed")
+	}
+}
+
+func TestSubscriptionCompletionRefreshesInsideShortTTLWindow(t *testing.T) {
+	var refreshes int
+	tokenServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refreshes++
+		_, _ = w.Write([]byte(`{"access_token":"fake-refreshed","refresh_token":"fake-rotated","expires_in":900}`))
+	}))
+	defer tokenServer.Close()
+	apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("path = %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer fake-refreshed" {
+			t.Fatal("completion did not use refreshed bearer credential")
+		}
+		for key, value := range ExtraHeaders() {
+			if r.Header.Get(key) != value {
+				t.Fatalf("missing %s", key)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer apiServer.Close()
+	store := t.TempDir() + "/kimi.json"
+	if err := save(store, Credentials{AccessToken: "fake-expiring", RefreshToken: "fake-refresh", ExpiresAt: time.Now().Add(20 * time.Second).Unix(), ExpiresIn: 900}); err != nil {
+		t.Fatal(err)
+	}
+	source, err := NewTokenSource(store, tokenServer.URL, tokenServer.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := openai.NewClient(openai.Config{BaseURL: apiServer.URL, TokenSource: source, ExtraHeaders: ExtraHeaders(), ProviderName: "kimi-subscription"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Complete(context.Background(), harness.CompletionRequest{Messages: []harness.Message{{Role: "user", Content: "hello"}}}); err != nil {
+		t.Fatal(err)
+	}
+	if refreshes != 1 {
+		t.Fatalf("refreshes = %d, want 1", refreshes)
+	}
+	updated, err := Load(store)
+	if err != nil || updated.AccessToken != "fake-refreshed" {
+		t.Fatal("rotated pair was not persisted to harness store")
+	}
+}
+
+func TestCredentialCodeHasNoLoggingCalls(t *testing.T) {
+	data, err := os.ReadFile("kimi.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"log.", "slog.", "fmt.Print"} {
+		if strings.Contains(string(data), forbidden) {
+			t.Fatalf("credential code must not log: %s", forbidden)
+		}
 	}
 }
