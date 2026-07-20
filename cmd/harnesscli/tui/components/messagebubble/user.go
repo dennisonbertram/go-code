@@ -4,8 +4,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/charmbracelet/lipgloss"
-
 	"go-agent-harness/cmd/harnesscli/tui/components/streamrenderer"
 )
 
@@ -14,12 +12,6 @@ const (
 	userContinueIndent  = "  "
 	userPromptPrefixLen = 2 // rune count of "❯ "
 )
-
-// userBubbleStyle is the dark-gray background style for user message lines.
-// Color 237 is a dark gray background; color 252 is a light gray foreground.
-var userBubbleStyle = lipgloss.NewStyle().
-	Background(lipgloss.Color("237")).
-	Foreground(lipgloss.Color("252"))
 
 // UserBubble renders a user message with ❯ prefix and dark-gray background fill.
 //
@@ -30,6 +22,9 @@ var userBubbleStyle = lipgloss.NewStyle().
 type UserBubble struct {
 	Content string
 	Width   int
+	// Styles overrides the bubble styles when non-nil (theme injection
+	// point, epic #810); nil uses DefaultStyles().
+	Styles *Styles
 }
 
 // View renders the user bubble.
@@ -71,7 +66,7 @@ func (b UserBubble) View() string {
 		}
 
 		// Apply the background style
-		sb.WriteString(userBubbleStyle.Render(full))
+		sb.WriteString(stylesOrDefault(b.Styles).User.Render(full))
 		sb.WriteString("\n")
 	}
 

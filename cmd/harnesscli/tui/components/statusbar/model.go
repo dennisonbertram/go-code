@@ -20,11 +20,42 @@ type Model struct {
 	costUSD  float64
 	ctxUsed  int
 	ctxTotal int
+	styles   *Styles // nil = DefaultStyles()
+}
+
+// Styles groups the styles used to render status bar segments. The zero
+// value is not useful; obtain defaults via DefaultStyles() and override
+// individual fields.
+type Styles struct {
+	Dim  lipgloss.Style // separators, branch, workdir, cost, context meter
+	Bold lipgloss.Style // model name, session title
+	Warn lipgloss.Style // permission mode, MCP failures, high context usage
+}
+
+// DefaultStyles returns the styles the status bar used before theming:
+// faint dim, bold, amber (#FFAF00) warnings.
+func DefaultStyles() Styles {
+	return Styles{
+		Dim:  lipgloss.NewStyle().Faint(true),
+		Bold: lipgloss.NewStyle().Bold(true),
+		Warn: lipgloss.NewStyle().Foreground(lipgloss.Color("#FFAF00")),
+	}
 }
 
 // New creates a new status bar model for the given terminal width.
 func New(width int) Model {
 	return Model{width: width}
+}
+
+// SetStyles replaces the styles used to render the status bar (theme
+// injection point, epic #810).
+func (m *Model) SetStyles(s Styles) { m.styles = &s }
+
+func (m Model) stylesOrDefault() Styles {
+	if m.styles == nil {
+		return DefaultStyles()
+	}
+	return *m.styles
 }
 
 func (m *Model) SetModel(name string)    { m.model = name }
@@ -45,15 +76,9 @@ func (m *Model) SetContext(used, total int) {
 	m.ctxTotal = total
 }
 
-// Styles for status bar segments.
-var (
-	dimStyle  = lipgloss.NewStyle().Faint(true)
-	boldStyle = lipgloss.NewStyle().Bold(true)
-	warnStyle = lipgloss.NewStyle().Foreground(lipgloss.Color("#FFAF00"))
-)
-
 // View renders the status bar as a single line, degrading gracefully at any width.
 func (m Model) View() string {
+	styles := m.stylesOrDefault()
 	w := m.width
 	if w <= 0 {
 		w = 80
@@ -64,7 +89,7 @@ func (m Model) View() string {
 		return lipgloss.NewStyle().MaxWidth(w).Render(truncate("...", w))
 	}
 
-	sep := dimStyle.Render(" ~ ")
+	sep := styles.Dim.Render(" ~ ")
 	sepLen := 3 // plain rune width of " ~ "
 
 	// Segments in priority order: model > title > context > running > cost > perm > branch > workdir > mcpFails
@@ -75,38 +100,38 @@ func (m Model) View() string {
 	var segs []segment
 
 	if m.model != "" {
-		segs = append(segs, segment{boldStyle.Render(truncate(m.model, 24)), 1})
+		segs = append(segs, segment{styles.Bold.Render(truncate(m.model, 24)), 1})
 	}
 	if m.title != "" {
-		segs = append(segs, segment{boldStyle.Render(truncate(m.title, 24)), 2})
+		segs = append(segs, segment{styles.Bold.Render(truncate(m.title, 24)), 2})
 	}
 	if m.ctxUsed > 0 && m.ctxTotal > 0 {
 		pct := int(float64(m.ctxUsed)/float64(m.ctxTotal)*100 + 0.5)
 		text := fmt.Sprintf("◫ %d%%/%s", pct, formatCompactTokens(m.ctxTotal))
-		style := dimStyle
+		style := styles.Dim
 		if pct >= 80 {
-			style = warnStyle
+			style = styles.Warn
 		}
 		segs = append(segs, segment{style.Render(text), 3})
 	}
 	if m.running {
-		segs = append(segs, segment{dimStyle.Render("..."), 4})
+		segs = append(segs, segment{styles.Dim.Render("..."), 4})
 	}
 	if m.costUSD > 0 {
-		segs = append(segs, segment{dimStyle.Render(fmt.Sprintf("$%.4f", m.costUSD)), 5})
+		segs = append(segs, segment{styles.Dim.Render(fmt.Sprintf("$%.4f", m.costUSD)), 5})
 	}
 	if m.permMode != "" && m.permMode != "default" {
-		segs = append(segs, segment{warnStyle.Render("[" + m.permMode + "]"), 6})
+		segs = append(segs, segment{styles.Warn.Render("[" + m.permMode + "]"), 6})
 	}
 	if m.branch != "" {
-		segs = append(segs, segment{dimStyle.Render("(" + m.branch + ")"), 7})
+		segs = append(segs, segment{styles.Dim.Render("(" + m.branch + ")"), 7})
 	}
 	if m.workdir != "" {
 		dir := shortenPath(m.workdir, 20)
-		segs = append(segs, segment{dimStyle.Render(dir), 8})
+		segs = append(segs, segment{styles.Dim.Render(dir), 8})
 	}
 	if m.mcpFails > 0 {
-		segs = append(segs, segment{warnStyle.Render(fmt.Sprintf("%d MCP fail", m.mcpFails)), 9})
+		segs = append(segs, segment{styles.Warn.Render(fmt.Sprintf("%d MCP fail", m.mcpFails)), 9})
 	}
 
 	// Build line progressively, dropping lowest-priority segments when over width.

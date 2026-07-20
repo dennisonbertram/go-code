@@ -19,6 +19,9 @@ type Model struct {
 	Content string
 	// Width is the available rendering width.
 	Width int
+	// Styles overrides the bubble styles when non-nil (theme injection
+	// point, epic #810); nil uses DefaultStyles().
+	Styles *Styles
 }
 
 // New creates a new message bubble.
@@ -30,9 +33,9 @@ func New(role Role, content string) Model {
 func (m Model) View() string {
 	switch m.Role {
 	case RoleUser:
-		return UserBubble{Content: m.Content, Width: m.Width}.View()
+		return UserBubble{Content: m.Content, Width: m.Width, Styles: m.Styles}.View()
 	case RoleAssistant:
-		return AssistantBubble{Content: m.Content, Width: m.Width}.View()
+		return AssistantBubble{Content: m.Content, Width: m.Width, Styles: m.Styles}.View()
 	case RoleTool:
 		lines := WrapToolResult(m.Content, m.Width)
 		if len(lines) == 0 {

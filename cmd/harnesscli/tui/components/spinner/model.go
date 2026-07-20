@@ -34,6 +34,18 @@ const CancelHint = "(esc to interrupt)"
 // so the package has no import cycle with the parent tui package.
 type SpinnerTickMsg struct{ T time.Time }
 
+// Styles groups the styles used to render the spinner. Obtain defaults via
+// DefaultStyles() and override individual fields.
+type Styles struct {
+	Dim lipgloss.Style // spinner line and completion summary
+}
+
+// DefaultStyles returns the styling the spinner used before theming: faint,
+// no color.
+func DefaultStyles() Styles {
+	return Styles{Dim: lipgloss.NewStyle().Faint(true)}
+}
+
 // Model is the immutable thinking spinner state.
 // All mutation methods return a new Model value — never modify in place.
 // This keeps it safe for use in BubbleTea's single-goroutine Update().
@@ -54,6 +66,10 @@ type Model struct {
 
 	// testVerbs overrides DefaultVerbs when non-nil. For testing only.
 	testVerbs []string
+
+	// styles overrides DefaultStyles when non-nil (theme injection point,
+	// epic #810).
+	styles *Styles
 }
 
 // New creates a new Model with the given seed. The seed makes verb selection
@@ -133,6 +149,20 @@ func (m Model) SetAction(action string) Model {
 	return m
 }
 
+// WithStyles replaces the styles used to render the spinner (theme injection
+// point, epic #810). Returns a new Model; the receiver is unchanged.
+func (m Model) WithStyles(s Styles) Model {
+	m.styles = &s
+	return m
+}
+
+func (m Model) stylesOrDefault() Styles {
+	if m.styles == nil {
+		return DefaultStyles()
+	}
+	return *m.styles
+}
+
 // IsActive returns true while the spinner is running (between Start and Stop).
 func (m Model) IsActive() bool { return m.active }
 
@@ -199,7 +229,7 @@ func (m Model) View(width int) string {
 		base += " " + CancelHint
 	}
 
-	style := lipgloss.NewStyle().Faint(true)
+	style := m.stylesOrDefault().Dim
 	rendered := style.Render(base)
 
 	// Clamp to width using MaxWidth.
@@ -217,7 +247,7 @@ func (m Model) CompletionLine(seconds float64) string {
 	glyph := frames[m.frame%len(frames)]
 	duration := formatSeconds(seconds)
 	line := glyph + " Worked for " + duration
-	return lipgloss.NewStyle().Faint(true).Render(line)
+	return m.stylesOrDefault().Dim.Render(line)
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

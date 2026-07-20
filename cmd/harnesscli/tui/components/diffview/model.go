@@ -11,6 +11,9 @@ type Model struct {
 	// MaxLines controls the maximum number of diff lines rendered. 0 uses the
 	// component default.
 	MaxLines int
+	// Styles overrides the render palette when non-nil (theme injection
+	// point, epic #810); nil uses DefaultStyles().
+	Styles *Styles
 }
 
 // New creates a new diff view model.
@@ -32,5 +35,6 @@ func (m Model) View() string {
 		Diff:     m.Diff,
 		MaxLines: maxLines,
 		Width:    width,
+		Styles:   m.Styles,
 	}.Render()
 }
