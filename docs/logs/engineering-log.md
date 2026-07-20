@@ -1627,7 +1627,7 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
 - Refresh uses a 30-second margin for the real 900-second TTL. Fake OAuth/API integration coverage proves a forced near-expiry refresh, rotated persistence, dynamic bearer authorization, and all `X-Kimi-Client-*` headers.
 - Live endpoint caveat: a single unauthenticated `OPTIONS https://auth.kimi.com/api/oauth/token` returned `405 Allow: POST`; no authenticated live refresh or completion was performed. The form/body and OpenAI-compatible wire contract are convention-based and must be manually verified.
 
-# 2026-07-20 — Codex ChatGPT-Subscription Authentication (Epic #847)
+## 2026-07-20 — Codex ChatGPT-Subscription Authentication (Epic #847)
 
 - Added `internal/provider/codex`: read-only vendor credential import, a `0600` harness-owned credential store, JWT expiry parsing, OAuth refresh, and a `tokencache`-backed token source that persists refreshes only to `~/.harness/subscription-auth/codex.json`.
 - Added `codex-subscription` as a structurally mirrored `openai` catalog provider. A token-source-required catalog flag distinguishes this remote subscription route from anonymous local optional-key providers, so absence remains unconfigured and never probes the ChatGPT backend.

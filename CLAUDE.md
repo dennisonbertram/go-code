@@ -109,7 +109,7 @@ manual Zed verification checklist.
 ## 2026-07-20 — Live model discovery (Epic #849)
 
 - Live model discovery is provider-agnostic: configured OpenRouter, OpenAI, Anthropic, and DeepSeek entries refresh on a five-minute TTL. Discovery failures never remove static models; cached results are served stale after a failed refresh, and static metadata wins on ID conflicts.
-# Codex subscription auth (Epic #847)
+### Codex subscription auth (Epic #847)
 
 - `codex-subscription` reuses a ChatGPT-authenticated vendor Codex session through a harness-owned credential copy only. Never write under `~/.codex/`; import from it is read-only.
 - Setup is `codex login` followed by `harnesscli auth codex login`; `status` is safe to display and `logout` removes only `~/.harness/subscription-auth/codex.json`.

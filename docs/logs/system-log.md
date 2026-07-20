@@ -580,7 +580,7 @@ Use this file to document systems, interfaces, and interactions as they are buil
 - Requests use the existing OpenAI-compatible client with a refreshable token source and static `X-Kimi-Client-*` headers. Refresh persistence is contained in the harness-owned store.
 - Operational limitation: live POST capability, not authenticated OAuth request shape or completion compatibility, was verified; manual service verification remains required.
 
-# 2026-07-20 — Codex ChatGPT-Subscription Authentication (Epic #847)
+## 2026-07-20 — Codex ChatGPT-Subscription Authentication (Epic #847)
 
 - System/component: `internal/provider/codex`, catalog loader/registry, OpenAI-compatible client, `harnessd` bootstrap, and `harnesscli` auth/TUI surfaces.
 - Credential flow: `harnesscli auth codex login` reads `~/.codex/auth.json` without changing it, copies the ChatGPT token pair/account id to `~/.harness/subscription-auth/codex.json` (`0700` parent, `0600` file), and `harnessd` loads only that copy. Refresh calls update only the copy.
