@@ -80,6 +80,36 @@ func TestInterpolate(t *testing.T) {
 			},
 			want: "a b c d e f g h i",
 		},
+		{
+			name: "zero-based positional argument",
+			body: "First: $0, Second: $1",
+			vars: map[string]string{"$0": "alpha", "$1": "beta"},
+			want: "First: alpha, Second: beta",
+		},
+		{
+			name: "double-digit positional does not collide with $1",
+			body: "$10 vs $1",
+			vars: map[string]string{"$1": "one", "$10": "ten"},
+			want: "ten vs one",
+		},
+		{
+			name: "twelve positional args supported",
+			body: "$12",
+			vars: map[string]string{"$1": "one", "$2": "two", "$12": "twelve"},
+			want: "twelve",
+		},
+		{
+			name: "out of range positional expands empty",
+			body: "A=$5 B=$0",
+			vars: map[string]string{"$0": "x"},
+			want: "A= B=x",
+		},
+		{
+			name: "positional digits match maximal run",
+			body: "$1abc and $10",
+			vars: map[string]string{"$1": "one", "$10": "ten"},
+			want: "oneabc and ten",
+		},
 	}
 
 	for _, tt := range tests {

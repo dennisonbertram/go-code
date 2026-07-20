@@ -21,16 +21,18 @@ func NewResolver(registry *Registry) *Resolver {
 }
 
 // ResolveSkill looks up a skill by name, interpolates its body with the given
-// arguments and workspace, and returns the result. Shell command preprocessing
-// (!`cmd`) is applied after variable interpolation.
+// arguments and workspace, and returns the result. Positional placeholders are
+// 0-based ($0 is the first argument token); when the body references no
+// argument placeholder, the raw args are appended as a trailing
+// "ARGUMENTS: <args>" line. Shell command preprocessing (!`cmd`) is applied
+// after variable interpolation.
 func (r *Resolver) ResolveSkill(ctx context.Context, name, args, workspace string) (string, error) {
 	skill, ok := r.registry.Get(name)
 	if !ok {
 		return "", fmt.Errorf("skill not found: %s", name)
 	}
 
-	vars := buildVars(skill, args, workspace)
-	content := Interpolate(skill.Body, vars)
+	content := expandBody(skill, args, workspace)
 	content = preprocessCommands(ctx, content, workspace)
 	return content, nil
 }

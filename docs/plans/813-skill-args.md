@@ -55,7 +55,7 @@ This plan covers ONLY slice 1: `feat(skills): quote-aware argument tokenizer`.
 - [x] gofmt + go vet clean.
 - [x] `go test ./internal/skills/ -count=1` green.
 - [x] Update `docs/plans/INDEX.md`.
-- [ ] Push `epic/813-skill-args` and open PR against this repo (no merge).
+- [x] Push `epic/813-skill-args` and open PR against this repo (no merge). — PR #825, merged.
 
 ## Risks and Mitigations
 
@@ -64,3 +64,75 @@ This plan covers ONLY slice 1: `feat(skills): quote-aware argument tokenizer`.
     unterminated-quote = rest-of-string token); error return reserved but currently nil.
 - Risk: breaking existing positional behavior for unquoted input.
   - Mitigation: regression tests pin unquoted tokenization identical to `strings.Fields`.
+
+---
+
+# Plan: epic #813 slice 2 — $0..$n positional placeholders and ARGUMENTS: append fallback
+
+This section covers ONLY slice 2 (branch `epic/813-skill-args-s2`).
+
+## Context
+
+- Problem: positional expansion is fixed to 1-based `$1..$9`; kimi parity requires
+  0-based `$0..$n` (explicit breaking decision in epic #813), and skills whose body
+  references no argument placeholder silently drop the caller's args.
+- User impact: skills ported from kimi-code expand the wrong tokens; placeholder-less
+  skills (the majority) lose their arguments entirely.
+- Constraints: strict TDD; scoped to `internal/skills` only; named-argument detection
+  in the fallback is a slice 3 extension point (noted in code, not implemented).
+
+## Scope
+
+- In scope:
+  - `internal/skills/interpolate.go`: replace the fixed `$1..$9` reverse loop with
+    arbitrary `$N` expansion (full digit run matched, so `$10` never collides with
+    `$1`); unset positions expand empty.
+  - `internal/skills/hook.go` `buildVars`: populate `$0..$n` (0-based) from
+    `SplitArgs` tokens; more than nine tokens now supported.
+  - ARGUMENTS fallback shared by both invocation paths (`AutoInvokeHook` and
+    `Resolver.ResolveSkill`): when raw args are non-empty and the body references no
+    argument placeholder (`$ARGUMENTS` or any `$N`), append `\nARGUMENTS: <raw args>`.
+  - Migrate existing 1-based tests to the 0-based contract (sanctioned break).
+- Out of scope: named frontmatter arguments (slice 3), TUI `skill:` namespace
+  (slice 4), user-facing docs + in-repo SKILL.md migration (slice 5).
+
+## Documentation Contract
+
+- Feature status: `in implementation`
+- Public docs affected: none (slice 5 documents the syntax and the breaking change).
+- Known hazard to document in slice 5: literal prices like `$0.50` in a skill body
+  now expand `$0`; authors must avoid `$<digit>` literals.
+
+## Test Plan (TDD)
+
+- New failing tests first:
+  - `interpolate_test.go`: `$0` expansion; `$10`/`$12` longest-run (no `$1`
+    collision); out-of-range `$N` expands empty; named vars unchanged.
+  - `hook_test.go`: `buildVars` populates `$0..$n` including >9 tokens; quoted
+    tokens land in `$0`/`$1`/`$2`.
+  - Fallback: resolver + hook tests — placeholder-less body with args ends with
+    `ARGUMENTS: <raw args>` (raw, untokenized, quotes preserved); bodies with
+    `$ARGUMENTS` or `$N` never get the append; empty args never append.
+- Existing tests migrated to 0-based: `TestAutoInvokeHook_ExplicitWithArgs`,
+  `TestBuildVars`, `TestBuildVars_QuotedArgs`, `TestBuildVars_NoArgs`,
+  `TestAutoInvokeHook_ExplicitWithQuotedArgs`, resolver happy-path/many-args tests.
+- Regression guards: fallback-off conditions (placeholder present) pinned by tests.
+
+## Implementation Checklist
+
+- [x] Define acceptance criteria in tests.
+- [x] Write failing tests first (watch them fail).
+- [x] Implement arbitrary `$N` in `Interpolate`.
+- [x] Implement `$0..$n` in `buildVars` + shared fallback helper used by hook and resolver.
+- [x] gofmt + go vet clean.
+- [x] `go test ./internal/skills/... ./internal/harness/tools/ -count=1` green.
+- [x] Update `docs/plans/INDEX.md` (description unchanged; no new file).
+- [ ] Push `epic/813-skill-args-s2` and open PR (no merge).
+
+## Risks and Mitigations
+
+- Risk: `$N` expansion hits literal dollar-digit text in bodies (e.g. prices).
+  - Mitigation: inherent to the epic's sanctioned 0-based decision; flagged for the
+    slice 5 docs; regex matches only `$<digits>`, never `$<letter>`.
+- Risk: fallback fires when it should not (body uses placeholder via computed string).
+  - Mitigation: detection is on the raw body; placeholder-present cases pinned by tests.
