@@ -38,6 +38,8 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/transcriptexport"
 	"go-agent-harness/cmd/harnesscli/tui/components/viewport"
 	"go-agent-harness/internal/plugins"
+	"go-agent-harness/internal/provider/codex"
+	"go-agent-harness/internal/provider/kimi"
 )
 
 // defaultExportDir returns a runtime-safe directory for transcript exports.
@@ -384,14 +386,19 @@ func New(cfg TUIConfig) Model {
 		"openrouter": "OPENROUTER_API_KEY",
 		"openai":     "OPENAI_API_KEY",
 		"anthropic":  "ANTHROPIC_API_KEY",
-		// Subscription auth is managed with `harnesscli auth kimi`; this
-		// marker lets /keys display the provider without ever reading a token.
-		"kimi-subscription": "KIMI_SUBSCRIPTION_AUTH",
 	}
 	for provider, envVar := range envKeyVars {
 		if key := os.Getenv(envVar); key != "" {
 			m.envAPIKeys[provider] = key
 		}
+	}
+	// Subscription credentials are harness-owned local files, not environment
+	// variables. Store only a non-secret availability marker in the TUI.
+	if _, err := codex.DefaultStore().Load(); err == nil {
+		m.envAPIKeys["codex-subscription"] = "configured"
+	}
+	if _, err := kimi.Load(kimi.DefaultStorePath()); err == nil {
+		m.envAPIKeys["kimi-subscription"] = "configured"
 	}
 	m.commandRegistry = m.buildCommandRegistry()
 	// Set default plugins directory (~/.config/harnesscli/plugins) and load any
@@ -2335,6 +2342,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.apiKeyInput += string(msg.Runes)
 			}
 			return m, tea.Batch(cmds...)
+		case m.overlayActive && m.activeOverlay == "apikeys" && !m.apiKeyInputMode && msg.String() == "i":
+			if len(m.apiKeyProviders) > 0 {
+				provider := m.apiKeyProviders[m.apiKeyCursor]
+				if provider.AuthType == "subscription" {
+					return m, importSubscriptionCmd(m.config.BaseURL, provider.Name, m.config.APIKey)
+				}
+			}
+			return m, nil
 		case m.overlayActive && m.activeOverlay == "plugins":
 			if len(m.pluginBrowser.items) == 0 {
 				return m, tea.Batch(cmds...)
@@ -3393,6 +3408,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, fetchProvidersCmd(m.config.BaseURL, m.config.APIKey))
 		cmds = append(cmds, m.setStatusMsg("Key saved for "+msg.Provider))
 
+	case SubscriptionImportMsg:
+		if msg.Err != "" {
+			cmds = append(cmds, m.setStatusMsg(msg.Err))
+		} else {
+			cmds = append(cmds, fetchProvidersCmd(m.config.BaseURL, m.config.APIKey))
+		}
+
 	case statusTickMsg:
 		// Only clear if the message hasn't been replaced with a newer one.
 		if m.statusMsg != "" && time.Now().After(m.statusMsgExpiry) {
@@ -3904,7 +3926,7 @@ func (m Model) viewAPIKeysOverlay() string {
 		rows = append(rows, "  No providers available")
 	}
 
-	footer := lipgloss.NewStyle().Faint(true).Render(string('\u2191') + "/" + string('\u2193') + " navigate  enter edit/setup  esc close")
+	footer := lipgloss.NewStyle().Faint(true).Render(string('\u2191') + "/" + string('\u2193') + " navigate  enter edit/setup  i import subscription  esc close")
 
 	content := strings.Join(rows, "\n") + "\n\n" + footer
 

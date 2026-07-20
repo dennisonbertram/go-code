@@ -2,12 +2,15 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"sort"
 	"strings"
 
 	"go-agent-harness/internal/harness"
+	"go-agent-harness/internal/provider/codex"
+	"go-agent-harness/internal/provider/kimi"
 )
 
 // ModelResponse is the JSON shape for a single model in the /v1/models response.
@@ -88,11 +91,13 @@ func (s *Server) handleProviders(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"providers": providers})
 }
 
-// handleProviderByName handles PUT /v1/providers/{name}/key.
+// handleProviderByName handles provider credential mutations. Subscription
+// imports are trigger-only: the daemon reads vendor credentials from its own
+// host and no credential is accepted over HTTP.
 func (s *Server) handleProviderByName(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/v1/providers/")
 	parts := strings.Split(path, "/")
-	if len(parts) != 2 || parts[1] != "key" {
+	if len(parts) != 2 {
 		http.NotFound(w, r)
 		return
 	}
@@ -102,26 +107,75 @@ func (s *Server) handleProviderByName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if r.Method != http.MethodPut {
-		writeMethodNotAllowed(w, http.MethodPut)
-		return
-	}
-
 	if s.providerRegistry == nil {
 		writeError(w, http.StatusNotImplemented, "not_implemented", "provider registry is not configured")
 		return
 	}
 
-	var body struct {
-		Key string `json:"key"`
+	switch parts[1] {
+	case "key":
+		if r.Method != http.MethodPut {
+			writeMethodNotAllowed(w, http.MethodPut)
+			return
+		}
+		var body struct {
+			Key string `json:"key"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Key == "" {
+			writeError(w, http.StatusBadRequest, "invalid_request", "request body must contain a non-empty \"key\" field")
+			return
+		}
+		s.providerRegistry.SetAPIKey(name, body.Key)
+		w.WriteHeader(http.StatusNoContent)
+	case "import-subscription":
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		if name != "codex-subscription" && name != "kimi-subscription" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := s.importSubscriptionProvider(name); err != nil {
+			writeError(w, http.StatusBadRequest, "subscription_import_failed", err.Error())
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		http.NotFound(w, r)
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Key == "" {
-		writeError(w, http.StatusBadRequest, "invalid_request", "request body must contain a non-empty \"key\" field")
-		return
-	}
+}
 
-	s.providerRegistry.SetAPIKey(name, body.Key)
-	w.WriteHeader(http.StatusNoContent)
+// importSubscriptionProvider reuses the same local import and token-source
+// construction used by harnessd bootstrap. It intentionally accepts no caller
+// supplied credential material: vendor files are read only on the daemon host.
+func (s *Server) importSubscriptionProvider(name string) error {
+	switch name {
+	case "codex-subscription":
+		store := codex.DefaultStore()
+		if _, err := store.Import(codex.DefaultVendorAuthPath()); err != nil {
+			return err
+		}
+		source, err := codex.NewTokenSource(store, codex.NewRefreshFunc(nil, "", nil))
+		if err != nil {
+			return err
+		}
+		s.providerRegistry.SetTokenSource(name, source)
+		return nil
+	case "kimi-subscription":
+		storePath := kimi.DefaultStorePath()
+		if err := kimi.Import(kimi.VendorCredentialPath(), storePath); err != nil {
+			return err
+		}
+		source, err := kimi.NewTokenSource(storePath, "", nil)
+		if err != nil {
+			return err
+		}
+		s.providerRegistry.SetTokenSource(name, source)
+		return nil
+	default:
+		return fmt.Errorf("subscription import is not supported for provider %s", name)
+	}
 }
 
 // handleSummarize handles POST /v1/summarize.

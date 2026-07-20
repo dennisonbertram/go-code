@@ -1,5 +1,12 @@
 # Long-Term Thinking Log
 
+## 2026-07-20 (TUI Subscription Credential Import — Issue #854)
+
+- Command intent: make the existing Codex and Kimi subscription imports usable directly from `/keys`, reload the live daemon, test and document the exact same-host security boundary, then push and open a PR.
+- User intent: an already logged-in vendor CLI should become immediately usable by a running `harnessd` without a second terminal or restart.
+- Success definition: startup availability reads the harness-owned stores; bodyless provider-scoped import endpoints reuse existing importers and bootstrap token-source wiring; `/keys` `i` imports only subscription rows and refetches live status; fake fixtures prove both provider transitions and absent vendor login remains actionable.
+- Guardrails: no token request/response field, vendor files read-only, no credential logging, and the daemon-host-only limitation is explicit.
+
 ## 2026-07-20 (Kimi Code Subscription Auth — Epic #848)
 
 - Command intent: Let an existing Kimi Code CLI subscription authenticate the separate `kimi-subscription` provider, with strict test-first slices, verification, PR creation, and no vendor credential writes.

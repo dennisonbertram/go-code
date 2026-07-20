@@ -1,5 +1,12 @@
 # Engineering Log
 
+## 2026-07-20 (Issue #854 TUI Subscription Credential Import)
+
+- Replaced the stale `/keys` startup hint based on nonexistent `KIMI_SUBSCRIPTION_AUTH` with synchronous, local-only reads of both harness-owned Codex and Kimi credential stores. The TUI stores only a non-secret availability marker.
+- Added bodyless `POST /v1/providers/{codex-subscription,kimi-subscription}/import-subscription`. It reuses the existing vendor-file import functions and the exact daemon-bootstrap token-source construction, then replaces the live registry source so `GET /v1/providers` becomes configured without restarting `harnessd`.
+- Added `/keys` `i` import action for subscription rows only. Successful imports refetch the provider catalog; errors show the server's actionable remediation rather than an HTTP/stack trace. API-key rows ignore `i`.
+- Regression coverage uses temporary HOME vendor fixtures only. It proves Codex and Kimi import-to-live-registry transitions, absent-login guidance, route scoping, bodyless TUI requests, and provider-list refresh behavior. No token values are logged or included in the endpoint contract.
+
 ## 2026-07-19 (Coverage-Gate Fix — `internal/acp` Zero-Coverage Functions)
 
 - Post-merge regression gate (`scripts/test-regression.sh`) failed after epic #806 slice 1 landed: `coveragegate` flagged `(*Conn).drainLine` (conn.go) and `(*rpcError).Error` (jsonrpc.go) at 0.0%.
@@ -41,7 +48,6 @@
   `go test ./cmd/harnesscli/... -count=1` green; acceptance
   `printf '...initialize...' | harness acp` prints a single JSON-RPC result
   with capabilities and exits 0.
-
 ## 2026-07-19 (Unified /tasks Panel — Epic #814, Slice 1)
 
 - Added `GET /v1/tasks` (`internal/server/http_tasks.go`): a read-scoped union endpoint returning subagents, cron jobs, and pending delayed callbacks as one `Task` DTO (`id`, `type`, `status`, `label`, `started_at`, `age_seconds`, `actions`). Unconfigured sources are skipped, so an empty daemon returns `{"tasks": []}`; a failing source fails the request rather than silently dropping entries.

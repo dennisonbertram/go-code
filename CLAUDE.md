@@ -114,3 +114,8 @@ manual Zed verification checklist.
 - `codex-subscription` reuses a ChatGPT-authenticated vendor Codex session through a harness-owned credential copy only. Never write under `~/.codex/`; import from it is read-only.
 - Setup is `codex login` followed by `harnesscli auth codex login`; `status` is safe to display and `logout` removes only `~/.harness/subscription-auth/codex.json`.
 - Keep this provider additive: `openai` remains the documented `OPENAI_API_KEY` path. Do not log access, refresh, or ID token values.
+
+### In-TUI subscription import (Issue #854)
+
+- In `/keys`, select `codex-subscription` or `kimi-subscription` and press `i` to import and activate the vendor CLI login without restarting `harnessd`. The action refetches the live provider status on success.
+- The request is bodyless and imports only from vendor files already present on the **harnessd host**. It cannot transfer a TUI machine's credential to a remote daemon: log into the relevant vendor CLI (`codex login` or `kimi-code login`) on the daemon host, then retry.
