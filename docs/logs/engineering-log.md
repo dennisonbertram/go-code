@@ -1,5 +1,6 @@
 # Engineering Log
 
+<<<<<<< HEAD
 ## 2026-07-20 (OS-Service Install for harnessd — Epic #807)
 
 - Shipped `harnesscli service install|uninstall|start|stop|status` for end users: user-level launchd agent on macOS (`~/Library/LaunchAgents/com.gocode.harnessd.plist`, `RunAtLoad`+`KeepAlive`) and `systemd --user` unit on Linux (`~/.config/systemd/user/harnessd.service`, `Restart=on-failure`, `WantedBy=default.target`). Slice 1 (PR #826): install/uninstall + pure unit generators with `--binary`/`--addr`/`--log-dir`/`--dry-run`; addr resolution reuses the daemon's own stack (`HARNESS_ADDR` env or `~/.harness/config.toml`, default `:8080`) exported into the unit environment. Slice 2 (PR #866): lifecycle commands over launchctl/systemctl behind an injectable runner; `status` distinguishes not-installed / installed-not-running / running-healthy / running-unreachable via a `GET /healthz` probe.
@@ -11,6 +12,22 @@
 - `internal/plugins.NormalizeSource` now detects zip sources: `.zip` suffix on remote URLs and local files, and GitHub `/archive/` URLs even without the suffix (`Source.Zip`). Local zip files are non-remote (trusted by default); zip URLs are remote (untrusted, install-time confirmation from slice 2 applies).
 - `Installer.Stage` fetches zips with `net/http` (remote) or from disk (local) and extracts with stdlib `archive/zip` into the existing staging dir; `rejectSymlinks`, `LoadBundle` validation, and atomic promote are unchanged. Every entry name is validated before any write (no absolute paths, no `..` elements, no backslashes), symlink entries are rejected, and a single shared top-level directory (the GitHub archive convention) is stripped so the bundle root lands at the staging dir. Fetch, corrupt-zip, and bad-entry errors name the source.
 - TDD: failing-first tests cover the detection matrix (zip URL / GitHub archive ± suffix / git URL / shorthand / local zip / local dir / local non-zip file), local and GitHub-style single-root installs, `..`/absolute/backslash/symlink rejection with no residue, and corrupt/404 sources naming the source; CLI regression proves `plugin install --yes <httptest zip URL>` end-to-end.
+
+## 2026-07-20 (Shell Mode Slice 3 — Epic #811)
+
+- After a foreground shell-mode command exits, the next agent prompt now
+  carries a `<shell-command command="..." exit-code="...">` block with
+  CDATA-wrapped output (same wrapping pattern as @-mention expansion:
+  `xmlAttrEscape` + `cdataSafe`, so command text cannot break the block).
+- The block is single-use (cleared on injection), prepended to `expandedValue`
+  before `startRunCmd`; the display bubble and transcript keep the user's
+  original text. Output gets a second, prompt-side head+tail truncation at
+  10KB (rune-aligned) on top of the executor's 30KB capture cap.
+- Only commands that exited on their own are captured (success or non-zero
+  exit); interrupted/timed-out commands are excluded — the user killed them
+  deliberately, so partial output is not context-worthy.
+- Validation: `go test ./cmd/harnesscli/... -count=1` green (27 packages);
+  gofmt/vet clean on touched files.
 
 ## 2026-07-20 (Issue #875 Shell-Mode Test-Seam Coverage Fix)
 

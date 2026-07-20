@@ -1,10 +1,70 @@
-# Plan: shell mode — epic #811 (slices 1-2)
+# Plan: shell mode — epic #811 (slices 1-3)
 
 Parent epic: #811 (parent tracking: #803).
 
+## Slice 3: inject shell command output into next prompt context
+
+Status: `in implementation` (building on merged slices 1-2).
+
+### Context
+
+- Problem: after a shell-mode command finishes, the agent has no idea the user
+  ran it — command output never enters conversation context.
+- User impact: run `!git status`, then ask "what changed?" — the agent answers
+  from the injected output instead of re-running the command itself.
+- Constraints: the block must be injection-safe (CDATA, same pattern as
+  @-mention expansion in `fileexpand.go`), bounded, and single-use; the display
+  bubble keeps showing the user's original text.
+
+### Scope
+
+- In scope:
+  - New `cmd/harnesscli/tui/shellcontext.go` — `shellResult` (command, bounded
+    output, exit code) + `formatShellContextBlock`: a `<shell-command
+    command="..." exit-code="...">` XML block with CDATA-wrapped output,
+    reusing `cdataSafe`/`xmlAttrEscape`; head+tail truncation at a prompt-side
+    cap (10KB) on top of the executor's 30KB cap.
+  - `cmd/harnesscli/tui/model.go` — `shellLastResult *shellResult` captured in
+    the `shellExecDoneMsg` handler for commands that exited on their own
+    (success or non-zero exit; interrupted/timed-out commands are excluded —
+    the user killed them deliberately, so their partial output is not
+    context-worthy); in the normal-message `CommandSubmittedMsg` path, prepend
+    the block to `expandedValue` before `startRunCmd` and clear it (one-shot).
+- Out of scope: Ctrl+B background handoff (4), persisted shell history (5).
+
+### Test Plan (TDD)
+
+- Formatting tests (`shellcontext_internal_test.go`, package `tui`): block
+  contains command/exit-code/CDATA output; `]]>` in output is split via
+  `cdataSafe`; long output truncated at the cap with marker; XML-special
+  characters in the command attribute are escaped.
+- Model tests (`shellmode_context_test.go`, package `tui_test`, with an
+  httptest server recording POST /v1/runs prompts): prompt after a shell run
+  contains the block; block consumed once (second prompt clean); no block
+  without a shell run; failed command injects its non-zero exit code;
+  interrupted command not injected; display bubble shows the original text,
+  not the block.
+- Regression: full `./cmd/harnesscli/...` suite green.
+
+### Cross-Surface Impact Map
+
+- Config: None. Server API: None (prompt body content only).
+- TUI state: one `*shellResult` field; captured on done, consumed on next
+  agent prompt. Slash commands and shell submits do not consume it.
+
+### Implementation Checklist (slice 3)
+
+- [x] Slices 1-2 merged: input state; local execution + streamed card.
+- [x] Write failing formatting + model tests first; watch them fail.
+- [x] shellcontext.go block formatting (CDATA, escape, truncation).
+- [x] model.go: capture result on done; one-shot prepend on next prompt.
+- [x] `go test ./cmd/harnesscli/... -count=1` green; gofmt + go vet clean.
+- [x] Engineering-log entry; plan/index maintenance.
+- [ ] Commit, push `epic/811-shell-mode-s3`, open PR (do not merge).
+
 ## Slice 2: run shell-mode commands locally with streamed output card
 
-Status: `in implementation` (building on merged slice 1).
+Status: `implemented` (merged to main via PR #870).
 
 ### Context
 
