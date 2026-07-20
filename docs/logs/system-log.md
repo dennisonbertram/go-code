@@ -579,3 +579,10 @@ Use this file to document systems, interfaces, and interactions as they are buil
 - Credentials flow: vendor `~/.kimi-code/credentials/kimi-code.json` is read once on explicit import; mutable state is only `~/.harness/subscription-auth/kimi.json` with mode `0600`.
 - Requests use the existing OpenAI-compatible client with a refreshable token source and static `X-Kimi-Client-*` headers. Refresh persistence is contained in the harness-owned store.
 - Operational limitation: live POST capability, not authenticated OAuth request shape or completion compatibility, was verified; manual service verification remains required.
+
+# 2026-07-20 — Codex ChatGPT-Subscription Authentication (Epic #847)
+
+- System/component: `internal/provider/codex`, catalog loader/registry, OpenAI-compatible client, `harnessd` bootstrap, and `harnesscli` auth/TUI surfaces.
+- Credential flow: `harnesscli auth codex login` reads `~/.codex/auth.json` without changing it, copies the ChatGPT token pair/account id to `~/.harness/subscription-auth/codex.json` (`0700` parent, `0600` file), and `harnessd` loads only that copy. Refresh calls update only the copy.
+- Request flow: the registry receives a refreshable `TokenSource` for `codex-subscription`; the existing OpenAI-compatible client obtains bearer credentials per request and sends `chatgpt-account-id` to `https://chatgpt.com/backend-api/codex/{responses,chat/completions}` without adding `/v1`.
+- Failure mode: no imported credential leaves the provider unconfigured and reports the vendor-login then harness-import remediation before an upstream request. Credentials are never emitted by the new log/error paths.

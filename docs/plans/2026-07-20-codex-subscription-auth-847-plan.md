@@ -13,7 +13,7 @@
 
 ## Documentation Contract
 
-- Feature status: in implementation
+- Feature status: implemented
 - Public docs affected: provider/auth setup documentation and CLI help.
 - Spec docs to update before code: this plan and the linked impact map.
 - Implementation notes to add after code: engineering/system logs and `CLAUDE.md`.
@@ -33,8 +33,8 @@
 - [x] Define acceptance criteria and planned tests.
 - [x] Document feature status and exact contract before code.
 - [x] Add provider/model-flow impact map before implementation.
-- [ ] Implement each requested slice test-first and commit it green.
-- [ ] Update docs, logs, and indexes.
+- [x] Implement each requested slice test-first and commit it green.
+- [x] Update docs, logs, and indexes.
 - [ ] Run focused tests, vet, and full regression gate.
 - [ ] Push branch and open PR without merging.
 

@@ -1626,3 +1626,11 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
 - `harnesscli auth kimi login` reads the vendor credential only and stores a `0600` go-code-owned copy; status and logout never print a credential and logout never affects the vendor CLI.
 - Refresh uses a 30-second margin for the real 900-second TTL. Fake OAuth/API integration coverage proves a forced near-expiry refresh, rotated persistence, dynamic bearer authorization, and all `X-Kimi-Client-*` headers.
 - Live endpoint caveat: a single unauthenticated `OPTIONS https://auth.kimi.com/api/oauth/token` returned `405 Allow: POST`; no authenticated live refresh or completion was performed. The form/body and OpenAI-compatible wire contract are convention-based and must be manually verified.
+
+# 2026-07-20 — Codex ChatGPT-Subscription Authentication (Epic #847)
+
+- Added `internal/provider/codex`: read-only vendor credential import, a `0600` harness-owned credential store, JWT expiry parsing, OAuth refresh, and a `tokencache`-backed token source that persists refreshes only to `~/.harness/subscription-auth/codex.json`.
+- Added `codex-subscription` as a structurally mirrored `openai` catalog provider. A token-source-required catalog flag distinguishes this remote subscription route from anonymous local optional-key providers, so absence remains unconfigured and never probes the ChatGPT backend.
+- Existing OpenAI-compatible request code now supports the Codex backend's no-`/v1` endpoint path and applies `chatgpt-account-id` with the dynamic bearer credential. `HARNESS_PROVIDER=codex-subscription` selects it deterministically when imported credentials are present.
+- Added `harnesscli auth codex login|status|logout`; `/keys` renders the read-only ChatGPT subscription connection state rather than offering API-key entry.
+- Coverage includes OAuth request/error sanitization, import permissions/read-only behavior, catalog mirroring, bootstrap wiring, CLI lifecycle, TUI/server status, fake HTTPS request plus forced mid-session expiry refresh, and a grep-based no-token-logging guard.
