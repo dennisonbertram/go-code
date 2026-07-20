@@ -1,62 +1,62 @@
-# Plan: 805-undo-prompts — Slice 1: ConversationStore.UndoPrompts
+# Plan: 805-undo-prompts
 
 Parent epic: #805 (`/undo` — remove recent prompts from the active context). Parent tracker: #803.
-This plan covers **Slice 1 only**: `feat(harness): add ConversationStore.UndoPrompts with compaction-boundary guard`.
+Slice 1 (`ConversationStore.UndoPrompts`) is **implemented and merged** (PR #838). This plan now tracks **Slice 2**: `feat(server): POST /v1/conversations/{id}/undo route`.
 
 ## Context
 
 - Problem: a mis-typed or derailing prompt currently lives in go-code's context forever; the only escape is `/clear`, which destroys the whole session. kimi-code's `/undo [count]` trims the last N user prompts plus everything after them.
-- User impact: store-level truncation is the foundation for the server route (Slice 2) and TUI command (Slices 3–4).
-- Constraints: transactional; must refuse undo across a compaction boundary; must persist an undo-boundary marker; strict TDD per `docs/runbooks/testing.md`; reuse the `CompactConversation` transactional pattern in `internal/harness/conversation_store_sqlite.go`.
+- User impact: the HTTP route exposes the Slice 1 store operation to the TUI (Slice 3) and any API client.
+- Constraints: strict TDD per `docs/runbooks/testing.md`; route must sit next to `compact` in `handleConversations` with identical auth (`runs:write`) and tenant-isolation (`blockConversationCrossTenant`) shape; error mapping reuses Slice 1's typed sentinels.
 
 ## Scope
 
 - In scope:
-  - `UndoPrompts(ctx, convID string, count int) (removedFromStep int, err error)` on `ConversationStore` (`internal/harness/conversation_store.go`).
-  - SQLite implementation in `internal/harness/conversation_store_sqlite.go` (Nth-from-last non-meta `user` message lookup, compaction guard, transactional delete, `is_meta` marker insert, `msg_count`/`updated_at` maintenance).
-  - Typed sentinel errors `ErrUndoCrossesCompaction` and `ErrUndoCountOutOfRange` for server-side 409/400 mapping in Slice 2.
-  - Behavior tests in `internal/harness/conversation_undo_test.go` (mirrors `conversation_compact_test.go` file layout).
-  - Stub implementations on all in-repo `ConversationStore` fakes so the repo compiles.
-- Out of scope: server route, TUI command/picker, redo, rewind coupling, in-place prompt editing (later slices / out of epic scope).
+  - `POST /v1/conversations/{id}/undo` branch in `handleConversations` (`internal/server/http_conversations.go`), POST-only, `runs:write`, cross-tenant 404.
+  - `handleUndoConversation` modeled on `handleCompactConversation`: body `{"count": N}` (absent → default 1) or `{"to_step": S}` (undo back to the prompt at step S; computed into a count), empty body treated as defaults; response `{"undone": true, "removed_from_step": S, "remaining_messages": M}`.
+  - Error mapping: `ErrUndoCrossesCompaction` → 409; `ErrUndoCountOutOfRange` and bad `to_step` → 400; unknown conversation → 404; no store → 501; GET → 405.
+  - Behavior tests in `internal/server/http_undo_test.go` (mirrors `http_compact_test.go`) + cross-tenant/scope tests in `internal/server/http_undo_tenant_test.go` (package `server_test`, reusing `newRunlessConversationFixture`).
+  - Engineering-log entry per epic doc requirements (endpoint + boundary semantics).
+- Out of scope: TUI `/undo` command (Slice 3), picker overlay (Slice 4), in-memory reconciliation of an active run's snapshot (matches compact's store-only semantics; the TUI refetches after undo in Slice 3).
 
 ## Documentation Contract
 
 - Feature status: `in implementation`
-- Public docs affected: none (store-level change; user-facing docs land with the TUI slice).
+- Public docs affected: none (operator route lists land with the TUI slice per anti-ghost-feature rule; the route is only described in the engineering log once test-covered).
 - Spec docs to update before code: this plan.
-- Implementation notes to add after code: engineering-log entry lands with Slice 2 per epic doc-requirements; folder index update for this plan file.
+- Implementation notes to add after code: `docs/logs/engineering-log.md` entry (required by epic #805 once Slice 2 lands).
 
 ## Test Plan (TDD)
 
-- New failing tests to add first (`internal/harness/conversation_undo_test.go`):
-  - `TestUndoPrompts_RemovesLastPromptAndTail` — undo 1 removes the last user prompt and trailing assistant/tool messages; `removedFromStep` is the prompt's step; `LoadMessages` round-trip reflects truncation.
-  - `TestUndoPrompts_WalksBackNUserPromptsSkippingMeta` — undo N targets the Nth-from-last non-meta user message; interleaved `is_meta` user-role messages are not counted.
-  - `TestUndoPrompts_CountOutOfRange` — count 0, negative count, and count greater than the number of user prompts all return `ErrUndoCountOutOfRange`.
-  - `TestUndoPrompts_RefusesToCrossCompactionBoundary` — target step at or below the max `is_compact_summary` step returns `ErrUndoCrossesCompaction`; undo above the boundary still succeeds.
-  - `TestUndoPrompts_PersistsBoundaryMarker` — an `is_meta` marker message exists at `removedFromStep` after undo and round-trips through `LoadMessages`; a subsequent undo skips the marker.
-  - `TestUndoPrompts_ConversationNotFound` — unknown convID errors.
-- Existing tests to update: none (new capability).
-- Regression tests required: repo-wide compile check (`go build ./...`, `go vet ./...`) forces all fakes to satisfy the extended interface.
+- New failing tests to add first:
+  - `internal/server/http_undo_test.go`: basic happy path (count, response shape, store truncation verified); default count on `{}` and on empty body; 400 on count 0 / negative / too large; 409 across a compaction boundary (conversation unchanged); `to_step` happy path + 400 on non-prompt step / out-of-range step / combined with count; 404 unknown conversation; 400 invalid JSON; 405 on GET; 501 without a store.
+  - `internal/server/http_undo_tenant_test.go`: cross-tenant POST → 404 and no mutation (positive control: owner 200); key with only `runs:read` → 403.
+- Existing tests to update: none.
+- Regression tests required: `go test ./internal/server/ -run 'Undo|TenantIsolation'`; full `internal/server` + `internal/harness` suites.
 
 ## Cross-Surface Impact Map
 
-- Not a provider/model flow change — no impact map required. Server API and TUI surfaces are explicitly later slices.
+- Not a provider/model flow change — no impact map required. TUI surface is a later slice.
 
-## Implementation Checklist
+## Implementation Checklist (Slice 2)
 
 - [x] Define acceptance criteria in tests (listed above).
 - [x] Document feature status and exact contract before code (this plan).
-- [x] Write failing tests first; verify they fail to compile/run for the right reason (no `UndoPrompts` symbol).
-- [x] Implement minimal code changes (interface + SQLite store + sentinel errors + fake stubs).
-- [x] Run `go test ./internal/harness/ -run Undo -count=1` green.
-- [x] Run `go test` on every touched package (`internal/harness`, `internal/server` if fakes touched).
+- [x] Write failing tests first; verify red for the right reason (POST undo → 404 from the catch-all).
+- [x] Implement minimal code changes (route branch + handler).
+- [x] Run `go test ./internal/server/ -run 'Undo|TenantIsolation' -count=1` green.
+- [x] Run full `go test ./internal/server/... ./internal/harness/... -count=1` green.
 - [x] gofmt + go vet clean.
-- [x] Update `docs/plans/INDEX.md` with this plan (documentation-maintenance runbook).
-- [ ] Commit, push `epic/805-undo-prompts`, open PR (no merge).
+- [x] Engineering-log entry; update `docs/plans/INDEX.md` description if materially changed.
+- [ ] Commit, push `epic/805-undo-prompts-s2`, open PR (no merge).
 
 ## Risks and Mitigations
 
-- Risk: marker message could be counted as an undo target on later undos, corrupting count semantics.
-  - Mitigation: marker is `is_meta = 1`; the target query filters `role = 'user' AND is_meta = 0`; covered by the subsequent-undo test.
-- Risk: other worktree slices implement the same interface extension concurrently and conflict.
-  - Mitigation: keep the diff minimal and exactly to the epic-specified signature so any merge conflict is trivial.
+- Risk: `to_step` lets a caller target a non-prompt message, producing confusing truncations.
+  - Mitigation: handler rejects `to_step` that does not reference a non-meta `user` message with 400 before calling the store; the store's own guards still apply to the computed count.
+- Risk: undo on a conversation with an in-flight run leaves the runner's in-memory snapshot stale.
+  - Mitigation: same semantics as the existing compact route (store mutation only); Slice 3 refetches messages after undo. Documented in the handler comment.
+
+## Slice 1 record (completed, PR #838)
+
+- Added `ConversationStore.UndoPrompts` + SQLite implementation + `ErrUndoCrossesCompaction`/`ErrUndoCountOutOfRange` + `is_meta` boundary marker; tests in `internal/harness/conversation_undo_test.go`; all repo fakes updated. Details in git history (`dec0d0c1`).
