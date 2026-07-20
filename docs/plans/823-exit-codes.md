@@ -1,46 +1,34 @@
-# Plan: headless exit-code contract — epic #823, Slice 1 (docs)
+# Plan: headless exit-code contract — epic #823
 
-## Context
+## Slice status
 
-- Problem: `harnesscli -prompt ...` exits 0 for every terminal run state (including `run.failed` and `run.cancelled`), so shell scripts and CI cannot branch on run outcomes without parsing stdout.
-- User impact: headless automation (CI, wrapper scripts) gets no reliable success/failure signal.
-- Constraints: Slice 1 is docs-only — ratify and document the exit-code table; no behavior changes (Slices 2–4 implement). Worktree-only flow; no merge to main from this branch.
+- Slice 1 (docs contract): **merged** (PR #824, branch `epic/823-exit-codes`).
+- Slice 2 (map terminal events to exit codes): **this branch** (`epic/823-exit-codes-s2`), branched from `origin/main` after the Slice 1 merge.
+- Slices 3–4 (blocked detection; e2e + per-command docs): future branches.
 
-## Scope
+## Slice 2 scope
 
-- In scope:
-  - New `website/docs/reference/exit-codes.md`: full exit-code table (run terminal events, waiting/blocked states, client errors, interrupt), kimi-code 0/3/6 alignment rationale, reserved goal-status mapping, `max_turns.exhausted` and `run.cost_limit_reached` semantics, precise blocked signals, current-vs-contracted table.
-  - Cross-links from `website/docs/cli/harnesscli.md` and `website/docs/reference/events-catalog.md`.
-  - `docs/plans/INDEX.md` entry for this plan.
-- Out of scope: implementing the mapping (Slice 2), blocked detection (Slice 3), e2e assertions and per-command doc updates (Slice 4). No Go code changes.
+- New `cmd/harnesscli/exitcodes.go`: constants `exitSuccess`(0) / `exitClientError`(1) / `exitRunFailed`(2) / `exitBlocked`(3) / `exitCancelled`(6) / `exitInterrupted`(130) and `exitCodeForTerminalEvent(harness.EventType) int`; unknown/empty/non-terminal events map to 1 (defensive non-zero default). `exitBlocked` is defined here and wired in Slice 3.
+- `cmd/harnesscli/main.go` `run()`: terminal return becomes `exitCodeForTerminalEvent(...)`; literal `1` returns in `run()` and `1`/`130` in `handleStreamError()` replaced with the named constants (one source of truth). `terminal_event=` stdout line and interrupt-cancel behavior untouched.
+- `cmd/harnesscli/runctl.go` `runContinue()`: same terminal-event mapping; `-no-stream` stays 0/1 and never opens the event stream.
+- Docs: contract page status table updated (failed 0→2 and cancelled 0→6 now implemented; blocked→3 still slice 3); engineering-log entry.
 
-## Documentation Contract
+## Slice 2 test plan (TDD)
 
-- Feature status: `planned` (contract ratified by this slice; implementation in later slices — the page states this explicitly per `docs/runbooks/documentation-maintenance.md` "public docs describe implemented behavior only", so the page clearly separates current behavior from contracted behavior).
-- Public docs affected: `website/docs/reference/exit-codes.md` (new), `website/docs/cli/harnesscli.md`, `website/docs/reference/events-catalog.md`.
-- Spec docs to update before code: this plan.
-- Implementation notes to add after code: none for Slice 1 (docs-only).
+- Failing-first (`cmd/harnesscli/exitcodes_test.go`): `exitCodeForTerminalEvent` table (all three terminal events + non-terminal/unknown/empty → 1); constant-value pins (0/1/2/3/6/130); `run()` against `httptest` SSE streams ending completed/failed/cancelled → 0/2/6 with `run_id=`/`terminal_event=` stdout preserved; `runContinue()` same; `-no-stream` exits 0 without requesting `/events`.
+- Regression guard: existing happy-path tests (`TestRunCreatesAndStreamsToCompletion`, `TestRunContinue_PostsPromptAndStreamsNewRun`, …) must pass unchanged; nothing may rely on "failed run exits 0".
+- Verification: `go test ./cmd/harnesscli/... ./internal/harness/... ./test/e2e/... -count=1`, gofmt, go vet.
 
-## Test Plan (TDD)
+## Slice 1 record (completed)
 
-- New failing tests to add first: none — epic designates Slice 1 as docs-only ("no behavior tests apply; reviewer validates the table against the event constants in `internal/harness/events.go`").
-- Existing tests to update: none.
-- Regression tests required: none for this slice. Validation = website build (Docusaurus broken-link check) + manual trace of every documented code to an event constant, run status, or current CLI behavior.
+- Problem: `harnesscli -prompt ...` exited 0 for every terminal run state (including `run.failed` and `run.cancelled`), so shell scripts and CI could not branch on run outcomes without parsing stdout.
+- Delivered: `website/docs/reference/exit-codes.md` contract page (full table, kimi 0/3/6 rationale, blocked signals, `max_turns.exhausted`/`run.cost_limit_reached` semantics, reserved goal mapping, current-vs-contracted table, traceability), cross-links from `website/docs/cli/harnesscli.md` and `website/docs/reference/events-catalog.md`, validated by `npm run build` (`onBrokenLinks: 'throw'`).
 
 ## Cross-Surface Impact Map
 
-- None — docs-only slice; no provider/model flows, gateway routing, model catalogs, API-key management, or server/TUI provider plumbing touched.
-
-## Implementation Checklist
-
-- [x] Verify every epic citation against the source (event constants, run statuses, CLI return paths, wrapper propagation).
-- [x] Write `website/docs/reference/exit-codes.md`.
-- [x] Cross-link from `website/docs/cli/harnesscli.md` and `website/docs/reference/events-catalog.md`.
-- [x] Update `docs/plans/INDEX.md`.
-- [x] Build the website to validate links (`npm run build` green with `onBrokenLinks: 'throw'`); no Go packages touched, so no Go tests apply.
-- [ ] Commit, push `epic/823-exit-codes`, open PR against the repo (no merge).
+- None — CLI exit-path only; no provider/model flows, gateway routing, model catalogs, API-key management, or server/TUI provider plumbing touched.
 
 ## Risks and Mitigations
 
-- Risk: contract page drifts from code reality (documents behavior that does not exist yet).
-- Mitigation: explicit "current vs. contracted behavior" table and a traceability table mapping every code to its source constant/status/CLI path; page is labeled as the contract target for Slices 2–4.
+- Risk: a caller scripts against the old always-0 behavior.
+- Mitigation: intentional breaking fix per the ratified contract; stdout lines unchanged so log parsers keep working; contract page and engineering log record the behavior change.

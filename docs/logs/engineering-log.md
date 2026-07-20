@@ -51,6 +51,12 @@
 - Server: `GET /v1/tasks` unions `bash_job` entries (label = command, cancel action while running) with the same tenant filtering as callbacks; new `POST /v1/jobs/{id}/kill` (runs:write, 404 unknown/cross-tenant, 501 unconfigured) reuses `JobManager.Kill`.
 - harnessd: one `JobTracker` created in `main.go`, threaded via `baseRegistryOptions` and `runtime_container`/`bootstrap_helpers` into `ServerOptions.JobTracker`.
 - Validation: failing-first tests — `bash_manager_list_test.go` (7 tests incl. race-checked concurrency), `job_tracker_test.go` (6 tests incl. registry-wiring integration through the real `bash` tool and `job_output`), and 8 new `http_tasks_test.go` tests. `go test ./internal/server/ ./internal/harness/ ./internal/harness/tools/ ./cmd/harnessd/ -count=1` all pass; the pre-existing flaky `TestJobManagerRunForegroundStreamingOverlongLineReturnsPromptly` passed in this run.
+## 2026-07-20 (Headless Exit Codes — Epic #823, Slice 2)
+
+- `harnesscli -prompt ...` and streaming `harnesscli continue` no longer exit 0 for every terminal run state: the terminal event now maps through `exitCodeForTerminalEvent` (`cmd/harnesscli/exitcodes.go`) — `run.completed` → 0, `run.failed` → 2, `run.cancelled` → 6, unknown/empty → 1 (defensive non-zero default). stdout is unchanged (`run_id=` / `terminal_event=` lines preserved); only the process exit code changed.
+- New `cmd/harnesscli/exitcodes.go` holds all six contract codes (`exitSuccess`/`exitClientError`/`exitRunFailed`/`exitBlocked`/`exitCancelled`/`exitInterrupted`) as the single source of truth; literal `1`/`130` returns in `run()` and `handleStreamError()` were replaced with the named constants. `exitBlocked` (3) is wired in Slice 3.
+- TDD: failing-first tests in `cmd/harnesscli/exitcodes_test.go` — mapping table (all terminal events + non-terminal/unknown/empty), contract-value pins, and `httptest` SSE end-to-end assertions that `run()`/`runContinue()` return 0/2/6 for completed/failed/cancelled streams while preserving the stdout lines; `-no-stream` proven to exit 0 without opening the event stream.
+- Validation: `go test ./cmd/harnesscli/... ./internal/harness/... ./test/e2e/... -count=1` green; gofmt/vet clean; no existing test relied on the old failed/cancelled-exits-0 behavior.
 
 ## 2026-07-20 (Issue #854 TUI Subscription Credential Import)
 
