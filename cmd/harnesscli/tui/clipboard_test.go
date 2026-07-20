@@ -1,6 +1,7 @@
 package tui_test
 
 import (
+	"errors"
 	"os"
 	"sync"
 	"testing"
@@ -217,4 +218,27 @@ func TestTUI028_VisualSnapshot_200x50(t *testing.T) {
 		t.Fatalf("failed to write snapshot: %v", err)
 	}
 	t.Logf("snapshot written to %s", path)
+}
+
+// TestTUI028_ReadImageFromClipboardHeadless verifies the clipboard image
+// reader short-circuits with ErrClipboardHeadless (and no image) when the TUI
+// runs headless, using only the exported API.
+func TestTUI028_ReadImageFromClipboardHeadless(t *testing.T) {
+	orig := os.Getenv("TERM")
+	defer func() {
+		if orig == "" {
+			os.Unsetenv("TERM")
+		} else {
+			os.Setenv("TERM", orig)
+		}
+	}()
+	os.Unsetenv("TERM")
+
+	img, err := tui.ReadImageFromClipboard()
+	if !errors.Is(err, tui.ErrClipboardHeadless) {
+		t.Errorf("ReadImageFromClipboard in headless mode must return ErrClipboardHeadless, got %v", err)
+	}
+	if img != (tui.ClipboardImage{}) {
+		t.Errorf("ReadImageFromClipboard in headless mode must return a zero ClipboardImage, got %+v", img)
+	}
 }

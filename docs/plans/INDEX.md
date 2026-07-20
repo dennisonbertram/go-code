@@ -2,6 +2,8 @@
 
 - `2026-07-20-tui-subscription-login-854-plan.md` — Issue #854 in-TUI Codex/Kimi subscription credential import (implemented).
 - `2026-07-20-tui-subscription-login-854-impact-map.md` — Cross-surface impact map for Issue #854.
+- `2026-07-19-issue-818-clipboard-image-plan.md` — Epic #818 slice 1: read images from the system clipboard into a temp file (in implementation).
+- `2026-07-19-issue-818-clipboard-image-impact-map.md` — One-page provider/model impact map for epic #818 slice 1.
 
 - `2026-07-20-kimi-subscription-auth-848-plan.md` — Epic #848 Kimi Code subscription auth, endpoint spike, token import, provider wiring, and CLI/TUI lifecycle (in implementation).
 - `2026-07-20-kimi-subscription-auth-848-impact-map.md` — Cross-surface impact map for Epic #848 Kimi subscription authentication.
