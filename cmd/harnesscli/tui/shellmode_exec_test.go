@@ -160,3 +160,38 @@ func TestShellMode_CtrlCKillsInsteadOfQuitting(t *testing.T) {
 		t.Errorf("the killed command must render an error card, got %q", got)
 	}
 }
+
+// Regression for issue #875: the shell-mode test seams
+// (WithShellExecTimeout/ShellCommandRunning) must be exercised — and the
+// timeout path itself was untested. A command outliving the configured
+// timeout is killed by the executor's context deadline and finalized as a
+// timed-out error card; the running flag clears once the done message lands.
+func TestShellMode_CommandTimesOut(t *testing.T) {
+	m := initModel(t, 80, 24)
+
+	m = m.WithShellExecTimeout(100 * time.Millisecond)
+	if m.ShellCommandRunning() {
+		t.Fatal("no shell command may be running before submit")
+	}
+
+	m, pollCmd := submitShellCommand(t, m, "sleep 999")
+	if !m.ShellCommandRunning() {
+		t.Fatal("precondition: a shell command must be running after submit")
+	}
+
+	start := time.Now()
+	m = drainShell(t, m, pollCmd)
+
+	if elapsed := time.Since(start); elapsed > 10*time.Second {
+		t.Errorf("timeout kill took too long (%v) — the executor must honor the configured timeout", elapsed)
+	}
+	if m.ShellCommandRunning() {
+		t.Error("ShellCommandRunning must clear once the done message lands")
+	}
+	if got := m.ActiveToolCallStatus(); got != "error" {
+		t.Errorf("a timed-out command must render an error card, got %q", got)
+	}
+	if view := m.View(); !strings.Contains(view, "timed out") {
+		t.Errorf("the card must report the timeout, got:\n%s", view)
+	}
+}

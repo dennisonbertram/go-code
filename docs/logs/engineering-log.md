@@ -1,5 +1,11 @@
 # Engineering Log
 
+## 2026-07-20 (Issue #875 Shell-Mode Test-Seam Coverage Fix)
+
+- Symptom: post-merge regression gate (`scripts/test-regression.sh`) failed after PR #870 landed: `coveragegate` flagged `(*Model).ShellCommandRunning` and `(*Model).WithShellExecTimeout` (cmd/harnesscli/tui/model.go) at 0.0%.
+- Cause: PR #870 added both exported test seams but its `shellmode_exec_test.go` detects the running state via `ActiveToolCallStatus()` and never overrides the 120s default timeout, so the seams were dead code; the PR's validation ran only `go test ./cmd/harnesscli/...`, not the full gate.
+- Fix (test-only): added `TestShellMode_CommandTimesOut` driving a real timeout kill through the executor — `WithShellExecTimeout(100ms)` + `sleep 999` — asserting the running flag transitions (`ShellCommandRunning` false→true→false), the timed-out error card, and prompt kill. Both functions now report 100%; the timeout finalization path (`timed out after …` card) is behaviorally pinned for the first time.
+
 ## 2026-07-20 (ACP Server Mode — Epic #806, Slice 2)
 
 - `internal/acp` sessions over the runs API: `session/new` (unique `sess_<hex>` ids, cwd/mcpServers accepted but not acted on), `session/prompt` (content-block text extraction — text blocks joined, `resource_link` contributes its URI, empty extraction -> `-32602`), `session/cancel` notification -> `POST /v1/runs/{id}/cancel`. One ACP session maps to one run; a second prompt on a used session errors `-32603` (multi-turn is a later epic).
