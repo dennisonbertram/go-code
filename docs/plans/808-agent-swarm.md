@@ -1,4 +1,4 @@
-# Plan: agent_swarm epic #808 — Slice 1: swarm orchestrator
+# Plan: agent_swarm epic #808 — Slices 1–2
 
 ## Context
 
@@ -8,24 +8,25 @@
 - User impact: the model must loop `start_subagent`/`wait_subagent` by hand,
   which is slow, error-prone, and burns turns.
 - Constraints: reuse `internal/subagents` Manager + `tools.SubagentManager`
-  (`InlineManager`); strict TDD; this PR covers ONLY Slice 1 (core `Swarm`
-  type in `internal/subagents`). Slices 2–4 (resume, deferred tool, TUI) are
-  out of scope here.
+  (`InlineManager`); strict TDD. Slice 1 (core `Swarm`) merged via PR #839.
+  This PR covers ONLY Slice 2 (resume via `resume_agent_ids`).
 
 ## Scope
 
-- In scope:
-  - `internal/subagents/swarm.go`: `SwarmRequest` (PromptTemplate, Items,
-    ResumeAgentIDs rejected until Slice 2, profile/model overrides),
-    validation, `Swarm.Run(ctx) (SwarmReport, error)`.
-  - Concurrency scheduler: 5 immediate starts, +1 every 700ms, cap read once
-    from `HARNESS_SWARM_MAX_CONCURRENCY` (default 128, clamped to 128).
-  - Caller context cancellation cancels every started member; per-member
-    errors are captured in the report and never abort the cohort.
-  - `SwarmReport` with per-member ID, item, status, output/error in
-    deterministic item order.
-- Out of scope: resume_agent_ids delivery (Slice 2), `agent_swarm` tool and
-  runner sole-call rule (Slice 3), TUI panel (Slice 4), new server endpoints.
+- In scope (Slice 2):
+  - Extend `internal/subagents/swarm.go`: `ResumeAgentIDs[i]` pairs with
+    `Items[i]` (first-K positional); resolve each ID upfront via
+    `tools.SubagentManager.Get`; reject unknown IDs, duplicate IDs,
+    more IDs than items, and active-incompatible statuses (only
+    `running`/`waiting_for_user` accept steered messages).
+  - Deliver the expanded prompt through the existing messaging path used by
+    `message_subagent`: `tools.RunSteerer.SteerRun(runID, prompt)`.
+  - Resumes are scheduled first in the ramp and count against the same
+    concurrency allowance; parent cancellation cancels resumed members too.
+  - Report order stays "items first, resumes later"; resumed members carry
+    `Resumed: true` and their subagent ID from the start.
+- Out of scope: `agent_swarm` deferred tool + runner sole-call rule
+  (Slice 3), TUI panel (Slice 4), new server endpoints.
 
 ## Documentation Contract
 
@@ -36,19 +37,20 @@
 
 ## Test Plan (TDD)
 
-- New failing tests to add first (`internal/subagents/swarm_test.go`):
-  - table-driven validation: missing `{{item}}` placeholder, empty items,
-    >128 items, duplicate expanded prompts, resume_agent_ids rejected
-  - ramp timing with injected manual ticker: 5 in-flight before first tick,
-    +1 per tick
-  - env cap: `HARNESS_SWARM_MAX_CONCURRENCY` honored; resolver default/clamp
-  - cancellation: parent cancel cancels all started members, unstarted
-    members reported cancelled, all reach terminal state
-  - aggregated report shape/order; per-member failure does not abort cohort
-  - acceptance: real `Manager` + `InlineManager` fan-out completes
-- Existing tests to update: none
-- Regression tests required: existing `internal/subagents` tests stay green
-  unmodified.
+- New failing tests to add first (`internal/subagents/swarm_resume_test.go`):
+  - resume happy path against a fake manager + fake steerer (steer carries
+    the expanded prompt to the resolved run ID; mixed cohort completes)
+  - unknown ID and active-incompatible status rejection (queued/completed/
+    failed/cancelled rejected; running/waiting_for_user accepted)
+  - duplicate resume ID rejection; more resume IDs than items rejection
+  - scheduling order: resumes precede new items (deterministic with cap 1)
+  - report marking: `Resumed` flag, ID, order (items first, resumes later)
+  - steer failure captured per member without aborting the cohort
+  - cancellation cancels resumed members as well as new members
+  - missing steerer with non-empty resume_agent_ids rejected
+- Existing tests to update: drop the "resume_agent_ids rejected" case from
+  the slice-1 validation table (now supported).
+- Regression tests required: all slice-1 swarm tests stay green.
 
 ## Cross-Surface Impact Map
 
@@ -67,10 +69,11 @@
 
 ## Risks and Mitigations
 
-- Risk: ramp timing tests flaking on wall-clock sleeps.
-- Mitigation: inject a manual ticker seam; wall-clock only for short
-  stability assertions with generous margins.
-- Risk: goroutine leak / hang when a member never terminates after cancel.
-- Mitigation: swarm issues `Cancel` for every started member and relies on
-  the documented `tools.SubagentManager` contract (cancel drives members to
-  a terminal state); the swarm-scoped context is always stopped on return.
+- Risk: status check races the member's own lifecycle (subagent finishes
+  between `Get` and `SteerRun`).
+- Mitigation: `SteerRun` errors are captured per member in the report; the
+  cohort is never aborted, matching slice-1 failure semantics.
+- Risk: report order confusing callers when resumes consume the first items.
+- Mitigation: deterministic documented order (non-resumed item members in
+  item order, then resumed members in resume-ID order), each entry carrying
+  its `item` and `resumed` marker.

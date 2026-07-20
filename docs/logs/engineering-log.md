@@ -9,6 +9,32 @@
 - `harness acp -server` flag; resolution flag > `loadConfig().Server` > `http://localhost:8080`; Bearer key from `loadConfig()`.
 - Validation: strict TDD (failing tests first: `undefined: NewRunsClient`). `go test ./internal/acp/ -count=1` and `-race` green, incl. scripted-pipe flows — cancel mid-run issues the cancel POST and the prompt answers `cancelled`; concurrent sessions stay isolated; blocked-handler concurrency proof.
 
+## 2026-07-20 (Agent Swarm — Epic #808, Slice 2)
+
+- Extended `internal/subagents/swarm.go` with `resume_agent_ids`: entry `i`
+  pairs with `items[i]`, and the item's expanded prompt is delivered to the
+  existing subagent through the same messaging path `message_subagent` uses
+  (`Manager.Get` to resolve the run ID, then `RunSteerer.SteerRun`).
+- Validation rejects unknown IDs, duplicate IDs, more resume IDs than items,
+  and active-incompatible statuses (only `running`/`waiting_for_user` accept
+  steered messages, matching `SteerRun`'s contract). All checks run before
+  any member launches, so a bad request starts nothing.
+- Resumed members are scheduled first in the ramp, count against the same
+  concurrency allowance, and are cancelled through the manager on parent
+  cancellation like any started member.
+- Report order stays deterministic: non-resumed item members in item order,
+  then resumed members in resume order; resumed entries carry `Resumed: true`
+  and their subagent ID from the start. Steer failures land in the report
+  per member and never abort the cohort.
+- The swarm takes the steerer via a new `WithSwarmSteerer` option; slice 3
+  will wire it to the runner-backed steerer alongside the `agent_swarm` tool.
+- TDD: resume behavior tests landed first (failed on undefined
+  `WithSwarmSteerer`), covering the happy path, status compatibility table,
+  unknown-ID/duplicate/overflow rejection, scheduling order with cap 1,
+  report marking, steer-failure capture, and cancellation of resumed members.
+- Validation: `go test ./internal/subagents/... -count=1` and `-race` green;
+  new tests repeated 5x without flakes; full regression suite (see PR body).
+
 ## 2026-07-20 (Issue #854 TUI Subscription Credential Import)
 
 - Replaced the stale `/keys` startup hint based on nonexistent `KIMI_SUBSCRIPTION_AUTH` with synchronous, local-only reads of both harness-owned Codex and Kimi credential stores. The TUI stores only a non-secret availability marker.
