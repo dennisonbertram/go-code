@@ -164,11 +164,18 @@ type Source struct {
 var _ provider.TokenSource = (*Source)(nil)
 
 func NewTokenSource(store *Store, refresh tokencache.RefreshFunc) (*Source, error) {
+	return NewTokenSourceWithSafetyMargin(store, refresh, 30*time.Second)
+}
+
+// NewTokenSourceWithSafetyMargin is equivalent to NewTokenSource with a
+// caller-supplied refresh margin. It exists for deterministic integration
+// coverage; production callers should use NewTokenSource.
+func NewTokenSourceWithSafetyMargin(store *Store, refresh tokencache.RefreshFunc, safetyMargin time.Duration) (*Source, error) {
 	credential, err := store.Load()
 	if err != nil {
 		return nil, err
 	}
-	cache := tokencache.New(credential.AccessToken, credential.RefreshToken, credential.ExpiresAt, 30*time.Second, func(ctx context.Context, refreshToken string) (string, string, time.Time, error) {
+	cache := tokencache.New(credential.AccessToken, credential.RefreshToken, credential.ExpiresAt, safetyMargin, func(ctx context.Context, refreshToken string) (string, string, time.Time, error) {
 		token, nextRefresh, expiresAt, err := refresh(ctx, refreshToken)
 		if err != nil {
 			return "", "", time.Time{}, err
