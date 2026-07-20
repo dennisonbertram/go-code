@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"go-agent-harness/internal/provider/codex"
 	"go-agent-harness/internal/provider/kimi"
 	"go-agent-harness/internal/store"
 )
@@ -83,6 +84,48 @@ func runAuthLogin(args []string) int {
 	return 0
 }
 
+// runAuthCodex implements "harnesscli auth codex login|status|logout". It
+// manages only the harness-owned subscription credential.
+func runAuthCodex(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "harnesscli auth codex: subcommand required (try: login, status, logout)")
+		return 1
+	}
+	store := codex.DefaultStore()
+	switch args[0] {
+	case "login":
+		credential, err := store.Import(codex.DefaultVendorAuthPath())
+		if err != nil {
+			fmt.Fprintf(stderr, "harnesscli auth codex login: %v\n", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "Codex subscription credential imported for account %s.\n", credential.AccountID)
+		return 0
+	case "status":
+		credential, err := store.Load()
+		if err != nil {
+			fmt.Fprintf(stderr, "harnesscli auth codex status: %v\n", err)
+			return 1
+		}
+		validity := "expired (will refresh when used)"
+		if credential.ExpiresAt.After(time.Now()) {
+			validity = "valid"
+		}
+		fmt.Fprintf(stdout, "Codex subscription: configured for account %s; access credential is %s.\n", credential.AccountID, validity)
+		return 0
+	case "logout":
+		if err := store.Remove(); err != nil {
+			fmt.Fprintf(stderr, "harnesscli auth codex logout: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stdout, "Codex subscription credential removed from harness storage.")
+		return 0
+	default:
+		fmt.Fprintf(stderr, "harnesscli auth codex: unknown subcommand %q\n", args[0])
+		return 1
+	}
+}
+
 // runAuth dispatches "harness auth <subcommand>" commands.
 func runAuth(args []string) int {
 	if len(args) == 0 {
@@ -94,6 +137,8 @@ func runAuth(args []string) int {
 		return runAuthLogin(args[1:])
 	case "kimi":
 		return runAuthKimi(args[1:])
+	case "codex":
+		return runAuthCodex(args[1:])
 	default:
 		fmt.Fprintf(stderr, "harnesscli auth: unknown subcommand %q\n", args[0])
 		return 1
