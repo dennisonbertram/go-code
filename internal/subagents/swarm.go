@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"go-agent-harness/internal/harness"
 	tools "go-agent-harness/internal/harness/tools"
 )
 
@@ -50,8 +51,12 @@ type SwarmRequest struct {
 	PromptTemplate string `json:"prompt_template"`
 	// Items holds 1..SwarmMaxMembers entries; expanded prompts must be distinct.
 	Items []string `json:"items"`
-	// ResumeAgentIDs reuses existing subagents instead of creating new ones.
-	// Reserved for Slice 2 of epic #808: any non-empty value is rejected.
+	// ResumeAgentIDs reuses existing subagents instead of creating new ones:
+	// entry i is paired with Items[i], and the item's expanded prompt is
+	// delivered to that subagent through the message_subagent steering path
+	// (RunSteerer.SteerRun on the resolved run ID). Resumed members are
+	// scheduled before new items. Requires len(ResumeAgentIDs) <= len(Items),
+	// distinct IDs, and each target in a running or waiting-for-user state.
 	ResumeAgentIDs []string `json:"resume_agent_ids,omitempty"`
 
 	Model                string                      `json:"model,omitempty"`
@@ -70,16 +75,18 @@ type SwarmRequest struct {
 
 // SwarmMemberReport is the per-member outcome of a swarm run.
 type SwarmMemberReport struct {
-	ID     string `json:"id,omitempty"`
-	Item   string `json:"item"`
-	Prompt string `json:"prompt"`
-	Status string `json:"status"` // "pending" | "completed" | "failed" | "cancelled" | ...
-	Output string `json:"output,omitempty"`
-	Error  string `json:"error,omitempty"`
+	ID      string `json:"id,omitempty"`
+	Item    string `json:"item"`
+	Prompt  string `json:"prompt"`
+	Status  string `json:"status"` // "pending" | "completed" | "failed" | "cancelled" | ...
+	Output  string `json:"output,omitempty"`
+	Error   string `json:"error,omitempty"`
+	Resumed bool   `json:"resumed,omitempty"` // true when the member resumed an existing subagent
 }
 
-// SwarmReport aggregates every member outcome in deterministic order
-// (items first; resumed members would follow in later slices).
+// SwarmReport aggregates every member outcome in deterministic order:
+// non-resumed item members first (in item order), then resumed members (in
+// resume_agent_ids order).
 type SwarmReport struct {
 	Members   []SwarmMemberReport `json:"members"`
 	Total     int                 `json:"total"`
@@ -117,10 +124,12 @@ func (r realSwarmTicker) Stop()                  { r.t.Stop() }
 
 // Swarm is the agent_swarm orchestrator: it validates a template fan-out,
 // starts members through a tools.SubagentManager under a ramping concurrency
-// allowance, propagates caller cancellation to every member, and aggregates
-// the per-member results into one report.
+// allowance (resuming existing subagents through a tools.RunSteerer when
+// resume_agent_ids is set), propagates caller cancellation to every member,
+// and aggregates the per-member results into one report.
 type Swarm struct {
 	manager        tools.SubagentManager
+	steerer        tools.RunSteerer
 	maxConcurrency int
 	newTicker      func(time.Duration) swarmTicker
 }
@@ -135,6 +144,17 @@ func WithSwarmMaxConcurrency(n int) SwarmOption {
 	return func(s *Swarm) {
 		if n >= 1 {
 			s.maxConcurrency = n
+		}
+	}
+}
+
+// WithSwarmSteerer sets the RunSteerer used to deliver prompts to resumed
+// subagents (the same messaging path message_subagent uses). Required when a
+// request carries resume_agent_ids.
+func WithSwarmSteerer(steerer tools.RunSteerer) SwarmOption {
+	return func(s *Swarm) {
+		if steerer != nil {
+			s.steerer = steerer
 		}
 	}
 }
@@ -200,8 +220,18 @@ func (r SwarmRequest) expandedPrompts() ([]string, error) {
 	if len(r.Items) > SwarmMaxMembers {
 		return nil, fmt.Errorf("%w: items has %d entries, max is %d", ErrInvalidSwarmRequest, len(r.Items), SwarmMaxMembers)
 	}
-	if len(r.ResumeAgentIDs) > 0 {
-		return nil, fmt.Errorf("%w: resume_agent_ids is not supported yet", ErrInvalidSwarmRequest)
+	if len(r.ResumeAgentIDs) > len(r.Items) {
+		return nil, fmt.Errorf("%w: resume_agent_ids has %d entries but items has only %d", ErrInvalidSwarmRequest, len(r.ResumeAgentIDs), len(r.Items))
+	}
+	seenIDs := make(map[string]int, len(r.ResumeAgentIDs))
+	for i, id := range r.ResumeAgentIDs {
+		if strings.TrimSpace(id) == "" {
+			return nil, fmt.Errorf("%w: resume_agent_ids entry %d is empty", ErrInvalidSwarmRequest, i)
+		}
+		if prev, dup := seenIDs[id]; dup {
+			return nil, fmt.Errorf("%w: resume_agent_ids entries %d and %d are duplicate id %q", ErrInvalidSwarmRequest, prev, i, id)
+		}
+		seenIDs[id] = i
 	}
 
 	prompts := make([]string, len(r.Items))
@@ -239,8 +269,64 @@ func (r SwarmRequest) memberRequest(prompt string) tools.SubagentRequest {
 	}
 }
 
+// swarmMemberPlan is one member of the cohort in schedule order: resumes
+// first, then new items. reportIdx places the member in the deterministic
+// report order (new item members first, resumed members last).
+type swarmMemberPlan struct {
+	item       string
+	prompt     string
+	reportIdx  int
+	resumed    bool
+	subagentID string // resumed members only: canonical subagent ID from Get
+	runID      string // resumed members only: run to steer
+}
+
+// buildMemberPlans resolves resume_agent_ids against the manager (rejecting
+// unknown IDs and active-incompatible statuses) and lays out the cohort in
+// schedule order. Resume entry i consumes items[i]'s expanded prompt.
+func (s *Swarm) buildMemberPlans(ctx context.Context, req SwarmRequest, prompts []string) ([]swarmMemberPlan, error) {
+	k := len(req.ResumeAgentIDs)
+	n := len(req.Items)
+	plans := make([]swarmMemberPlan, 0, n)
+	for i, id := range req.ResumeAgentIDs {
+		res, err := s.manager.Get(ctx, id)
+		if err != nil {
+			return nil, fmt.Errorf("%w: resume_agent_ids entry %q: %v", ErrInvalidSwarmRequest, id, err)
+		}
+		if !swarmResumeCompatibleStatus(res.Status) {
+			return nil, fmt.Errorf("%w: resume_agent_ids entry %q has status %q, want %q or %q",
+				ErrInvalidSwarmRequest, id, res.Status, harness.RunStatusRunning, harness.RunStatusWaitingForUser)
+		}
+		plans = append(plans, swarmMemberPlan{
+			item:       req.Items[i],
+			prompt:     prompts[i],
+			reportIdx:  (n - k) + i,
+			resumed:    true,
+			subagentID: res.ID,
+			runID:      res.RunID,
+		})
+	}
+	for j := k; j < n; j++ {
+		plans = append(plans, swarmMemberPlan{
+			item:      req.Items[j],
+			prompt:    prompts[j],
+			reportIdx: j - k,
+		})
+	}
+	return plans, nil
+}
+
+// swarmResumeCompatibleStatus reports whether a subagent can accept a steered
+// message: the same states RunSteerer.SteerRun accepts.
+func swarmResumeCompatibleStatus(status string) bool {
+	return status == string(harness.RunStatusRunning) || status == string(harness.RunStatusWaitingForUser)
+}
+
 // Run validates the request, fans the template out over the items, and blocks
-// until every member reaches a terminal state. Member failures are captured
+// until every member reaches a terminal state. Resume entries are resolved
+// against the manager up front (unknown IDs and inactive subagents reject the
+// whole request before anything launches) and receive their prompts through
+// the steering path, scheduled before new items. Member failures are captured
 // in the report and never abort the cohort. If ctx is cancelled, every
 // started member is cancelled through the manager, members that never started
 // are reported as cancelled, and Run returns the partial report together with
@@ -253,14 +339,25 @@ func (s *Swarm) Run(ctx context.Context, req SwarmRequest) (SwarmReport, error) 
 	if err != nil {
 		return SwarmReport{}, err
 	}
+	if len(req.ResumeAgentIDs) > 0 && s.steerer == nil {
+		return SwarmReport{}, fmt.Errorf("subagents: swarm has no run steerer for resume_agent_ids")
+	}
+	plans, err := s.buildMemberPlans(ctx, req, prompts)
+	if err != nil {
+		return SwarmReport{}, err
+	}
 
-	n := len(req.Items)
+	n := len(plans)
 	report := SwarmReport{Members: make([]SwarmMemberReport, n)}
-	for i := range req.Items {
-		report.Members[i] = SwarmMemberReport{
-			Item:   req.Items[i],
-			Prompt: prompts[i],
-			Status: swarmMemberStatusPending,
+	for _, p := range plans {
+		entry := &report.Members[p.reportIdx]
+		entry.Item = p.item
+		entry.Prompt = p.prompt
+		entry.Status = swarmMemberStatusPending
+		entry.Resumed = p.resumed
+		if p.resumed {
+			// The subagent already exists, so its ID is known up front.
+			entry.ID = p.subagentID
 		}
 	}
 
@@ -310,8 +407,34 @@ func (s *Swarm) Run(ctx context.Context, req SwarmRequest) (SwarmReport, error) 
 
 	launch := func(idx int) {
 		inFlight++
+		plan := plans[idx]
+		if plan.resumed {
+			go func() {
+				// Deliver the expanded prompt through the same messaging
+				// path message_subagent uses, then wait for the subagent's
+				// terminal state like any other member.
+				if err := s.steerer.SteerRun(plan.runID, plan.prompt); err != nil {
+					outcomes <- outcome{idx: idx, err: fmt.Errorf("resume subagent %q: %w", plan.subagentID, err)}
+					return
+				}
+				mu.Lock()
+				memberIDs[idx] = plan.subagentID
+				mu.Unlock()
+				// Same race as Start below: the swarm may have been
+				// cancelled while the steer was in flight.
+				if cancelled.Load() {
+					_ = s.manager.Cancel(context.Background(), plan.subagentID)
+				}
+				wres, werr := s.manager.Wait(swarmCtx, plan.subagentID)
+				if wres.ID == "" {
+					wres.ID = plan.subagentID
+				}
+				outcomes <- outcome{idx: idx, res: wres, err: werr}
+			}()
+			return
+		}
 		go func() {
-			res, err := s.manager.Start(ctx, req.memberRequest(prompts[idx]))
+			res, err := s.manager.Start(ctx, req.memberRequest(plan.prompt))
 			if err != nil {
 				outcomes <- outcome{idx: idx, err: err}
 				return
@@ -359,7 +482,7 @@ func (s *Swarm) Run(ctx context.Context, req SwarmRequest) (SwarmReport, error) 
 			mu.Lock()
 			memberDone[oc.idx] = true
 			mu.Unlock()
-			recordSwarmOutcome(&report.Members[oc.idx], oc.res, oc.err)
+			recordSwarmOutcome(&report.Members[plans[oc.idx].reportIdx], oc.res, oc.err)
 			for canLaunch() {
 				launch(started)
 				started++

@@ -13,7 +13,7 @@
 - `814-tasks-panel.md` — Epic #814 slice 1: `GET /v1/tasks` union endpoint for subagents, cron jobs, and delayed callbacks (in implementation).
 - `817-compact-cmd.md` — Epic #817 slice 1: preserve-instruction in `CompactRun` and the run compact endpoint (in implementation).
 - `815-config-reload.md` — Epic #815 Slice 1: hot-swappable vs restart-only config field classification with `ReloadDiff` (in implementation).
-- `808-agent-swarm.md` — Agent swarm epic #808, Slice 1: swarm orchestrator with template fan-out, concurrency ramp, and cancellation (in implementation).
+- `808-agent-swarm.md` — Agent swarm epic #808: Slice 1 swarm orchestrator (merged), Slice 2 resume via resume_agent_ids (in implementation).
 - `809-mcp-oauth.md` — Epic #809: slice 1 (static HTTP headers + typed auth errors, merged PR #840) and slice 2 (file-backed OAuth token store, in implementation).
 - `812-session-visualizer.md` — Session visualizer epic #812, slice 1: embedded `/viz` static shell served by harnessd behind Bearer auth + `runs:read` (in implementation).
 - `820-tui-steering.md` — Epic #820 slice 1 (in implementation): steer client plumbing (`steerRunCmd` + `harnesscli steer`).

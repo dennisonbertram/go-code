@@ -21,20 +21,32 @@ type fakeSwarmManager struct {
 	started     []tools.SubagentRequest
 	ids         []string
 	chans       map[string]chan tools.SubagentResult
+	seeded      map[string]tools.SubagentResult
 	cancelled   []string
 	releaseCh   chan struct{}
 	released    bool
 	startErr    error
 	startErrAt  int // 0-based start index that fails with startErr; -1 disables
 	startsTotal int
+	log         *eventLog
 }
 
 func newFakeSwarmManager() *fakeSwarmManager {
 	return &fakeSwarmManager{
 		chans:      make(map[string]chan tools.SubagentResult),
+		seeded:     make(map[string]tools.SubagentResult),
 		releaseCh:  make(chan struct{}),
 		startErrAt: -1,
 	}
+}
+
+// seed registers a pre-existing subagent (for resume_agent_ids tests) with a
+// wait channel like a started member's.
+func (f *fakeSwarmManager) seed(id, runID, status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.seeded[id] = tools.SubagentResult{ID: id, RunID: runID, Status: status}
+	f.chans[id] = make(chan tools.SubagentResult, 1)
 }
 
 func (f *fakeSwarmManager) Start(_ context.Context, req tools.SubagentRequest) (tools.SubagentResult, error) {
@@ -49,6 +61,9 @@ func (f *fakeSwarmManager) Start(_ context.Context, req tools.SubagentRequest) (
 	f.started = append(f.started, req)
 	f.ids = append(f.ids, id)
 	f.chans[id] = make(chan tools.SubagentResult, 1)
+	if f.log != nil {
+		f.log.add("start:" + req.Prompt)
+	}
 	return tools.SubagentResult{ID: id, RunID: id + "-run", Status: string(harness.RunStatusRunning)}, nil
 }
 
@@ -91,6 +106,9 @@ func (f *fakeSwarmManager) Get(_ context.Context, id string) (tools.SubagentResu
 		if known == id {
 			return tools.SubagentResult{ID: id, Status: string(harness.RunStatusRunning)}, nil
 		}
+	}
+	if res, ok := f.seeded[id]; ok {
+		return res, nil
 	}
 	return tools.SubagentResult{}, fmt.Errorf("unknown subagent %q", id)
 }
@@ -258,9 +276,14 @@ func TestSwarmRunValidation(t *testing.T) {
 			wantErr: "same prompt",
 		},
 		{
-			name:    "resume_agent_ids rejected until slice 2",
-			req:     SwarmRequest{PromptTemplate: "do {{item}}", Items: []string{"a"}, ResumeAgentIDs: []string{"subagent_1"}},
-			wantErr: "resume",
+			name:    "more resume_agent_ids than items",
+			req:     SwarmRequest{PromptTemplate: "do {{item}}", Items: []string{"a"}, ResumeAgentIDs: []string{"s1", "s2"}},
+			wantErr: "resume_agent_ids",
+		},
+		{
+			name:    "duplicate resume_agent_ids",
+			req:     SwarmRequest{PromptTemplate: "do {{item}}", Items: []string{"a", "b"}, ResumeAgentIDs: []string{"s1", "s1"}},
+			wantErr: "duplicate",
 		},
 	}
 
