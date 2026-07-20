@@ -38,6 +38,8 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/transcriptexport"
 	"go-agent-harness/cmd/harnesscli/tui/components/viewport"
 	"go-agent-harness/internal/plugins"
+	"go-agent-harness/internal/provider/codex"
+	"go-agent-harness/internal/provider/kimi"
 )
 
 // defaultExportDir returns a runtime-safe directory for transcript exports.
@@ -384,14 +386,19 @@ func New(cfg TUIConfig) Model {
 		"openrouter": "OPENROUTER_API_KEY",
 		"openai":     "OPENAI_API_KEY",
 		"anthropic":  "ANTHROPIC_API_KEY",
-		// Subscription auth is managed with `harnesscli auth kimi`; this
-		// marker lets /keys display the provider without ever reading a token.
-		"kimi-subscription": "KIMI_SUBSCRIPTION_AUTH",
 	}
 	for provider, envVar := range envKeyVars {
 		if key := os.Getenv(envVar); key != "" {
 			m.envAPIKeys[provider] = key
 		}
+	}
+	// Subscription credentials are harness-owned local files, not environment
+	// variables. Store only a non-secret availability marker in the TUI.
+	if _, err := codex.DefaultStore().Load(); err == nil {
+		m.envAPIKeys["codex-subscription"] = "configured"
+	}
+	if _, err := kimi.Load(kimi.DefaultStorePath()); err == nil {
+		m.envAPIKeys["kimi-subscription"] = "configured"
 	}
 	m.commandRegistry = m.buildCommandRegistry()
 	// Set default plugins directory (~/.config/harnesscli/plugins) and load any
