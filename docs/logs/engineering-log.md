@@ -6,6 +6,12 @@
 - Slice 3 (this change, docs-only): new "OS Service Install" section in `docs/runbooks/distribution.md` (commands, per-OS unit paths, log locations, flags, troubleshooting incl. `launchctl print gui/$(id -u)/com.gocode.harnessd` and `journalctl --user -u harnessd`, lingering note, scope guardrails); README gains an end-user pointer and the tmux guidance is explicitly re-scoped to repository dev agents.
 - Validation: slices 1–2 landed under strict TDD (`go test ./cmd/harnesscli/ -run Service -count=1` — 32 tests) plus real launchd end-to-end on macOS (install → start → healthy status → stop → uninstall; `plutil -lint` OK). Slice 3 verified every documented flag/path/command against `cmd/harnesscli/service.go` and live `-h` output; no code changed.
 
+## 2026-07-19 (Plugin Zip + GitHub Archive Install Sources — Epic #821 Slice 3)
+
+- `internal/plugins.NormalizeSource` now detects zip sources: `.zip` suffix on remote URLs and local files, and GitHub `/archive/` URLs even without the suffix (`Source.Zip`). Local zip files are non-remote (trusted by default); zip URLs are remote (untrusted, install-time confirmation from slice 2 applies).
+- `Installer.Stage` fetches zips with `net/http` (remote) or from disk (local) and extracts with stdlib `archive/zip` into the existing staging dir; `rejectSymlinks`, `LoadBundle` validation, and atomic promote are unchanged. Every entry name is validated before any write (no absolute paths, no `..` elements, no backslashes), symlink entries are rejected, and a single shared top-level directory (the GitHub archive convention) is stripped so the bundle root lands at the staging dir. Fetch, corrupt-zip, and bad-entry errors name the source.
+- TDD: failing-first tests cover the detection matrix (zip URL / GitHub archive ± suffix / git URL / shorthand / local zip / local dir / local non-zip file), local and GitHub-style single-root installs, `..`/absolute/backslash/symlink rejection with no residue, and corrupt/404 sources naming the source; CLI regression proves `plugin install --yes <httptest zip URL>` end-to-end.
+
 ## 2026-07-20 (Issue #875 Shell-Mode Test-Seam Coverage Fix)
 
 - Symptom: post-merge regression gate (`scripts/test-regression.sh`) failed after PR #870 landed: `coveragegate` flagged `(*Model).ShellCommandRunning` and `(*Model).WithShellExecTimeout` (cmd/harnesscli/tui/model.go) at 0.0%.

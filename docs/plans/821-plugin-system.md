@@ -115,3 +115,59 @@
 - Mitigation: prompt only when `stdinIsTerminal()`; otherwise refuse with a `--yes` hint. Tests pin all three paths.
 - Risk: declined install/update leaves residue.
 - Mitigation: staging dir lives under the plugin root with a `.install-` prefix and is discarded on decline; tests assert no state record and no files.
+
+---
+
+# Plan: Epic #821 Slice 3 — zip and GitHub archive install sources
+
+## Context
+
+- Problem: `Installer` only accepts local directories and git-cloneable remotes. kimi-code parity requires `.zip` URLs (incl. GitHub archive links) and local zip files.
+- User impact: Users cannot install from GitHub's archive URLs or distribute bundles as plain zip files.
+- Constraints: stdlib only (`archive/zip`, `net/http`) — no new dependencies. Git/local-dir behavior unchanged. Strict TDD.
+
+## Scope
+
+- In scope (`internal/plugins/install.go`):
+  - `Source.Zip` detection in `NormalizeSource`: `.zip` suffix (remote URLs and local files) and GitHub `/archive/` URLs; local zip files are non-remote (trusted by default), zip URLs are remote (untrusted by default).
+  - `Stage` fetches zip sources (HTTP for remote, filesystem for local) and extracts with `archive/zip` into the existing staging dir; unchanged `rejectSymlinks` + `LoadBundle` + `Promote` afterwards.
+  - Extraction rejects absolute entry paths, any `..` path element, backslash paths, and symlink entries; a single shared top-level directory (GitHub archive convention) is stripped so the bundle root lands at the staging dir.
+  - Errors name the source (fetch, corrupt zip, bad entry).
+  - CLI regression test: `plugin install --yes <zip URL>` end-to-end via `httptest`.
+  - Docs: design doc sources section, engineering log, this plan.
+- Out of scope: tarballs, codeload URLs without `.zip`, decompression limits, slice 4 markdown commands.
+
+## Test Plan (TDD)
+
+- New failing tests first (`internal/plugins/zip_test.go`):
+  - `NormalizeSource` matrix: zip URL, GitHub `/archive/` with and without suffix, git URL not-zip, shorthand not-zip, local zip file (non-remote), local dir not-zip, local non-zip file rejected.
+  - Local zip with `plugin.json` at archive root installs (trusted).
+  - GitHub-style single-top-level-dir zip over `httptest` installs with the prefix stripped (remote).
+  - `..`/absolute/backslash entries rejected, naming the entry; nothing promoted.
+  - Symlink entries rejected.
+  - Corrupt local zip and HTTP non-200 errors name the source.
+- CLI: `TestPluginCLI_RemoteZipInstallYesFlag` — zip served by `httptest` installs untrusted and appears in `plugin list`.
+- Existing tests to update: none (non-zip behavior pinned by existing install/normalize tests).
+
+## Cross-Surface Impact Map
+
+- None. Installer internals + one CLI regression test.
+
+## Implementation Checklist
+
+- [x] Write failing tests first; watch them fail (`Source.Zip undefined`; CLI zip install failed pre-implementation).
+- [x] Implement detection + extraction.
+- [x] Update design doc, plan, engineering log.
+- [x] `go test ./cmd/harnesscli/... ./internal/plugins/... -count=1` green; gofmt + go vet clean. **Green (28 packages ok).**
+- [x] Push `epic/821-plugin-system-s3`, open PR (no merge).
+
+## Slice 3 Verification Results
+
+- `GOCACHE=/tmp/go-build go test ./cmd/harnesscli/... ./internal/plugins/... -count=1` — PASS, all 28 packages `ok`.
+- `GOCACHE=/tmp/go-build go test ./internal/plugins/ ./cmd/harnesscli/ -count=1` — PASS (re-run on final bytes after a gofmt-only reformat of `zip_test.go`).
+- `gofmt -l` on changed Go files — clean; `go vet ./internal/plugins/ ./cmd/harnesscli/` — clean.
+
+## Risks and Mitigations
+
+- Risk: zip-slip via crafted prefixes (e.g. all entries under `../`).
+- Mitigation: every original entry name is validated (no `..` element, not absolute, no backslash) BEFORE the shared-prefix is computed and stripped; symlink entries rejected pre-extraction; pinned by tests.

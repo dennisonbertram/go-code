@@ -1,7 +1,10 @@
 package main
 
 import (
+	"archive/zip"
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -341,5 +344,52 @@ func TestPluginCLI_UpdateChangedSurfacesRequiresConfirmation(t *testing.T) {
 	}
 	if names := trustedBundleNames(t); len(names) != 1 || names[0] != "remote-tools@1.1.0" {
 		t.Fatalf("TrustedBundles after confirmed update = %v, want trust preserved at new version", names)
+	}
+}
+
+// --- Slice 3: zip and GitHub archive install sources ---
+
+// buildPluginZip returns archive bytes for a bundle wrapped in a single
+// top-level directory, mirroring the GitHub archive convention.
+func buildPluginZip(t *testing.T, topDir string, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, content := range files {
+		w, err := zw.Create(topDir + "/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Write([]byte(content)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+func TestPluginCLI_RemoteZipInstallYesFlag(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	archive := buildPluginZip(t, "repo-main", map[string]string{
+		"plugin.json":     `{"schema_version":1,"name":"zip-tools","version":"1.0.0","skills":"skills"}`,
+		"skills/SKILL.md": "# zip tools",
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(archive)
+	}))
+	defer srv.Close()
+	setPluginInput(t, "", false) // non-interactive; --yes must suffice
+
+	code, out := runPluginCLI(t, "install", "--yes", srv.URL+"/archive/refs/heads/main.zip")
+	if code != 0 {
+		t.Fatalf("install zip --yes = %d, %q", code, out)
+	}
+	if !strings.Contains(out, "skills: skills") || !strings.Contains(out, "installed zip-tools@1.0.0 (untrusted)") {
+		t.Fatalf("install zip output = %q", out)
+	}
+	if code, out := runPluginCLI(t, "list"); code != 0 || !strings.Contains(out, "zip-tools@1.0.0") {
+		t.Fatalf("list = %d, %q", code, out)
 	}
 }
