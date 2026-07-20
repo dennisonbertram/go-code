@@ -281,7 +281,8 @@ func (se *stepEngine) run() {
 				Environment:            envInfo,
 			}))
 		}
-		turnMessages := r.buildTurnMessages(systemPrompt, messages, workingMemorySnippet, memorySnippetForSnapshot, injectedRuleContent.String(), runtimeContext)
+		planModeGuidance := r.planModePromptBlock(runID)
+		turnMessages := r.buildTurnMessages(systemPrompt, messages, workingMemorySnippet, memorySnippetForSnapshot, injectedRuleContent.String(), planModeGuidance, runtimeContext)
 
 		if rc.AutoCompactEnabled && rc.ModelContextWindow > 0 {
 			estimated := 0
@@ -311,7 +312,7 @@ func (se *stepEngine) run() {
 					}
 					messages = compactedMsgs
 					r.stepSetMessages(runID, messages)
-					turnMessages = r.buildTurnMessages(systemPrompt, messages, workingMemorySnippet, memorySnippetForSnapshot, injectedRuleContent.String(), runtimeContext)
+					turnMessages = r.buildTurnMessages(systemPrompt, messages, workingMemorySnippet, memorySnippetForSnapshot, injectedRuleContent.String(), planModeGuidance, runtimeContext)
 					r.emit(runID, EventAutoCompactCompleted, map[string]any{
 						"before_tokens": estimated,
 						"after_tokens":  afterTokens,
@@ -601,7 +602,7 @@ func (se *stepEngine) run() {
 				return
 			}
 			if !approved {
-				messages = append(messages, Message{Role: "user", Content: "The operator requested changes to the plan. Revise the designated plan file and present the updated plan."})
+				messages = append(messages, Message{Role: "user", Content: r.planModeDenialFeedback(runID)})
 				r.stepSetMessages(runID, messages)
 				continue
 			}
@@ -682,7 +683,7 @@ func (se *stepEngine) run() {
 				return
 			}
 			if !approved {
-				messages = append(messages, Message{Role: "user", Content: "The operator requested changes to the plan. Revise the designated plan file and present the updated plan."})
+				messages = append(messages, Message{Role: "user", Content: r.planModeDenialFeedback(runID)})
 				r.stepSetMessages(runID, messages)
 				continue
 			}

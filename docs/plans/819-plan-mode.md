@@ -1,5 +1,34 @@
 # Plan: pin plan-mode exit semantics across approval modes (epic #819, slice 1)
 
+Slice 1 shipped (PR #827). Slice 2 plan is appended below.
+
+## Slice 2: tell the model it is in plan mode (branch `epic/819-plan-mode-s2`)
+
+- Problem: nothing in the prompt or tool surface tells the model it is in plan mode, that only
+  the plan file is writable, or that it should present approaches on exit. The model discovers
+  `plan_mode_denied` only by tripping it.
+- In scope: `Runner.planModePromptBlock(runID)` in `internal/harness/plan_mode.go` (guidance
+  block naming the resolved plan file, read-only rule, present-the-plan instruction, 1-3
+  approaches convention under `## Approaches`); injected as a trailing system message via
+  `buildTurnMessages` (new `planModeGuidance` param) whenever `planMode == PlanModeActive`;
+  denial-feedback message factored into `Runner.planModeDenialFeedback(runID)` and extended to
+  name the plan file.
+- Out of scope: approach options end-to-end, TUI, website docs (slices 3-5).
+- Note: tests use the in-package `capturingProvider`, not `internal/fakeprovider` — fakeprovider
+  imports this package, an import cycle for in-package tests; capturingProvider records the same
+  outgoing requests.
+- TDD: `internal/harness/plan_mode_prompt_test.go` (written first, watched fail):
+  - `TestPlanModeGuidanceInjectedIntoOutgoingMessages` — block present in every outgoing request
+    of a plan-mode run; names `.harness/plan.md`, `plan_mode_denied`, `## Approaches`.
+  - `TestPlanModeGuidanceNamesCustomPlanFile` — custom `PlanFile` named, default absent.
+  - `TestPlanModeGuidanceAbsentWhenPlanModeDisabled` — regression guard: no block in normal runs.
+  - `TestPlanModeDenialFeedbackNamesPlanFile` — denial feedback names the plan file.
+- Checklist:
+  - [x] Write failing tests first.
+  - [x] Implement guidance injection + denial message extension.
+  - [x] `go test ./internal/harness/ -run TestPlanMode -count=1` green.
+  - [ ] Full package tests + gofmt/vet; commit, push, open PR.
+
 ## Context
 
 - Problem: plan-exit approval currently always routes through the approval broker regardless of
