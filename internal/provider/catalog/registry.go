@@ -173,10 +173,15 @@ func (r *ProviderRegistry) IsConfigured(providerName string) bool {
 	if !ok {
 		return false
 	}
-	if entry.APIKeyOptional {
+	if entry.APIKeyOptional && isLocalBaseURL(entry.BaseURL) {
 		return true
 	}
 	return r.getenv(entry.APIKeyEnv) != ""
+}
+
+func isLocalBaseURL(baseURL string) bool {
+	baseURL = strings.ToLower(baseURL)
+	return strings.Contains(baseURL, "://localhost") || strings.Contains(baseURL, "://127.0.0.1") || strings.Contains(baseURL, "://[::1]")
 }
 
 // GetClient returns (or lazily creates) a provider client for the named provider.
@@ -210,7 +215,10 @@ func (r *ProviderRegistry) GetClient(providerName string) (ProviderClient, error
 		apiKey = r.getenv(entry.APIKeyEnv)
 	}
 	if apiKey == "" && tokenSource == nil {
-		if !entry.APIKeyOptional {
+		if !entry.APIKeyOptional || !isLocalBaseURL(entry.BaseURL) {
+			if providerName == "kimi-subscription" {
+				return nil, fmt.Errorf("provider %q is not configured; run kimi-code login, then harnesscli auth kimi login", providerName)
+			}
 			return nil, fmt.Errorf("provider %q: API key env %q is not set", providerName, entry.APIKeyEnv)
 		}
 		apiKey = providerName
@@ -220,7 +228,7 @@ func (r *ProviderRegistry) GetClient(providerName string) (ProviderClient, error
 		return nil, fmt.Errorf("provider %q: no client factory configured", providerName)
 	}
 
-	if entry.APIKeyOptional {
+	if entry.APIKeyOptional && isLocalBaseURL(entry.BaseURL) {
 		if err := checkLocalServerReachable(providerName, entry); err != nil {
 			return nil, err
 		}
