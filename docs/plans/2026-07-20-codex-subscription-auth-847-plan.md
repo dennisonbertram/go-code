@@ -35,7 +35,7 @@
 - [x] Add provider/model-flow impact map before implementation.
 - [x] Implement each requested slice test-first and commit it green.
 - [x] Update docs, logs, and indexes.
-- [ ] Run focused tests, vet, and full regression gate.
+- [x] Run focused tests, vet, and full regression gate.
 - [ ] Push branch and open PR without merging.
 
 ## Risks and Mitigations
