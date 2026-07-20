@@ -98,4 +98,44 @@ Epic: #812 (parent #803).
 - [x] Tests green; gofmt/go vet clean.
 - [x] Update this plan.
 - [x] Run touched-package tests.
-- [ ] Commit, push `epic/812-session-visualizer-s2`, open PR against repo.
+- [x] Commit, push `epic/812-session-visualizer-s2`, open PR against repo. (Merged, PR #857.)
+
+---
+
+## Slice 3 (this branch): `feat(server): runs list and run detail views in /viz`
+
+### Context
+
+- Problem: the slice-1 shell only proves connectivity; users see placeholders, not runs.
+- User impact: list runs newest-first, click into a run's metadata + summary (tokens/cost where present) without leaving `/viz`.
+- Constraints: no new endpoints; client-side filtering only; JS stays plain (no build step); read-only GET calls only.
+- API facts verified in code:
+  - `GET /v1/runs` → `{"runs": [...]}` of serialized `store.Run` (id, conversation_id, tenant_id, agent_id, model, provider_name, prompt, status, output, error, recap, created_at, updated_at), ordered `created_at DESC` (sqlite.go:269). Cost/usage fields are `json:"-"` — never present in list payloads; the cost column renders "—" unless a field appears (`total_cost_usd`/`cost_usd` probed defensively).
+  - `GET /v1/runs/{id}` → runner state or `storeRunToHarness` map (same field names).
+  - `GET /v1/runs/{id}/summary` → `RunSummary{run_id,status,steps_taken,total_prompt_tokens,total_completion_tokens,total_cost_usd,cost_status,tool_calls,cache_hit_rate,error}` — runner in-memory only: 404 for historical runs, 409 for unfinished runs; UI renders "summary unavailable" gracefully.
+
+### Scope
+
+- In scope:
+  - `internal/server/viz/static/app.js`: hash routing `#/runs` / `#/runs/{id}`; list view (status/model/created/cost columns, prompt excerpt linking to detail); detail view (metadata + summary payload); client-side status + substring filters; 401/403 → token form; empty store / empty filter / unknown-run / summary-unavailable states.
+  - `internal/server/viz/static/index.html`: crumb text update (list/detail exist now).
+  - `internal/server/viz/static/style.css`: table, filter bar, badges, detail grid, state messages.
+  - Guard test: parse served `index.html` for `/viz/` asset refs, assert each resolves 200 under a `runs:read` key.
+- Out of scope: slices 4–6 (timeline, search, ops doc); any endpoint or payload change; client re-sorting (server order is authoritative).
+
+### Test Plan (TDD)
+
+- Note per slice spec: JS is test-light by design. The behavior change is client-side only, so there is no new Go-observable behavior to red-green; the prescribed Go test is a guard against broken embeds/paths, run before and after the JS rewrite. JS correctness is verified by `node --check` (syntax) and a seeded-daemon end-to-end smoke (curl the exact endpoints the views consume), with a scripted browser checklist in the PR.
+- New guard test (`internal/server/http_viz_test.go`): extract `/viz/...` refs from served `index.html` (`src=`/`href=`), GET each under `runs:read` → 200.
+- Existing tests to update: none.
+- Regression tests required: `go test ./internal/server/... -count=1`.
+
+### Implementation Checklist
+
+- [x] Verify API response shapes and store ordering in code.
+- [x] Add guard test; run before JS rewrite.
+- [x] Rewrite `app.js` (routing, list, detail, filters, states); update `index.html` crumbs; extend `style.css`.
+- [x] `node --check` the JS; gofmt/go vet clean.
+- [ ] Run touched-package tests.
+- [x] Seeded-daemon e2e smoke (HARNESS_RUN_DB + seeded key/runs; curl list/detail; confirm new assets served) + DOM-stubbed render smoke (15/15).
+- [ ] Commit, push `epic/812-session-visualizer-s3`, open PR against repo.
