@@ -1,6 +1,8 @@
-# Plan: epic #820 slice 1 — steer client plumbing (steerRunCmd + harnesscli steer)
+# Plan: epic #820 — mid-turn steering from the TUI (per-slice sections)
 
-## Context
+## Slice 1 — steer client plumbing (steerRunCmd + harnesscli steer)
+
+### Context
 
 - Problem: the server exposes `POST /v1/runs/{id}/steer` (202/404/409/429 contract,
   `internal/server/http_runs.go` `handleRunSteer`) but no client path exists — the TUI
@@ -63,10 +65,68 @@
 - [x] gofmt + go vet clean.
 - [x] `go test ./cmd/harnesscli/... -count=1` green.
 - [x] Engineering-log entry; `docs/plans/INDEX.md` updated for the new plan page.
-- [ ] Commit, push `epic/820-tui-steering`, open PR (do NOT merge).
+- [x] Commit, push `epic/820-tui-steering`, open PR (do NOT merge). — merged as PR #841.
 
 ## Risks and Mitigations
 
 - Risk: epic parenthetical mentions an `-api-key` flag that `runCancel` does not have.
 - Mitigation: mirror `runCancel` exactly (`-base-url` only); note the deviation in the
   PR body so slice reviewers can decide.
+
+---
+
+## Slice 2 — render steering.received events in the transcript
+
+## Context
+
+- Problem: the TUI drops `steering.received` SSE events — there is no case for them in
+  the dispatch switch — so a server-confirmed steering injection is invisible to the
+  user even though the agent now sees the message.
+- User impact: after steering (from any client — this TUI, the one-shot CLI, or a
+  webhook), the transcript never shows the steered input, so the user cannot tell what
+  the agent was told.
+- Constraints: implement ONLY slice 2 of #820. No keybinding (slice 3), no local echo
+  or dedupe (slice 4). Server event payload `{"message": "..."}` is a fixed contract
+  (`internal/harness/runner.go` `drainSteering`). Strict TDD.
+
+## Scope
+
+- In scope:
+  - `cmd/harnesscli/tui/model.go`: `case "steering.received"` in the SSE dispatch
+    switch; parse `{"message": "..."}`; append a transcript entry (role `user`) and a
+    user bubble, both carrying a `steered ⟂ ` marker prefix, via a small
+    `appendSteeringMarker` helper (reused by slice 4's local echo). Malformed or empty
+    payloads are ignored without panic. `m.lastEventID` bookkeeping untouched (the
+    case sits inside the existing type switch, after ID tracking).
+- Out of scope: slices 3–5; any server/harness change; help/keybinding docs.
+
+## Documentation Contract
+
+- Feature status: `in implementation`
+- Public docs affected: none (`website/docs/cli/tui.md` belongs to slice 3).
+- Implementation notes to add after code: engineering-log entry.
+
+## Test Plan (TDD)
+
+- New failing tests to add first (`cmd/harnesscli/tui/steer_events_test.go`, package
+  `tui_test`, pattern from `sse_events_test.go`):
+  - scripted `SSEEventMsg{EventType: "steering.received"}` → marker + message visible
+    in rendered viewport; transcript gains a role `user` entry carrying the marker;
+    run stays active.
+  - marker is visually distinct from a normal user prompt (steered line carries
+    `steered ⟂`; a typed prompt does not).
+  - malformed payload (`not-json`, `{}`, whitespace-only message) → no panic, no
+    marker, transcript unchanged.
+- Regression tests required: `go test ./cmd/harnesscli/... -count=1` green, esp.
+  `sse_events_test.go`, `escape_test.go`, `cancel_test.go`, `ctrlc_server_cancel_test.go`,
+  `clipboard_test.go`, `keys_test.go`.
+
+## Implementation Checklist
+
+- [x] Define acceptance criteria in tests (listed above).
+- [x] Write failing tests first, watch them fail.
+- [x] Implement `steering.received` case + `appendSteeringMarker`.
+- [x] gofmt + go vet clean.
+- [x] `go test ./cmd/harnesscli/... -count=1` green.
+- [x] Engineering-log entry.
+- [ ] Commit, push `epic/820-tui-steering-s2`, open PR (do NOT merge).

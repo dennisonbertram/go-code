@@ -16,7 +16,7 @@
 - `808-agent-swarm.md` — Agent swarm epic #808: Slice 1 swarm orchestrator (merged), Slice 2 resume via resume_agent_ids (in implementation).
 - `809-mcp-oauth.md` — Epic #809: slice 1 (static HTTP headers + typed auth errors, merged PR #840) and slice 2 (file-backed OAuth token store, in implementation).
 - `812-session-visualizer.md` — Session visualizer epic #812, slice 1: embedded `/viz` static shell served by harnessd behind Bearer auth + `runs:read` (in implementation).
-- `820-tui-steering.md` — Epic #820 slice 1 (in implementation): steer client plumbing (`steerRunCmd` + `harnesscli steer`).
+- `820-tui-steering.md` — Epic #820 (in implementation): per-slice plans for mid-turn TUI steering (slice 1 client plumbing merged; slice 2 transcript rendering in review).
 
 - `2026-07-20-codex-subscription-auth-847-plan.md` — Epic #847 ChatGPT-subscription authentication for the Codex provider (in implementation).
 - `2026-07-20-codex-subscription-auth-847-impact-map.md` — Cross-surface impact map for Epic #847 Codex subscription routing.
