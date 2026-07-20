@@ -73,6 +73,20 @@ export ZAI_API_KEY="..."
 
 You only need keys for the providers you use. You can also configure provider keys through the TUI and server APIs as the harness evolves.
 
+### Kimi Code subscription
+
+If you already use the MoonshotAI `kimi-code` CLI, authenticate it first, then import a separate go-code-owned copy:
+
+```bash
+kimi-code login
+harnesscli auth kimi login
+harnesscli auth kimi status
+```
+
+Select `kimi-subscription` to use the subscription route. The importer only reads the vendor credential; go-code refreshes its own `~/.harness/subscription-auth/kimi.json` copy and never writes under `~/.kimi-code/`. `harnesscli auth kimi logout` removes only the go-code copy.
+
+The live Kimi refresh request body and subscription API compatibility were not authenticated against the live service in this release: the implementation uses the conventional OAuth2 refresh-token form and fake-server coverage. Verify this manually before relying on it for production use, and ensure this workflow complies with MoonshotAI's terms.
+
 ## Running From Source
 
 For development or debugging, run the server and CLI directly:

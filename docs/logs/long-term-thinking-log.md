@@ -1,5 +1,12 @@
 # Long-Term Thinking Log
 
+## 2026-07-20 (Kimi Code Subscription Auth — Epic #848)
+
+- Command intent: Let an existing Kimi Code CLI subscription authenticate the separate `kimi-subscription` provider, with strict test-first slices, verification, PR creation, and no vendor credential writes.
+- User intent: Reuse an already-paid Kimi Code subscription safely through go-code, including ordinary 15-minute access-token refreshes.
+- Success definition: read-only CLI credential import into `~/.harness/subscription-auth/kimi.json`; `auth kimi login|status|logout`; 30-second refresh safety margin; derived (not duplicated) Kimi model catalog; dynamic bearer plus client headers; fake-server completion/refresh integration coverage; no credential logging.
+- Guardrails: Live `/api/oauth/token` was confirmed only as POST-capable by one unauthenticated OPTIONS probe. No authenticated refresh or completion was sent to the live service; conventional OAuth2 form details and OpenAI compatibility require manual verification before production reliance.
+
 ## 2026-07-20 (Subscription-Auth Foundation — Epic #846)
 
 - Command intent: Add provider-layer dynamic bearer credential and extra-header plumbing, a generic refresh cache, and registry token-source support; commit each test-first slice, verify, push, and open a PR without merging it.

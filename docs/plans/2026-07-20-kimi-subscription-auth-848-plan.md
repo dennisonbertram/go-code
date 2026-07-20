@@ -14,7 +14,7 @@
 
 ## Documentation Contract
 
-- Feature status: `in implementation`
+- Feature status: `implemented` (pending manual live-provider verification)
 - Public docs affected: README/provider setup documentation and CLI help.
 - Spec docs to update before code: this plan and `2026-07-20-kimi-subscription-auth-848-impact-map.md`.
 - Implementation notes to add after code: engineering/system logs, `CLAUDE.md`, and docs indexes.
@@ -32,13 +32,13 @@
 ## Implementation Checklist
 
 - [x] Spike: record endpoint evidence, one safe live probe, and live-verification gap.
-- [ ] Refresh: add convention-based OAuth refresh and 30-second safety margin for 900-second credentials.
-- [ ] Import: copy vendor credential read-only into `~/.harness/subscription-auth/kimi.json` with restrictive matching mode.
-- [ ] Catalog/bootstrap: derive `kimi-subscription` models from `kimi`; wire dynamic token and client headers.
-- [ ] CLI: add `harnesscli auth kimi login|status|logout`.
-- [ ] TUI: expose `kimi-subscription` status in `/keys`.
-- [ ] Integration: fake API/token server completion plus forced refresh; add token-log grep regression.
-- [ ] Documentation/logs/indexes: mark implemented and record live-verification limitation.
+- [x] Refresh: add convention-based OAuth refresh and 30-second safety margin for 900-second credentials.
+- [x] Import: copy vendor credential read-only into `~/.harness/subscription-auth/kimi.json` with restrictive matching mode.
+- [x] Catalog/bootstrap: derive `kimi-subscription` models from `kimi`; wire dynamic token and client headers.
+- [x] CLI: add `harnesscli auth kimi login|status|logout`.
+- [x] TUI: expose `kimi-subscription` status in `/keys`.
+- [x] Integration: fake API/token server completion plus forced refresh; add token-log grep regression.
+- [x] Documentation/logs/indexes: mark implemented and record live-verification limitation.
 - [ ] Run focused tests, requested package tests, `gofmt`, `go vet ./...`, and `./scripts/test-regression.sh`.
 
 ## Risks and Mitigations

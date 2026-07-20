@@ -78,6 +78,12 @@ the SQLite conversation store persists the latest plan content per conversation.
 - Anthropic provider support exists in the provider catalog and should not be described as merely planned.
 - Subscription-auth foundation: `internal/provider.TokenSource` supplies request-time bearer credentials; `internal/provider/tokencache` supplies generic in-memory expiry-margin refresh caching. OpenAI-compatible clients accept optional `TokenSource` and static `ExtraHeaders`; the provider registry exposes `SetTokenSource`, which evicts its cached client. Never log credential values. Codex/Kimi OAuth refresh transport, credential import, persistence, and TUI surfaces are intentionally separate follow-on work.
 
+### Kimi Code subscription auth (Epic #848)
+
+- `harnesscli auth kimi login|status|logout` manages only `~/.harness/subscription-auth/kimi.json`; it must never write under `~/.kimi-code/`.
+- The subscription provider mirrors models from metered `kimi` via `models_from`, uses a 30-second safety margin for 900-second tokens, and sends `X-Kimi-Client-*` headers through the OpenAI-compatible client.
+- Do not claim live Kimi OAuth or completion verification: only one unauthenticated OPTIONS probe confirmed `POST` is allowed at `/api/oauth/token`; fake-server tests cover the convention-based OAuth request.
+
 ## Benchmarks
 
 - `benchmarks/` and `harness_agent/` are Python (not Go). They need external pip deps (`terminal_bench`, `harbor`) that are not vendored here.
