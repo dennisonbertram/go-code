@@ -56,3 +56,62 @@
 
 - Risk: Doc describes behavior the code does not have (ghost features).
 - Mitigation: Every contract claim is grounded in `internal/plugins` code read for this plan; planned later-slice items are explicitly marked as planned, per the anti-ghost-feature rule.
+
+---
+
+# Plan: Epic #821 Slice 2 — trust grant/revoke CLI + install-time confirmation
+
+## Context
+
+- Problem: Remote bundles install `Trusted=false` but `StateStore.SetTrusted` has no caller outside tests, so a remote bundle's commands/hooks/MCP can never activate. Remote installs also give the user no chance to review declared executable surfaces before they land.
+- User impact: Trust is unreachable; remote install is a blind trust boundary crossing.
+- Constraints: Strict TDD. Local installs keep current behavior (no prompt). No zip sources (slice 3), no markdown commands (slice 4), no TUI trust flow (slice 5).
+
+## Scope
+
+- In scope:
+  - `internal/plugins/install.go`: split `Install` into `Stage` (fetch + symlink reject + validate into a private staging dir) and `StagedBundle.Promote`/`Discard`, so the CLI can review declared surfaces between validation and promotion. `Install` keeps its contract as Stage+Promote.
+  - `cmd/harnesscli/plugins.go`: `plugin trust <name>` / `plugin untrust <name>` over `StateStore.SetTrusted`; `plugin list` untrusted hint (`untrusted — commands/hooks/MCP inactive`); install prints declared surfaces and requires confirmation for remote sources (`--yes`/`-y` flag, interactive y/N prompt on a TTY, refusal otherwise); update re-prints changed surfaces and re-requires confirmation for remote sources.
+  - Swappable `stdinIsTerminal` seam mirroring the existing `stdin`/`stdout`/`stderr` test pattern; confirmation reads the existing `stdin` var.
+  - Docs: mark slice-2 items implemented in `docs/design/installable-plugin-bundles.md`; engineering-log entry; this plan.
+- Out of scope: zip sources, markdown commands, `/plugins` TUI panel changes, harnessd hot-reload (trust changes still activate at next daemon/TUI start).
+
+## Test Plan (TDD)
+
+- New failing tests first:
+  - `internal/plugins`: Stage leaves nothing promoted; Promote moves into `<name>/<version>`; Discard removes staging and is a no-op after Promote.
+  - CLI (`cmd/harnesscli/plugins_test.go`, git fixtures via `file://` remotes, skip without git):
+    - trust/untrust round-trip incl. `plugins.TrustedBundles` gating proof and list hint;
+    - trust on a non-installed name errors;
+    - remote install declined at the prompt leaves no state record and no files;
+    - remote install on a non-TTY without `--yes` refuses with a `--yes` hint;
+    - remote install with `--yes` and with an interactive `y` both succeed and print declared surfaces;
+    - update with unchanged surfaces needs no confirmation and preserves trust;
+    - update with changed surfaces re-requires confirmation; declined update leaves the old version intact and trusted; confirmed update preserves trust.
+- Existing tests to update: usage strings only if asserted (checked: not asserted).
+
+## Cross-Surface Impact Map
+
+- None. CLI + installer staging only; no provider/model flows, no server API, no TUI state.
+
+## Implementation Checklist
+
+- [x] Write failing tests first; watch them fail (`installer.Stage undefined`, `undefined: stdinIsTerminal`).
+- [x] Implement Stage/Promote/Discard in `internal/plugins`.
+- [x] Implement trust/untrust, list hint, install confirmation, update re-confirmation in the CLI.
+- [x] Update design doc planned-markers, plan, engineering log.
+- [x] `go test ./cmd/harnesscli/... ./internal/plugins/... -count=1` green; gofmt + go vet clean. **Green (28 packages ok).**
+- [x] Push `epic/821-plugin-system-s2`, open PR (no merge).
+
+## Slice 2 Verification Results
+
+- `GOCACHE=/tmp/go-build go test ./cmd/harnesscli/... ./internal/plugins/... -count=1` — PASS, all 28 packages `ok`.
+- `gofmt -l` on changed Go files — clean; `go vet ./cmd/harnesscli/ ./internal/plugins/` — clean.
+- Full-repo `./scripts/test-regression.sh` not re-run for this slice; slice-1 run established the pre-existing red baseline in `internal/harness/tools` (deterministic on main), `internal/provider/openai` and `internal/watcher` (flaky under full-suite load) — all unrelated to plugin code.
+
+## Risks and Mitigations
+
+- Risk: interactive prompt deadlocks in non-TTY contexts (scripts, CI).
+- Mitigation: prompt only when `stdinIsTerminal()`; otherwise refuse with a `--yes` hint. Tests pin all three paths.
+- Risk: declined install/update leaves residue.
+- Mitigation: staging dir lives under the plugin root with a `.install-` prefix and is discarded on decline; tests assert no state record and no files.
