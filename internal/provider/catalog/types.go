@@ -13,14 +13,18 @@ type ProviderEntry struct {
 	APIKeyEnv   string `json:"api_key_env"`
 	// APIKeyOptional marks providers (e.g. local Ollama/LM Studio servers) that
 	// do not require an API key to resolve or create a client.
-	APIKeyOptional bool              `json:"api_key_optional,omitempty"`
-	Protocol       string            `json:"protocol"`
-	Quirks         []string          `json:"quirks,omitempty"`
-	Models         map[string]Model  `json:"models"`
-	Aliases        map[string]string `json:"aliases,omitempty"`
-	// ModelsFrom mirrors models from another catalog provider at load time so
-	// subscription variants cannot silently drift from their metered peer.
-	ModelsFrom string `json:"models_from,omitempty"`
+	APIKeyOptional bool `json:"api_key_optional,omitempty"`
+	// TokenSourceRequired marks a remote provider whose optional static API key
+	// must be replaced by a runtime TokenSource (for subscription auth). It is
+	// deliberately distinct from anonymous local-server providers.
+	TokenSourceRequired bool     `json:"token_source_required,omitempty"`
+	Protocol            string   `json:"protocol"`
+	Quirks              []string `json:"quirks,omitempty"`
+	// ModelsFrom derives this provider's model metadata from another provider
+	// at load time, keeping mirrored billing routes in lockstep.
+	ModelsFrom string            `json:"models_from,omitempty"`
+	Models     map[string]Model  `json:"models"`
+	Aliases    map[string]string `json:"aliases,omitempty"`
 }
 
 // Model describes a single LLM model's capabilities and metadata.

@@ -173,6 +173,9 @@ func (r *ProviderRegistry) IsConfigured(providerName string) bool {
 	if !ok {
 		return false
 	}
+	if entry.TokenSourceRequired {
+		return false
+	}
 	if entry.APIKeyOptional && isLocalBaseURL(entry.BaseURL) {
 		return true
 	}
@@ -215,6 +218,9 @@ func (r *ProviderRegistry) GetClient(providerName string) (ProviderClient, error
 		apiKey = r.getenv(entry.APIKeyEnv)
 	}
 	if apiKey == "" && tokenSource == nil {
+		if entry.TokenSourceRequired {
+			return nil, fmt.Errorf("provider %q: subscription credential is not configured; run `codex login`, then `harnesscli auth codex login`", providerName)
+		}
 		if !entry.APIKeyOptional || !isLocalBaseURL(entry.BaseURL) {
 			if providerName == "kimi-subscription" {
 				return nil, fmt.Errorf("provider %q is not configured; run kimi-code login, then harnesscli auth kimi login", providerName)

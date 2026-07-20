@@ -442,6 +442,27 @@ func TestSetTokenSourceConfiguresProviderPropagatesToFactoryAndEvictsClient(t *t
 	}
 }
 
+func TestTokenSourceRequiredProviderIsUnconfiguredWithoutSource(t *testing.T) {
+	t.Parallel()
+	cat := &Catalog{CatalogVersion: "1", Providers: map[string]ProviderEntry{
+		"codex-subscription": {
+			BaseURL: "https://chatgpt.com/backend-api/codex", APIKeyOptional: true, TokenSourceRequired: true,
+			Models: map[string]Model{"gpt": {ContextWindow: 1}},
+		},
+	}}
+	reg := NewProviderRegistryWithEnv(cat, fakeGetenv(map[string]string{}))
+	if reg.IsConfigured("codex-subscription") {
+		t.Fatal("token-source-required provider is configured without a token source")
+	}
+	if _, err := reg.GetClient("codex-subscription"); err == nil {
+		t.Fatal("GetClient succeeded without a token source")
+	}
+	reg.SetTokenSource("codex-subscription", provider.StaticToken("fake-subscription-token"))
+	if !reg.IsConfigured("codex-subscription") {
+		t.Fatal("token source did not configure subscription provider")
+	}
+}
+
 func TestSetAPIKey_OverridesEnv(t *testing.T) {
 	t.Parallel()
 	cat := registryTestCatalog()
