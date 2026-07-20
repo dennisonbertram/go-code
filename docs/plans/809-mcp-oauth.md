@@ -1,4 +1,15 @@
-# Plan: MCP HTTP static headers and typed auth errors (epic #809, slice 1)
+# Plan: MCP OAuth login flow for remote servers (epic #809)
+
+## Slice 2: file-backed OAuth token store under `~/.harness/mcp/` (in implementation)
+
+- Goal: safe persistence for OAuth tokens, reusable by the flow (slice 3) and the transport (slice 4).
+- Changes: new `internal/mcp/tokens.go` — `Token` (issuer, access/refresh tokens, type, expiry, scopes), `TokenStore` with `Get(server)` / `Put(server, token)` / `Delete(server)`; one JSON file per server under `~/.harness/mcp/`, 0600 file / 0700 dir perms and atomic temp+rename writes mirroring `internal/provider/codex/store.go`; filename derived from the server name with `url.PathEscape` (traversal-safe, injective), recorded server name verified on read.
+- Expiry classification: `Get` returns the token (refresh token included) with an error wrapping `ErrTokenExpired` when expired, so callers refresh instead of failing; `ErrTokenNotFound` when absent; `ErrTokenCorrupt` for unreadable/mismatched files. Delete is idempotent.
+- Concurrency: store is mutex-guarded, safe for concurrent use.
+- Tests (TDD, temp-dir only, no writes outside injected dir): round-trip save/load, missing file, corrupt file (garbage/missing fields/server mismatch), permission bits via `os.Stat` (including pre-existing loose dir hardened to 0700), expiry classification (expired/future/zero/boundary via injected clock), overwrite, server-name sanitization, concurrent access under `-race`.
+- Acceptance: `go test ./internal/mcp/... -count=1` green.
+
+## Slice 1: MCP HTTP static headers and typed auth errors (implemented, PR #840)
 
 ## Context
 
@@ -45,7 +56,7 @@
 - [x] gofmt + go vet clean.
 - [x] Run `go test ./internal/mcp/... ./internal/config/... ./cmd/harnessd/... -count=1`.
 - [x] Update `docs/plans/INDEX.md`.
-- [ ] Commit, push `epic/809-mcp-oauth`, open PR (no merge).
+- [x] Commit, push `epic/809-mcp-oauth`, open PR (no merge). — PR #840, merged.
 
 ## Risks and Mitigations
 
