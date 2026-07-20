@@ -239,6 +239,13 @@ type APIKeySetMsg struct {
 	Key      string
 }
 
+// SubscriptionImportMsg reports the result of asking the local harnessd host
+// to import a vendor CLI credential. It never contains credential material.
+type SubscriptionImportMsg struct {
+	Provider string
+	Err      string
+}
+
 // ProfilesLoadedMsg carries the profile list fetched from GET /v1/profiles.
 type ProfilesLoadedMsg struct {
 	Entries []ProfileEntry

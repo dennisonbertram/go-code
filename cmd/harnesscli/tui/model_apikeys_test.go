@@ -1,6 +1,9 @@
 package tui_test
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -73,6 +76,69 @@ func TestKeysOverlay_ShowsCodexSubscriptionStatusWithoutEditingAPIKey(t *testing
 	m = m3.(tui.Model)
 	if m.APIKeyInputMode() {
 		t.Fatal("subscription row must not open API-key editing")
+	}
+}
+
+func TestKeysOverlay_ImportsSubscriptionAndRefreshesProviders(t *testing.T) {
+	postCalls := 0
+	getCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/v1/providers/codex-subscription/import-subscription":
+			postCalls++
+			body, _ := io.ReadAll(r.Body)
+			if len(body) != 0 {
+				t.Errorf("subscription import request must be bodyless, got %q", body)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodGet && r.URL.Path == "/v1/providers":
+			getCalls++
+			_, _ = w.Write([]byte(`{"providers":[{"name":"codex-subscription","configured":true,"auth_type":"subscription"}]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	m := tui.New(tui.TUIConfig{BaseURL: server.URL})
+	m = sendSlashCommand(m, "/keys")
+	m2, _ := m.Update(tui.ProvidersLoadedMsg{Providers: []tui.ProviderInfo{{Name: "codex-subscription", AuthType: "subscription"}}})
+	m = m2.(tui.Model)
+	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	m = m2.(tui.Model)
+	if cmd == nil {
+		t.Fatal("subscription import key must send an import request")
+	}
+	msg := cmd()
+	imported, ok := msg.(tui.SubscriptionImportMsg)
+	if !ok || imported.Err != "" || imported.Provider != "codex-subscription" {
+		t.Fatalf("import command result = %#v, want successful Codex import", msg)
+	}
+	if postCalls != 1 {
+		t.Fatalf("import POST calls = %d, want 1", postCalls)
+	}
+
+	m2, refreshCmd := m.Update(imported)
+	m = m2.(tui.Model)
+	if refreshCmd == nil {
+		t.Fatal("successful import must refetch providers")
+	}
+	if _, ok := refreshCmd().(tui.ProvidersLoadedMsg); !ok {
+		t.Fatalf("refresh command result = %T, want ProvidersLoadedMsg", refreshCmd())
+	}
+	if getCalls != 1 {
+		t.Fatalf("provider refresh GET calls = %d, want 1", getCalls)
+	}
+}
+
+func TestKeysOverlay_ImportKeyIgnoresAPIKeyProviders(t *testing.T) {
+	m := initModel(t, 80, 24)
+	m = sendSlashCommand(m, "/keys")
+	m2, _ := m.Update(tui.ProvidersLoadedMsg{Providers: []tui.ProviderInfo{{Name: "openai", AuthType: "api_key"}}})
+	m = m2.(tui.Model)
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'i'}})
+	if cmd != nil {
+		t.Fatal("import key must not fire for an API-key provider row")
 	}
 }
 

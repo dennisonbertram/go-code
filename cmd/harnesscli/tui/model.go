@@ -2342,6 +2342,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.apiKeyInput += string(msg.Runes)
 			}
 			return m, tea.Batch(cmds...)
+		case m.overlayActive && m.activeOverlay == "apikeys" && !m.apiKeyInputMode && msg.String() == "i":
+			if len(m.apiKeyProviders) > 0 {
+				provider := m.apiKeyProviders[m.apiKeyCursor]
+				if provider.AuthType == "subscription" {
+					return m, importSubscriptionCmd(m.config.BaseURL, provider.Name, m.config.APIKey)
+				}
+			}
+			return m, nil
 		case m.overlayActive && m.activeOverlay == "plugins":
 			if len(m.pluginBrowser.items) == 0 {
 				return m, tea.Batch(cmds...)
@@ -3400,6 +3408,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, fetchProvidersCmd(m.config.BaseURL, m.config.APIKey))
 		cmds = append(cmds, m.setStatusMsg("Key saved for "+msg.Provider))
 
+	case SubscriptionImportMsg:
+		if msg.Err != "" {
+			cmds = append(cmds, m.setStatusMsg(msg.Err))
+		} else {
+			cmds = append(cmds, fetchProvidersCmd(m.config.BaseURL, m.config.APIKey))
+		}
+
 	case statusTickMsg:
 		// Only clear if the message hasn't been replaced with a newer one.
 		if m.statusMsg != "" && time.Now().After(m.statusMsgExpiry) {
@@ -3911,7 +3926,7 @@ func (m Model) viewAPIKeysOverlay() string {
 		rows = append(rows, "  No providers available")
 	}
 
-	footer := lipgloss.NewStyle().Faint(true).Render(string('\u2191') + "/" + string('\u2193') + " navigate  enter edit/setup  esc close")
+	footer := lipgloss.NewStyle().Faint(true).Render(string('\u2191') + "/" + string('\u2193') + " navigate  enter edit/setup  i import subscription  esc close")
 
 	content := strings.Join(rows, "\n") + "\n\n" + footer
 

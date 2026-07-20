@@ -495,6 +495,35 @@ func setProviderKeyCmd(baseURL, provider, providerKey, harnessAPIKey string) tea
 	}
 }
 
+// importSubscriptionCmd triggers an import from vendor files on the harnessd
+// host. It deliberately sends no request body and never handles a token value.
+func importSubscriptionCmd(baseURL, provider, harnessAPIKey string) tea.Cmd {
+	return func() tea.Msg {
+		url := strings.TrimRight(baseURL, "/") + "/v1/providers/" + provider + "/import-subscription"
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, url, nil, harnessAPIKey)
+		if err != nil {
+			return SubscriptionImportMsg{Provider: provider, Err: "Could not start subscription import."}
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return SubscriptionImportMsg{Provider: provider, Err: "Could not reach harnessd to import the subscription."}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode == http.StatusNoContent || resp.StatusCode == http.StatusOK {
+			return SubscriptionImportMsg{Provider: provider}
+		}
+		var body struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err == nil && body.Error.Message != "" {
+			return SubscriptionImportMsg{Provider: provider, Err: body.Error.Message}
+		}
+		return SubscriptionImportMsg{Provider: provider, Err: "Subscription import failed."}
+	}
+}
+
 // profilesListResponse matches the JSON body returned by GET /v1/profiles.
 type profilesListResponse struct {
 	Profiles []struct {
