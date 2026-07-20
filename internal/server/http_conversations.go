@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"go-agent-harness/internal/harness"
 	"go-agent-harness/internal/store"
 )
@@ -173,6 +175,24 @@ func (s *Server) handleConversations(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.handleUndoConversation(w, r, parts[0])
+		return
+	}
+
+	// POST /v1/conversations/{id}/fork — duplicate the conversation with its full
+	// message history under a new ID (runs:write) (epic #816)
+	if len(parts) == 2 && parts[1] == "fork" {
+		if r.Method != http.MethodPost {
+			writeMethodNotAllowed(w, http.MethodPost)
+			return
+		}
+		if !hasScope(r.Context(), store.ScopeRunsWrite) {
+			writeScopeError(w, store.ScopeRunsWrite)
+			return
+		}
+		if s.blockConversationCrossTenant(w, r, parts[0]) {
+			return
+		}
+		s.handleForkConversation(w, r, parts[0])
 		return
 	}
 
@@ -516,6 +536,97 @@ func undoCountForStep(r *http.Request, store harness.ConversationStore, convID s
 		}
 	}
 	return count, nil
+}
+
+// handleForkConversation handles POST /v1/conversations/{id}/fork (epic #816).
+// It duplicates the source conversation — full message history included — under
+// a freshly minted conversation ID; afterwards the two conversations diverge
+// independently. Store-backed sources are forked at the store level so metadata
+// (workspace, tenant) is inherited; sources that exist only in the runner's
+// in-memory mirror are persisted via SaveConversation and stamped with the
+// source run's tenant. Response: {"conversation_id", "forked_from",
+// "message_count"}; 404 for an unknown source, 501 when no store is configured.
+func (s *Server) handleForkConversation(w http.ResponseWriter, r *http.Request, convID string) {
+	convStore := s.runner.GetConversationStore()
+	if convStore == nil {
+		writeError(w, http.StatusNotImplemented, "not_implemented", "conversation persistence is not configured")
+		return
+	}
+	ctx := r.Context()
+	newID := uuid.New().String()
+
+	owner, err := convStore.GetConversationOwner(ctx, convID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	if owner != nil {
+		// Store-backed source: fork at the store level to inherit metadata.
+		if _, err := convStore.ForkConversation(ctx, convID, newID); err != nil {
+			writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+			return
+		}
+		count := owner.MsgCount
+		// A live run may have mirrored newer turns than the store has
+		// persisted; refresh the fork with the in-memory view when it is
+		// ahead so a mid-run fork captures the latest turn.
+		if msgs, ok := s.runner.ConversationMessages(convID); ok && len(msgs) > count {
+			if err := convStore.SaveConversation(ctx, newID, msgs); err != nil {
+				writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+				return
+			}
+			count = len(msgs)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"conversation_id": newID,
+			"forked_from":     convID,
+			"message_count":   count,
+		})
+		return
+	}
+
+	// In-memory-only source (resolved via the runner's conversation mirror).
+	msgs, ok := s.runner.ConversationMessages(convID)
+	if !ok {
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("conversation %q not found", convID))
+		return
+	}
+	if err := convStore.SaveConversation(ctx, newID, msgs); err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+		return
+	}
+	s.inheritConversationTenant(r, convID, newID)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"conversation_id": newID,
+		"forked_from":     convID,
+		"message_count":   len(msgs),
+	})
+}
+
+// inheritConversationTenant copies the tenant stamp from the source
+// conversation's owning run onto a freshly forked conversation row, so the
+// copy of a tenant-owned conversation is not world-readable until the next
+// run on the fork stamps it. Best effort: the next persist re-stamps anyway.
+func (s *Server) inheritConversationTenant(r *http.Request, srcID, newID string) {
+	if s.runStore == nil {
+		return
+	}
+	runs, err := s.runStore.ListRuns(r.Context(), store.RunFilter{ConversationID: srcID})
+	if err != nil || len(runs) == 0 {
+		return
+	}
+	tenantID := runs[0].TenantID
+	if tenantID == "default" {
+		// Match the runner's normalisation: "default" is stored as "".
+		tenantID = ""
+	}
+	if tenantID == "" {
+		return
+	}
+	if convStore := s.runner.GetConversationStore(); convStore != nil {
+		_ = convStore.UpdateConversationMeta(r.Context(), newID, "", tenantID)
+	}
 }
 
 // handleConversationsCleanup handles POST /v1/conversations/cleanup.
