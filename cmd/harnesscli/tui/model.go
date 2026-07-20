@@ -1901,6 +1901,23 @@ func executeRewindCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	return []tea.Cmd{restoreRewindCmd(m.config.BaseURL, m.conversationID, cmd.Args[0], m.config.APIKey)}, false
 }
 
+// executeForkCommand implements /fork (epic #816): it asks the server to
+// duplicate the active conversation — full history included — under a new
+// conversation ID. The result arrives as ForkResultMsg, which switches the
+// model into the fork. No arguments are accepted.
+func executeForkCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
+	if len(cmd.Args) > 0 {
+		return []tea.Cmd{m.setStatusMsg("Usage: /fork (no arguments)")}, false
+	}
+	if m.conversationID == "" {
+		return []tea.Cmd{m.setStatusMsg("No active conversation to fork — send a message first")}, false
+	}
+	return []tea.Cmd{
+		m.setStatusMsg("Forking conversation..."),
+		forkConversationCmd(m.config.BaseURL, m.conversationID, m.config.APIKey),
+	}, false
+}
+
 func executeNewSessionCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.conversationID = ""
 	m.vp = viewport.New(m.width, m.layout.ViewportHeight)
@@ -3949,6 +3966,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.setStatusMsg("Rewind failed: "+msg.Err))
 		} else {
 			cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Rewind complete: %d files restored, %d messages truncated", msg.FilesRestored, msg.MessagesTruncated)))
+		}
+
+	case ForkResultMsg:
+		if msg.Err != "" {
+			// Stay in the current conversation on failure.
+			cmds = append(cmds, m.setStatusMsg("Fork failed: "+msg.Err))
+		} else {
+			// Register the fork so it appears in /sessions and survives restart.
+			if m.sessionStore != nil {
+				m.sessionStore.Add(StoredSessionEntry{
+					ID:        msg.NewID,
+					StartedAt: time.Now(),
+					Model:     m.selectedModel,
+					LastMsg:   "forked from " + msg.SrcID,
+				})
+				_ = m.sessionStore.Save()
+			}
+			// Switch into the fork. The transcript stays: the fork holds the
+			// same history, so there is nothing to re-fetch or clear. New turns
+			// land only in the fork from here on.
+			m.conversationID = msg.NewID
+			m.statusBar.SetTitle(m.sessionTitle())
+			cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Forked %s → %s; you are now in the fork", msg.SrcID, msg.NewID)))
 		}
 
 	case spinner.SpinnerTickMsg:

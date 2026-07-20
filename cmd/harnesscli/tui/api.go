@@ -915,6 +915,41 @@ func undoConversationCmd(baseURL, conversationID string, count int, apiKey strin
 	}
 }
 
+// forkConversationCmd forks the given conversation via
+// POST /v1/conversations/{id}/fork (epic #816). On success it emits
+// ForkResultMsg with the server-minted new conversation ID; on failure it
+// emits ForkResultMsg with Err set.
+func forkConversationCmd(baseURL, conversationID, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/conversations/" + url.PathEscape(conversationID) + "/fork"
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, endpoint, nil, apiKey)
+		if err != nil {
+			return ForkResultMsg{SrcID: conversationID, Err: err.Error()}
+		}
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return ForkResultMsg{SrcID: conversationID, Err: err.Error()}
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return ForkResultMsg{SrcID: conversationID, Err: "read response: " + err.Error()}
+		}
+		if resp.StatusCode != http.StatusOK {
+			return ForkResultMsg{SrcID: conversationID, Err: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))}
+		}
+		var payload struct {
+			ConversationID string `json:"conversation_id"`
+			ForkedFrom     string `json:"forked_from"`
+			MessageCount   int    `json:"message_count"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return ForkResultMsg{SrcID: conversationID, Err: "decode response: " + err.Error()}
+		}
+		return ForkResultMsg{SrcID: conversationID, NewID: payload.ConversationID, MessageCount: payload.MessageCount}
+	}
+}
+
 // sseEventsURL builds the SSE endpoint URL for a given run ID.
 func sseEventsURL(baseURL, runID string) string {
 	return strings.TrimRight(baseURL, "/") + "/v1/runs/" + runID + "/events"

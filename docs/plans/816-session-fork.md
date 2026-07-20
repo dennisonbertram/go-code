@@ -1,6 +1,37 @@
 # Plan: /fork — fork live conversations (epic #816)
 
-## Slice 2: `POST /v1/conversations/{id}/fork` endpoint (branch epic/816-session-fork-s2)
+## Slice 3: `feat(harnesscli): /fork TUI command` (branch epic/816-session-fork-s3)
+
+### Context
+
+- Problem: the fork endpoint (slice 2) exists but users can only reach it by hand; kimi-code parity needs a `/fork` slash command that forks the live conversation and drops the user into the copy.
+- User impact: explore an alternative direction mid-task without abandoning or polluting the original session.
+- Constraints: strict TDD; mirror the rewind command wiring (registry entry → `Execute` → `tea.Cmd` in api.go → result msg handled in `Update`).
+
+### Scope
+
+- In scope:
+  - `fork` entry in `builtinCommandEntries` (`cmd/harnesscli/tui/cmd_parser.go`), no arguments, help description.
+  - `forkConversationCmd` in `cmd/harnesscli/tui/api.go` (POST, `url.PathEscape`d ID, mirrors `fetchConversationMessagesCmd`); `ForkResultMsg` in `messages.go`.
+  - `executeForkCommand` + `case ForkResultMsg` in `model.go`: on success add fork to `SessionStore` (`LastMsg: "forked from <src>"`), switch `m.conversationID`, status line `Forked <src> → <new>; you are now in the fork`; on error render the server error and stay.
+  - Test-list updates: `TestTUI364_RegistryCompleteness` knownCommands, `TestBuildCommandRegistry_FullBuiltinSet` wantCommands.
+- Out of scope: docs site pages (slice 4).
+
+### Test Plan (TDD)
+
+- `cmd/harnesscli/tui/fork_api_test.go` (internal): POST path + method + escaped ID; 200 decode; non-200 → Err; network error → Err (mirrors `rewind_api_test.go`).
+- `cmd/harnesscli/tui/fork_test.go` (external): registered + slash-completion; `/fork` with no active conversation → hint; success → conversationID switched, session-store entry with fork hint, status names both IDs; error → conversation unchanged.
+- Existing list tests updated for the new command.
+
+### Checklist
+
+- [x] Failing tests first (unknown command / undefined msg type).
+- [x] Implementation green; `go test ./cmd/harnesscli/... -count=1` green.
+- [x] gofmt/vet clean; commit, push, PR.
+
+---
+
+## Slice 2: `POST /v1/conversations/{id}/fork` endpoint (merged via PR #864)
 
 ### Context
 

@@ -577,6 +577,7 @@ func TestBuildCommandRegistry_FullBuiltinSet(t *testing.T) {
 		"clear",
 		"context",
 		"export",
+		"fork",
 		"help",
 		"keys",
 		"model",
