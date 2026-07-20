@@ -557,7 +557,13 @@ Use this file to document systems, interfaces, and interactions as they are buil
   - workflow or network execution failures are persisted as terminal failed runs with step-level error text
 - Operational notes:
   - workflow and network routes are now real but remain intentionally conservative in v1
-  - sequential network execution is implemented; parallel fan-out remains deferred
+- sequential network execution is implemented; parallel fan-out remains deferred
+
+## 2026-07-20 (Live model discovery — Epic #849)
+
+- System/component: `internal/provider/catalog`, OpenAI/Anthropic provider clients, and `harnessd` startup.
+- Configured OpenRouter, OpenAI, Anthropic, and DeepSeek providers refresh their model lists on a five-minute in-memory TTL using their existing credentials.
+- A failed initial refresh preserves static catalog models; a failed later refresh serves stale cached models. Static metadata, including pricing and model guidance, wins over sparse live records.
 # 2026-07-19 — Plugin bundle subsystem
 
 - `internal/plugins` owns bundle validation, safe staged installation, persisted lifecycle state, marketplace index parsing, and discovery. `harnessd` loads enabled skills/commands and gates agents/MCP/hooks on trust.

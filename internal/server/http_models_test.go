@@ -13,12 +13,12 @@ import (
 )
 
 type testOpenRouterDiscovery struct {
-	models []catalog.OpenRouterModel
+	models []catalog.DiscoveredModel
 	err    error
 }
 
-func (d testOpenRouterDiscovery) Models(context.Context) ([]catalog.OpenRouterModel, error) {
-	out := make([]catalog.OpenRouterModel, len(d.models))
+func (d testOpenRouterDiscovery) Models(context.Context) ([]catalog.DiscoveredModel, error) {
+	out := make([]catalog.DiscoveredModel, len(d.models))
 	copy(out, d.models)
 	return out, d.err
 }
@@ -248,8 +248,8 @@ func TestModelsEndpointIncludesDiscoveredOpenRouterModels(t *testing.T) {
 		},
 	}
 	reg := catalog.NewProviderRegistry(cat)
-	reg.SetOpenRouterDiscovery(testOpenRouterDiscovery{
-		models: []catalog.OpenRouterModel{
+	reg.SetDiscovery("openrouter", testOpenRouterDiscovery{
+		models: []catalog.DiscoveredModel{
 			{ID: "openai/gpt-4.1-mini", Name: "Live GPT-4.1 Mini", ContextWindow: 999999},
 			{ID: "moonshotai/kimi-k2.5", Name: "Kimi K2.5", ContextWindow: 262144},
 		},

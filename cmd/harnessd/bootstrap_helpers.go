@@ -117,11 +117,7 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 	}
 
 	if bootstrap.providerRegistry != nil {
-		if _, ok := bootstrap.modelCatalog.Providers["openrouter"]; ok {
-			bootstrap.providerRegistry.SetOpenRouterDiscovery(catalog.NewOpenRouterDiscovery(catalog.OpenRouterDiscoveryOptions{
-				TTL: 5 * time.Minute,
-			}))
-		}
+		registerModelDiscoverers(bootstrap.providerRegistry)
 		bootstrap.providerRegistry.SetClientFactory(func(apiKey, baseURL, providerName string) (catalog.ProviderClient, error) {
 			if providerName == "anthropic" {
 				return anthropic.NewClient(anthropic.Config{
@@ -174,6 +170,28 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 	}
 
 	return bootstrap, nil
+}
+
+func registerModelDiscoverers(registry *catalog.ProviderRegistry) {
+	for _, providerName := range []string{"openrouter", "openai", "anthropic", "deepseek"} {
+		if !registry.IsConfigured(providerName) {
+			continue
+		}
+		apiKey, baseURL, ok := registry.DiscoveryCredentials(providerName)
+		if !ok {
+			continue
+		}
+		switch providerName {
+		case "openrouter":
+			registry.SetDiscovery(providerName, catalog.NewDiscovery(catalog.DiscoveryOptions{TTL: 5 * time.Minute}))
+		case "openai":
+			registry.SetDiscovery(providerName, openai.NewModelDiscovery(openai.Config{APIKey: apiKey, BaseURL: baseURL}))
+		case "anthropic":
+			registry.SetDiscovery(providerName, anthropic.NewModelDiscovery(anthropic.Config{APIKey: apiKey, BaseURL: baseURL}))
+		case "deepseek":
+			registry.SetDiscovery(providerName, openai.NewDeepSeekModelDiscovery(openai.Config{APIKey: apiKey, BaseURL: baseURL, ProviderName: providerName}))
+		}
+	}
 }
 
 type cronBootstrap struct {
