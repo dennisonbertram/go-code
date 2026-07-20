@@ -200,6 +200,14 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeTitleCommand,
 		},
 		{
+			Name:        "init",
+			Description: "Generate an AGENTS.md for this workspace",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeInitCommand,
+		},
+		{
 			Name:        "rewind",
 			Description: "Choose and confirm a destructive session rewind",
 			Handler:     func(cmd Command) CommandResult { return CommandResult{Status: CmdOK} },

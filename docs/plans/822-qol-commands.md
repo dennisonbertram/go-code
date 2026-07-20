@@ -1,6 +1,72 @@
-# Plan: /title — name sessions and show the title in statusbar and picker
+# Plan: quality-of-life commands — epic #822 slices
 
-Epic: #822 (slice 1 of 5). Parent: #803. Branch: `epic/822-qol-commands`.
+Epic: #822. Parent: #803. Slice 1 branch: `epic/822-qol-commands` (merged, PR #842). Slice 2 branch: `epic/822-qol-commands-s2`.
+
+---
+
+# Slice 2: /init — generate AGENTS.md for the current workspace
+
+## Context
+
+- Problem: `internal/systemprompt` auto-injects `<workspace>/AGENTS.md` into the system prompt when present (`readAgentsMd`, engine.go), but nothing helps users create one.
+- User impact: `/init` produces a starter AGENTS.md via a normal harness run; the next run's system prompt contains it.
+- Constraints: write happens client-side after the run completes; overwrite requires explicit confirm; strict TDD.
+
+## Scope
+
+- In scope:
+  - `init` command in `builtinCommandEntries()` (`cmd_parser.go`).
+  - New `cmd/harnesscli/tui/init_agents.go`: fixed generation prompt (`initAgentsPrompt`), `executeInitCommand`, `extractAgentsMarkdown` (unwrap a single outer ``` fence), and the completion write path.
+  - Model state `pendingInitAgentsMd`; on `RunCompletedMsg` with the flag set, write `<workspace>/AGENTS.md` (workspace = `m.config.Workspace`, falling back to cwd like `resolveWorkspacePath`); on `RunFailedMsg`, clear the flag without writing.
+  - Overwrite guard: existing AGENTS.md + `/init` → hint to run `/init confirm`; `/init confirm` proceeds. Mirrors the `/rewind <id> confirm` approval pattern.
+  - `/init` refused while a run is active (avoids mixing the assistant-text accumulator).
+  - Docs: one row in `website/docs/cli/tui.md`, rows in `docs/ux-paths.md`, this plan.
+- Out of scope: server changes; other epic slices (`/add-dir`, `/feedback`, `/upgrade`).
+
+## Documentation Contract
+
+- Feature status: `implemented`
+- Public docs affected: `website/docs/cli/tui.md`, `docs/ux-paths.md`
+- Spec docs to update before code: none (epic #822 body is the contract)
+- Implementation notes to add after code: none required
+
+## Test Plan (TDD)
+
+- New failing tests to add first (`cmd/harnesscli/tui/init_agents_test.go`):
+  - `/init` starts a run carrying the generation prompt (observed via transcript), sets status, and writes `<workspace>/AGENTS.md` from the assistant markdown on completion.
+  - Existing AGENTS.md + `/init` → no run, file untouched, hint message. `/init confirm` → run proceeds, file overwritten on completion.
+  - `/init` while a run is active → refused; completion of the other run writes nothing.
+  - Empty/fence-only assistant output → no file written. Run failure → no file, flag cleared.
+  - `extractAgentsMarkdown` table: plain passthrough, ```markdown unwrap, ``` unwrap, unterminated fence, empty.
+  - Written file is picked up by `internal/systemprompt` (`NewFileEngine` + `Resolve` on a temp fixture; AGENTS_MD section contains the content).
+  - Registration: registry + slash-complete (`/in`).
+- Existing tests to update: `TestTUI364_RegistryCompleteness` known-commands list (add `init`).
+- Regression tests required: none beyond the above (additive change).
+
+## Cross-Surface Impact Map
+
+- None required: no provider/model flow, gateway, catalog, API-key, or server changes. The run uses the existing `startRunCmd` path unchanged.
+
+## Implementation Checklist
+
+- [x] Define acceptance criteria in tests (acceptance: repo without AGENTS.md → `/init` writes a plausible file; next run's prompt contains it — covered by the systemprompt integration test).
+- [x] Write failing tests first.
+- [x] Implement minimal code changes.
+- [x] Update docs (`tui.md`, `ux-paths.md`, plan).
+- [x] Run `go test ./cmd/harnesscli/... -count=1`; gofmt + go vet clean.
+- [ ] Push branch, open PR (no merge).
+
+## Risks and Mitigations
+
+- Risk: model wraps the markdown in ``` fences → `extractAgentsMarkdown` strips a single outer fence; fence-only/empty output is treated as failure and nothing is written.
+- Risk: concurrent run mixing up `lastAssistantText` → `/init` refused while `runActive`.
+- Risk: tests writing outside temp dirs → every test sets `cfg.Workspace = t.TempDir()` (and HOME where the store matters).
+
+---
+
+# Slice 1: /title — name sessions and show the title in statusbar and picker
+
+Status: **implemented and merged** (PR #842). Original slice-1 plan below for reference.
 
 ## Context
 
