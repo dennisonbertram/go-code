@@ -250,3 +250,100 @@ Just instructions, no placeholders.
 		t.Errorf("expected no fallback append for empty args, got: %q", result)
 	}
 }
+
+func TestResolverResolveSkill_NamedArgumentsAcceptance(t *testing.T) {
+	dir := t.TempDir()
+	content := `---
+name: x
+description: "Acceptance skill"
+version: 1
+arguments: [target, env]
+---
+Deploy $target to $env. Raw: $ARGUMENTS
+`
+	writeSkillFile(t, dir, "x", content)
+
+	reg := NewRegistry()
+	loader := NewLoader(LoaderConfig{GlobalDir: dir})
+	if err := reg.Load(loader); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := NewResolver(reg)
+	result, err := resolver.ResolveSkill(context.Background(), "x", "prod eu", "/ws")
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	// Epic acceptance: arguments: [target, env] invoked as "prod eu" expands
+	// $target -> prod and $env -> eu.
+	if !strings.Contains(result, "Deploy prod to eu.") {
+		t.Errorf("expected named expansion, got: %q", result)
+	}
+	if !strings.Contains(result, "Raw: prod eu") {
+		t.Errorf("expected $ARGUMENTS intact, got: %q", result)
+	}
+	if strings.Contains(result, "ARGUMENTS: prod eu") {
+		t.Errorf("expected no fallback append when named placeholders used, got: %q", result)
+	}
+}
+
+func TestResolverResolveSkill_NamedArgumentsUnboundExpandsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	content := `---
+name: partial
+description: "Partial binding skill"
+version: 1
+arguments: [target, env]
+---
+Deploy $target to [$env].
+`
+	writeSkillFile(t, dir, "partial", content)
+
+	reg := NewRegistry()
+	loader := NewLoader(LoaderConfig{GlobalDir: dir})
+	if err := reg.Load(loader); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := NewResolver(reg)
+	result, err := resolver.ResolveSkill(context.Background(), "partial", "prod", "/ws")
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	if !strings.Contains(result, "Deploy prod to [].") {
+		t.Errorf("expected unbound $env to expand empty, got: %q", result)
+	}
+}
+
+func TestResolverResolveSkill_DeclaredButUnusedArgumentsKeepFallback(t *testing.T) {
+	dir := t.TempDir()
+	content := `---
+name: unused
+description: "Declared but unused args skill"
+version: 1
+arguments: [target, env]
+---
+Plain instructions with no references.
+`
+	writeSkillFile(t, dir, "unused", content)
+
+	reg := NewRegistry()
+	loader := NewLoader(LoaderConfig{GlobalDir: dir})
+	if err := reg.Load(loader); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := NewResolver(reg)
+	result, err := resolver.ResolveSkill(context.Background(), "unused", "prod eu", "/ws")
+	if err != nil {
+		t.Fatalf("error = %v", err)
+	}
+
+	// Body references no argument placeholder even though names are declared:
+	// the ARGUMENTS fallback still fires.
+	if !strings.HasSuffix(result, "ARGUMENTS: prod eu") {
+		t.Errorf("expected fallback append, got: %q", result)
+	}
+}

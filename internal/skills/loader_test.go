@@ -3,6 +3,7 @@ package skills
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -575,5 +576,93 @@ func TestWriteVerification_MissingFile(t *testing.T) {
 	err := WriteVerification("/nonexistent/path/SKILL.md", "2025-01-15T12:00:00Z", "agent")
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
+	}
+}
+
+func TestLoaderLoad_ArgumentsField(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillFile(t, dir, "deploy", `---
+name: deploy
+description: "Deploy skill"
+version: 1
+arguments: [target, env]
+---
+Deploy $target to $env.
+`)
+
+	loader := NewLoader(LoaderConfig{GlobalDir: dir})
+	skills, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(skills) != 1 {
+		t.Fatalf("Load() returned %d skills, want 1", len(skills))
+	}
+	want := []string{"target", "env"}
+	got := skills[0].Arguments
+	if len(got) != len(want) {
+		t.Fatalf("Arguments = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Arguments[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestLoaderLoad_ArgumentsFieldNoDeclaration(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillFile(t, dir, "my-skill", validSkillMD)
+
+	loader := NewLoader(LoaderConfig{GlobalDir: dir})
+	skills, err := loader.Load()
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(skills[0].Arguments) != 0 {
+		t.Errorf("expected no declared arguments, got %v", skills[0].Arguments)
+	}
+}
+
+func TestLoaderLoad_ArgumentsFieldInvalid(t *testing.T) {
+	tests := []struct {
+		name        string
+		arguments   string
+		wantErrPart string
+	}{
+		{"bad identifier hyphen", "[foo-bar]", `"foo-bar"`},
+		{"bad identifier space", `["foo bar"]`, `"foo bar"`},
+		{"numeric name", "[123]", `"123"`},
+		{"numeric zero", "[0]", `"0"`},
+		{"reserved ARGUMENTS", "[ARGUMENTS]", `"ARGUMENTS"`},
+		{"reserved WORKSPACE", "[WORKSPACE]", `"WORKSPACE"`},
+		{"reserved SKILL_DIR", "[SKILL_DIR]", `"SKILL_DIR"`},
+		{"duplicate name", "[target, env, target]", `"target"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSkillFile(t, dir, "bad", `---
+name: bad
+description: "Bad skill"
+version: 1
+arguments: `+tt.arguments+`
+---
+Body.
+`)
+
+			loader := NewLoader(LoaderConfig{GlobalDir: dir})
+			_, err := loader.Load()
+			if err == nil {
+				t.Fatalf("expected load error for arguments %s, got nil", tt.arguments)
+			}
+			if !strings.Contains(err.Error(), "arguments") {
+				t.Errorf("error should mention the arguments field, got: %v", err)
+			}
+			if !strings.Contains(err.Error(), tt.wantErrPart) {
+				t.Errorf("error should name the offending entry %s, got: %v", tt.wantErrPart, err)
+			}
+		})
 	}
 }

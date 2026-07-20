@@ -535,3 +535,135 @@ func TestAutoInvokeHook_AutoInvokeFallbackAppendsMessage(t *testing.T) {
 		t.Errorf("expected content %q, got %q", want, activation.Content)
 	}
 }
+
+func TestBuildVars_NamedArguments(t *testing.T) {
+	skill := &Skill{
+		FilePath:  "/skills/deploy/SKILL.md",
+		Arguments: []string{"target", "env"},
+	}
+
+	vars := buildVars(skill, "prod eu", "")
+
+	tests := []struct {
+		key  string
+		want string
+	}{
+		{"$target", "prod"}, // names bind to tokens in declaration order
+		{"$env", "eu"},
+		{"$0", "prod"}, // positional bindings unchanged
+		{"$1", "eu"},
+		{"$ARGUMENTS", "prod eu"},
+	}
+
+	for _, tt := range tests {
+		got := vars[tt.key]
+		if got != tt.want {
+			t.Errorf("buildVars[%s] = %q, want %q", tt.key, got, tt.want)
+		}
+	}
+}
+
+func TestBuildVars_NamedArgumentsUnbound(t *testing.T) {
+	skill := &Skill{
+		FilePath:  "/skills/deploy/SKILL.md",
+		Arguments: []string{"target", "env"},
+	}
+
+	vars := buildVars(skill, "prod", "")
+
+	if vars["$target"] != "prod" {
+		t.Errorf("buildVars[$target] = %q, want %q", vars["$target"], "prod")
+	}
+	if vars["$env"] != "" {
+		t.Errorf("unbound name should expand empty, got %q", vars["$env"])
+	}
+}
+
+func TestBuildVars_NamedArgumentsQuotedToken(t *testing.T) {
+	skill := &Skill{
+		FilePath:  "/skills/deploy/SKILL.md",
+		Arguments: []string{"target", "env"},
+	}
+
+	vars := buildVars(skill, `"staging eu" fast`, "")
+
+	if vars["$target"] != "staging eu" {
+		t.Errorf("buildVars[$target] = %q, want %q", vars["$target"], "staging eu")
+	}
+	if vars["$env"] != "fast" {
+		t.Errorf("buildVars[$env] = %q, want %q", vars["$env"], "fast")
+	}
+}
+
+func TestAutoInvokeHook_NamedArguments(t *testing.T) {
+	reg := NewRegistry()
+	reg.skills["deploy"] = &Skill{
+		Name:       "deploy",
+		Body:       "Deploy $target to $env.",
+		FilePath:   "/skills/deploy/SKILL.md",
+		Arguments:  []string{"target", "env"},
+		AutoInvoke: true,
+		Context:    ContextConversation,
+	}
+
+	hook := AutoInvokeHook(reg)
+	activation := hook("/deploy prod eu")
+
+	if activation == nil {
+		t.Fatal("expected non-nil activation")
+	}
+	want := "Deploy prod to eu."
+	if activation.Content != want {
+		t.Errorf("expected content %q, got %q", want, activation.Content)
+	}
+}
+
+func TestAutoInvokeHook_NamedArgumentSuppressesFallback(t *testing.T) {
+	reg := NewRegistry()
+	reg.skills["deploy"] = &Skill{
+		Name:       "deploy",
+		Body:       "Deploy $target with default settings.",
+		FilePath:   "/skills/deploy/SKILL.md",
+		Arguments:  []string{"target", "env"},
+		AutoInvoke: true,
+		Context:    ContextConversation,
+	}
+
+	hook := AutoInvokeHook(reg)
+	activation := hook("/deploy prod eu")
+
+	if activation == nil {
+		t.Fatal("expected non-nil activation")
+	}
+	// $target is a declared named argument: body references an argument
+	// placeholder, so no ARGUMENTS: fallback line is appended.
+	want := "Deploy prod with default settings."
+	if activation.Content != want {
+		t.Errorf("expected content %q (no fallback append), got %q", want, activation.Content)
+	}
+}
+
+func TestAutoInvokeHook_UndeclaredDollarNameStaysLiteral(t *testing.T) {
+	reg := NewRegistry()
+	reg.skills["deploy"] = &Skill{
+		Name:       "deploy",
+		Body:       "Home is $HOME. Deploy $target to $targets.",
+		FilePath:   "/skills/deploy/SKILL.md",
+		Arguments:  []string{"target"},
+		AutoInvoke: true,
+		Context:    ContextConversation,
+	}
+
+	hook := AutoInvokeHook(reg)
+	activation := hook("/deploy prod")
+
+	if activation == nil {
+		t.Fatal("expected non-nil activation")
+	}
+	// $HOME and $targets are not declared: they stay literal (no prefix
+	// clobbering of $targets by $target). Only $target expands.
+	want := "Home is $HOME. Deploy prod to $targets."
+	if activation.Content != want {
+		t.Errorf("expected content %q, got %q", want, activation.Content)
+	}
+}

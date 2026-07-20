@@ -12,6 +12,43 @@ import (
 
 var kebabCaseRe = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
 
+// argumentNameRe defines the identifier shape for named arguments declared in
+// the SKILL.md frontmatter `arguments` field.
+var argumentNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// numericNameRe matches argument names made only of digits; those collide
+// with positional placeholders ($0..$n) and are rejected.
+var numericNameRe = regexp.MustCompile(`^\d+$`)
+
+// reservedArgumentNames cannot be declared as named arguments because they
+// are expansion variables provided by the runtime.
+var reservedArgumentNames = map[string]bool{
+	"ARGUMENTS": true,
+	"WORKSPACE": true,
+	"SKILL_DIR": true,
+}
+
+// validateArgumentNames validates the frontmatter `arguments` declaration.
+// Every name must be an identifier, must not be numeric or reserved, and must
+// not be declared twice.
+func validateArgumentNames(names []string) error {
+	seen := make(map[string]bool, len(names))
+	for _, name := range names {
+		switch {
+		case numericNameRe.MatchString(name):
+			return fmt.Errorf("argument name %q is numeric; positional placeholders reserve $<digits>", name)
+		case !argumentNameRe.MatchString(name):
+			return fmt.Errorf("argument name %q is not a valid identifier (must match [A-Za-z_][A-Za-z0-9_]*)", name)
+		case reservedArgumentNames[name]:
+			return fmt.Errorf("argument name %q is reserved", name)
+		case seen[name]:
+			return fmt.Errorf("argument name %q is declared twice", name)
+		}
+		seen[name] = true
+	}
+	return nil
+}
+
 // Loader discovers and parses SKILL.md files from configured directories.
 type Loader struct {
 	config LoaderConfig
@@ -136,6 +173,10 @@ func parseSkillFile(path, dirName string, source SkillSource) (Skill, error) {
 
 	triggers := ExtractTriggers(meta.Description)
 
+	if err := validateArgumentNames(meta.Arguments); err != nil {
+		return Skill{}, fmt.Errorf("invalid arguments field: %w", err)
+	}
+
 	return Skill{
 		Name:         meta.Name,
 		Description:  meta.Description,
@@ -145,6 +186,7 @@ func parseSkillFile(path, dirName string, source SkillSource) (Skill, error) {
 		AutoInvoke:   autoInvoke,
 		AllowedTools: meta.AllowedTools,
 		ArgumentHint: meta.ArgumentHint,
+		Arguments:    meta.Arguments,
 		Source:       source,
 		Triggers:     triggers,
 		Context:      skillContext,
