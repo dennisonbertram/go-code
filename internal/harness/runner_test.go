@@ -1387,7 +1387,7 @@ func TestRunnerRoutesDynamicOpenRouterSlugViaRegistry(t *testing.T) {
 		return ""
 	})
 	reg.SetOpenRouterDiscovery(runnerTestOpenRouterDiscovery{
-		models: []catalog.OpenRouterModel{
+		models: []catalog.DiscoveredModel{
 			{ID: "moonshotai/kimi-k2.5", Name: "Kimi K2.5", ContextWindow: 262144},
 		},
 	})
@@ -1451,12 +1451,12 @@ func TestRunnerRoutesDynamicOpenRouterSlugViaRegistry(t *testing.T) {
 }
 
 type runnerTestOpenRouterDiscovery struct {
-	models []catalog.OpenRouterModel
+	models []catalog.DiscoveredModel
 	err    error
 }
 
-func (d runnerTestOpenRouterDiscovery) Models(context.Context) ([]catalog.OpenRouterModel, error) {
-	out := make([]catalog.OpenRouterModel, len(d.models))
+func (d runnerTestOpenRouterDiscovery) Models(context.Context) ([]catalog.DiscoveredModel, error) {
+	out := make([]catalog.DiscoveredModel, len(d.models))
 	copy(out, d.models)
 	return out, d.err
 }

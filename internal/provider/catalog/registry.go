@@ -26,7 +26,7 @@ type ProviderRegistry struct {
 	overrideKeys  map[string]string
 	getenv        func(string) string
 	clientFactory ClientFactory
-	openRouter    OpenRouterModelDiscoverer
+	openRouter    ModelDiscoverer
 }
 
 // NewProviderRegistry creates a registry that uses os.Getenv for API key lookup.
@@ -60,7 +60,7 @@ func (r *ProviderRegistry) SetClientFactory(factory ClientFactory) {
 
 // SetOpenRouterDiscovery sets the live OpenRouter model discoverer used for
 // additive model resolution and merged model listing.
-func (r *ProviderRegistry) SetOpenRouterDiscovery(discoverer OpenRouterModelDiscoverer) {
+func (r *ProviderRegistry) SetOpenRouterDiscovery(discoverer ModelDiscoverer) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.openRouter = discoverer
@@ -316,7 +316,7 @@ func (r *ProviderRegistry) effectiveCatalog(ctx context.Context) *Catalog {
 	return clone
 }
 
-func mergeOpenRouterProvider(static ProviderEntry, discovered []OpenRouterModel) ProviderEntry {
+func mergeOpenRouterProvider(static ProviderEntry, discovered []DiscoveredModel) ProviderEntry {
 	merged := cloneProviderEntry(static)
 	if merged.Models == nil {
 		merged.Models = make(map[string]Model, len(discovered))
@@ -529,7 +529,7 @@ func matchesProviderPrefix(prefix, provider string) bool {
 	// Known OpenRouter prefix aliases for common providers.
 	knownAliases := map[string]string{
 		"x-ai":       "xai",
-		"meta-llama": "groq",    // meta-llama models are often routed via groq
+		"meta-llama": "groq", // meta-llama models are often routed via groq
 		"moonshotai": "kimi",
 		"google":     "gemini",
 	}

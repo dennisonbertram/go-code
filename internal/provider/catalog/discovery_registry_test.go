@@ -6,12 +6,12 @@ import (
 )
 
 type stubOpenRouterDiscovery struct {
-	models []OpenRouterModel
+	models []DiscoveredModel
 	err    error
 }
 
-func (s stubOpenRouterDiscovery) Models(context.Context) ([]OpenRouterModel, error) {
-	out := make([]OpenRouterModel, len(s.models))
+func (s stubOpenRouterDiscovery) Models(context.Context) ([]DiscoveredModel, error) {
+	out := make([]DiscoveredModel, len(s.models))
 	copy(out, s.models)
 	return out, s.err
 }
@@ -36,7 +36,7 @@ func TestProviderRegistryResolveProviderUsesOpenRouterDiscovery(t *testing.T) {
 
 	reg := NewProviderRegistry(cat)
 	reg.SetOpenRouterDiscovery(stubOpenRouterDiscovery{
-		models: []OpenRouterModel{
+		models: []DiscoveredModel{
 			{ID: "moonshotai/kimi-k2.5", Name: "Kimi K2.5", ContextWindow: 262144},
 		},
 	})
@@ -89,7 +89,7 @@ func TestProviderRegistryListModelsMergesStaticAndOpenRouterDiscovery(t *testing
 
 	reg := NewProviderRegistry(cat)
 	reg.SetOpenRouterDiscovery(stubOpenRouterDiscovery{
-		models: []OpenRouterModel{
+		models: []DiscoveredModel{
 			{ID: "openai/gpt-4.1-mini", Name: "Live GPT-4.1 Mini", ContextWindow: 999999},
 			{ID: "moonshotai/kimi-k2.5", Name: "Kimi K2.5", ContextWindow: 262144},
 		},
