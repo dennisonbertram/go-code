@@ -2,16 +2,16 @@ package main
 
 import (
 	"bytes"
+	"math/rand"
 	"os"
 	"testing"
-	"math/rand"
 )
 
 func TestWALAppendReadAndCorruption(t *testing.T) {
 	const (
-		walPath = "testwal.log"
+		walPath    = "testwal.log"
 		entryCount = 10000
-		entrySize = 64
+		entrySize  = 64
 	)
 	defer os.Remove(walPath)
 	w, err := NewWAL(walPath)

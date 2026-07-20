@@ -169,13 +169,13 @@ type MessageForEstimate struct {
 // for inclusion in SSE event payloads.
 func SnapshotToPayload(s WindowSnapshot) map[string]any {
 	return map[string]any{
-		"step":                    s.Step,
+		"step":                     s.Step,
 		"provider_reported_tokens": s.ProviderReportedTokens,
-		"provider_reported":       s.ProviderReported,
-		"estimated_total_tokens":  s.EstimatedTotalTokens,
-		"max_context_tokens":      s.MaxContextTokens,
-		"usage_ratio":             s.UsageRatio,
-		"headroom_tokens":         s.HeadroomTokens,
+		"provider_reported":        s.ProviderReported,
+		"estimated_total_tokens":   s.EstimatedTotalTokens,
+		"max_context_tokens":       s.MaxContextTokens,
+		"usage_ratio":              s.UsageRatio,
+		"headroom_tokens":          s.HeadroomTokens,
 		"breakdown": map[string]any{
 			"system_prompt_tokens": s.Breakdown.SystemPromptTokens,
 			"conversation_tokens":  s.Breakdown.ConversationTokens,

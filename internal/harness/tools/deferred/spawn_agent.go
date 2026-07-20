@@ -284,9 +284,9 @@ Step budget: the child defaults to 30 steps. Provide max_steps to override.`
 // It is parsed by spawn_agent to extract the child's result. Defined here to
 // avoid a circular import with the deferred package that owns TaskCompleteTool.
 type TaskCompleteResultPayload struct {
-	Status   string                  `json:"status"`
-	Summary  string                  `json:"summary"`
-	Findings []TaskCompleteFinding   `json:"findings,omitempty"`
+	Status   string                `json:"status"`
+	Summary  string                `json:"summary"`
+	Findings []TaskCompleteFinding `json:"findings,omitempty"`
 }
 
 // TaskCompleteFinding is a single structured finding from a child agent.

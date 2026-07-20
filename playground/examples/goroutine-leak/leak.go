@@ -20,7 +20,7 @@ func main() {
 	for i := 0; i < 10; i++ {
 		startWorker()
 	}
-	time.Sleep(10*time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 	after := runtime.NumGoroutine()
 	fmt.Printf("before=%d after=%d leaked=%d\n", before, after, after-before)
 }

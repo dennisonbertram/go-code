@@ -33,9 +33,9 @@ type fakeRunner struct {
 	startFn func(prompt string) (string, error) // optional override
 
 	// New method overrides
-	steerFn     func(runID, message string) error
-	submitFn    func(runID, input string) error
-	convMsgsFn  func(conversationID string) ([]ConversationMessage, bool)
+	steerFn    func(runID, message string) error
+	submitFn   func(runID, input string) error
+	convMsgsFn func(conversationID string) ([]ConversationMessage, bool)
 }
 
 func newFakeRunner() *fakeRunner {

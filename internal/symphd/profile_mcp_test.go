@@ -233,8 +233,8 @@ max_steps = 20
 	}
 
 	var parsed struct {
-		Model      string `toml:"model"`
-		MaxSteps   int    `toml:"max_steps"`
+		Model      string                            `toml:"model"`
+		MaxSteps   int                               `toml:"max_steps"`
 		MCPServers map[string]config.MCPServerConfig `toml:"mcp_servers"`
 	}
 	if _, err := toml.Decode(result, &parsed); err != nil {

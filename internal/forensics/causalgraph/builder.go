@@ -3,8 +3,8 @@ package causalgraph
 // Builder accumulates causal graph events during a run and constructs the
 // final CausalGraph when Build is called. It is not safe for concurrent use.
 type Builder struct {
-	nodes    map[string]Node   // nodeID -> Node (deduplication)
-	nodeOrder []string         // insertion order
+	nodes     map[string]Node // nodeID -> Node (deduplication)
+	nodeOrder []string        // insertion order
 	// contextEdges stores context dependency edges (Tier 1):
 	// "contextID was in context when turnID was produced"
 	contextEdges []Edge

@@ -13,8 +13,8 @@ const (
 
 // Finding represents a discovered issue or improvement opportunity.
 type Finding struct {
-	Type          string     `json:"type"`           // "system_prompt" | "tool_description" | "behavior" | "anti_pattern"
-	Priority      string     `json:"priority"`       // "low" | "medium" | "high" | "critical"
+	Type          string     `json:"type"`     // "system_prompt" | "tool_description" | "behavior" | "anti_pattern"
+	Priority      string     `json:"priority"` // "low" | "medium" | "high" | "critical"
 	Target        string     `json:"target"`
 	Issue         string     `json:"issue"`
 	Proposed      string     `json:"proposed"`

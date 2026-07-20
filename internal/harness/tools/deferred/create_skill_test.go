@@ -105,13 +105,13 @@ func TestCreateSkillToolInvalidName(t *testing.T) {
 	tool := CreateSkillTool(dir)
 
 	cases := []string{
-		"My Skill",   // spaces
-		"MySkill",    // uppercase
-		"my_skill",   // underscore
-		"-my-skill",  // leading hyphen
-		"my-skill-",  // trailing hyphen
-		"",           // empty
-		"my skill!",  // special char
+		"My Skill",  // spaces
+		"MySkill",   // uppercase
+		"my_skill",  // underscore
+		"-my-skill", // leading hyphen
+		"my-skill-", // trailing hyphen
+		"",          // empty
+		"my skill!", // special char
 	}
 
 	for _, name := range cases {

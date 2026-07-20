@@ -44,17 +44,17 @@ extensions:
   talents_dir: extensions/talents
 `)
 
-writeFixtureFile(t, root, "base/main.md", "BASE_PROMPT")
-writeFixtureFile(t, root, "intents/general.md", "INTENT_GENERAL")
-writeFixtureFile(t, root, "intents/code_review.md", "INTENT_CODE_REVIEW")
-writeFixtureFile(t, root, "intents/frontend_design.md", "INTENT_FRONTEND_DESIGN")
-writeFixtureFile(t, root, "models/default.md", "MODEL_DEFAULT")
-writeFixtureFile(t, root, "models/openai_gpt5.md", "MODEL_GPT5")
-writeFixtureFile(t, root, "models/autoresearch.md", "MODEL_AUTORESEARCH")
-writeFixtureFile(t, root, "extensions/behaviors/precise.md", "BEHAVIOR_PRECISE")
-writeFixtureFile(t, root, "extensions/behaviors/safe.md", "BEHAVIOR_SAFE")
-writeFixtureFile(t, root, "extensions/talents/ui.md", "TALENT_UI")
-writeFixtureFile(t, root, "extensions/talents/review.md", "TALENT_REVIEW")
+	writeFixtureFile(t, root, "base/main.md", "BASE_PROMPT")
+	writeFixtureFile(t, root, "intents/general.md", "INTENT_GENERAL")
+	writeFixtureFile(t, root, "intents/code_review.md", "INTENT_CODE_REVIEW")
+	writeFixtureFile(t, root, "intents/frontend_design.md", "INTENT_FRONTEND_DESIGN")
+	writeFixtureFile(t, root, "models/default.md", "MODEL_DEFAULT")
+	writeFixtureFile(t, root, "models/openai_gpt5.md", "MODEL_GPT5")
+	writeFixtureFile(t, root, "models/autoresearch.md", "MODEL_AUTORESEARCH")
+	writeFixtureFile(t, root, "extensions/behaviors/precise.md", "BEHAVIOR_PRECISE")
+	writeFixtureFile(t, root, "extensions/behaviors/safe.md", "BEHAVIOR_SAFE")
+	writeFixtureFile(t, root, "extensions/talents/ui.md", "TALENT_UI")
+	writeFixtureFile(t, root, "extensions/talents/review.md", "TALENT_REVIEW")
 
 	return root
 }

@@ -20,8 +20,8 @@ type element struct {
 type SkipList struct {
 	head   *element
 	level  int
-	locks  []sync.Mutex     // Per-level mutexes
-	randMu sync.Mutex        // protects rand.Seed/global rand
+	locks  []sync.Mutex // Per-level mutexes
+	randMu sync.Mutex   // protects rand.Seed/global rand
 	rand   *rand.Rand
 }
 

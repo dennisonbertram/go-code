@@ -17,13 +17,13 @@ import (
 // ---------- mock SkillVerifier ----------
 
 type mockSkillVerifier struct {
-	mu       sync.Mutex
-	skills   map[string]tools.SkillInfo
-	bodies   map[string]string
-	files    map[string]string // skill name -> SKILL.md content
+	mu        sync.Mutex
+	skills    map[string]tools.SkillInfo
+	bodies    map[string]string
+	files     map[string]string // skill name -> SKILL.md content
 	filePaths map[string]string // skill name -> file path
 	updateErr error
-	updated  map[string]skillUpdateRecord
+	updated   map[string]skillUpdateRecord
 }
 
 type skillUpdateRecord struct {

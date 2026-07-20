@@ -73,14 +73,14 @@ func TestPolishClampWidth(t *testing.T) {
 	cases := []struct {
 		w, min, max, want int
 	}{
-		{50, 0, 100, 50},  // within range
-		{-5, 0, 100, 0},   // below min
+		{50, 0, 100, 50},   // within range
+		{-5, 0, 100, 0},    // below min
 		{150, 0, 100, 100}, // above max
-		{0, 0, 100, 0},    // exactly min
+		{0, 0, 100, 0},     // exactly min
 		{100, 0, 100, 100}, // exactly max
-		{10, 10, 10, 10},  // min == max == w
-		{5, 10, 10, 10},   // below min where min==max
-		{15, 10, 10, 10},  // above max where min==max
+		{10, 10, 10, 10},   // min == max == w
+		{5, 10, 10, 10},    // below min where min==max
+		{15, 10, 10, 10},   // above max where min==max
 	}
 	for _, tc := range cases {
 		got := th.ClampWidth(tc.w, tc.min, tc.max)

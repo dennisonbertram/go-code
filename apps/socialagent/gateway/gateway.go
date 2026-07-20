@@ -65,8 +65,8 @@ type Gateway struct {
 	profiles       ProfileFetcher
 	summarizer     Summarizer
 	activityLogger ActivityLogger
-	screener       Screener   // optional safety screener; nil means disabled
-	mcpServerURL   string     // URL of the MCP server (e.g., "http://localhost:8082/mcp")
+	screener       Screener // optional safety screener; nil means disabled
+	mcpServerURL   string   // URL of the MCP server (e.g., "http://localhost:8082/mcp")
 	mu             sync.Map // map[int64]*sync.Mutex
 	wg             sync.WaitGroup
 	recentUpdates  sync.Map // map[int64]struct{} for deduplication

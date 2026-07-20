@@ -738,4 +738,3 @@ func TestGetCommunityStats_ReturnsNonNegativeCounts(t *testing.T) {
 		t.Errorf("TotalActivities should be non-negative, got %d", stats.TotalActivities)
 	}
 }
-

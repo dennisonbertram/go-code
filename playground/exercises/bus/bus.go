@@ -6,9 +6,9 @@ import (
 )
 
 type EventBus struct {
-	mu       sync.RWMutex
-	topics   map[string]map[chan string]struct{}
-	subWild  map[string]map[chan string]struct{} // wildcards, e.g., "user.*"
+	mu      sync.RWMutex
+	topics  map[string]map[chan string]struct{}
+	subWild map[string]map[chan string]struct{} // wildcards, e.g., "user.*"
 }
 
 func NewEventBus() *EventBus {

@@ -21,7 +21,7 @@ const channelBufSize = 64
 type Broker struct {
 	mu          sync.RWMutex
 	subscribers map[string][]chan Notification // run_id → channels
-	globalSubs  []chan Notification             // receive ALL notifications
+	globalSubs  []chan Notification            // receive ALL notifications
 }
 
 // NewBroker creates a new Broker.

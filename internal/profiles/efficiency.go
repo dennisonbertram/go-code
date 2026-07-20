@@ -12,12 +12,12 @@ const EfficiencyThreshold = 0.6
 
 // RunStats holds the minimal run statistics needed to compute an efficiency score.
 type RunStats struct {
-	RunID       string
-	ProfileName string
-	Steps       int
-	CostUSD     float64
+	RunID        string
+	ProfileName  string
+	Steps        int
+	CostUSD      float64
 	AllowedTools []string
-	UsedTools   []string // tool names that were actually called
+	UsedTools    []string // tool names that were actually called
 }
 
 // ScoreEfficiency computes a deterministic efficiency score for a run.

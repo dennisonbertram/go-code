@@ -212,7 +212,7 @@ func TestRender_ContainsPersonality(t *testing.T) {
 
 	// Verify personality elements are present
 	personalityElements := []string{
-		"Connector", // agent name
+		"Connector",  // agent name
 		"connection", // core purpose word
 	}
 

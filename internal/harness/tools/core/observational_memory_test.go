@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	om "go-agent-harness/internal/observationalmemory"
 	"go-agent-harness/internal/harness/tools"
+	om "go-agent-harness/internal/observationalmemory"
 )
 
-const(
-	ContextKeyRunID = "run_id"
+const (
+	ContextKeyRunID       = "run_id"
 	ContextKeyRunMetadata = "run_metadata"
 )
 

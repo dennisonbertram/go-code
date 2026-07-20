@@ -9,8 +9,8 @@ import (
 )
 
 var (
-	newRootCmdFunc = newRootCmd
-	exitFunc       = os.Exit
+	newRootCmdFunc           = newRootCmd
+	exitFunc                 = os.Exit
 	stderr         io.Writer = os.Stderr
 )
 

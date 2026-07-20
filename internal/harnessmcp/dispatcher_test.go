@@ -262,8 +262,8 @@ func TestT6_WaitForRun_Timeout(t *testing.T) {
 		if r.Method == http.MethodGet {
 			w.WriteHeader(http.StatusOK)
 			_ = json.NewEncoder(w).Encode(RunStatus{
-				RunID:   "run-t6",
-				Status:  "running",
+				RunID:  "run-t6",
+				Status: "running",
 			})
 		}
 	}))

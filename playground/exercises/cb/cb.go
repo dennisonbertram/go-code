@@ -28,11 +28,11 @@ type CircuitBreaker struct {
 	SuccessThreshold int
 	Timeout          time.Duration
 
-	mu             sync.Mutex
-	state          State
-	failures       int
-	successes      int
-	timer          *time.Timer
+	mu              sync.Mutex
+	state           State
+	failures        int
+	successes       int
+	timer           *time.Timer
 	lastStateChange time.Time
 }
 

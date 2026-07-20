@@ -58,6 +58,6 @@ func TestWorkerPoolGracefulShutdownWithPendingJobs(t *testing.T) {
 	}
 	wg.Wait()
 	wp.Shutdown()
-// Confirm a second shutdown is safe (no panic or block)
+	// Confirm a second shutdown is safe (no panic or block)
 	wp.Shutdown()
 }

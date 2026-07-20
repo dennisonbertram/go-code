@@ -149,8 +149,8 @@ func TestHandleReplayFork_PreservesReconstructedHistory(t *testing.T) {
 		t.Fatalf("expected 202, got %d: %v", resp.StatusCode, errBody)
 	}
 	var result struct {
-		RunID             string `json:"run_id"`
-		MessagesRestored  int    `json:"messages_restored"`
+		RunID            string `json:"run_id"`
+		MessagesRestored int    `json:"messages_restored"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatalf("decode response: %v", err)

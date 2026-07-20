@@ -11,7 +11,7 @@ func Primes(n int) []int {
 	}
 	// Only odd numbers >=3 will be tracked. number represented by index i: 2*i+3
 	// Length: (n-1)/2 (since 2 is always prime, start from 3)
-	size := (n-1)/2
+	size := (n - 1) / 2
 	// 1 bit for each odd number >= 3 up to n
 	bitset := make([]uint64, (size+63)/64) // each uint64 covers 64 odds
 
@@ -24,7 +24,7 @@ func Primes(n int) []int {
 		p := 2*i + 3
 		// Mark all multiples of p^2, p^2+p*2, ... up to n
 		// index of p^2: k_start = (p*p-3)//2
-		for k := (p*p-3)/2; k < size; k += p {
+		for k := (p*p - 3) / 2; k < size; k += p {
 			bitset[k/64] |= 1 << (k % 64)
 		}
 	}

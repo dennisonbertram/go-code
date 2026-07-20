@@ -10,9 +10,9 @@ import (
 
 // recipeEntry is the JSON response shape for a recipe.
 type recipeEntry struct {
-	Name        string                        `json:"name"`
-	Description string                        `json:"description"`
-	Tags        []string                      `json:"tags"`
+	Name        string                         `json:"name"`
+	Description string                         `json:"description"`
+	Tags        []string                       `json:"tags"`
 	Parameters  map[string]recipe.ParameterDef `json:"parameters,omitempty"`
 }
 

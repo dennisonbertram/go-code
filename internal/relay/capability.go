@@ -80,7 +80,7 @@ type WorkspaceModeCapability struct {
 type SecretCapability struct {
 	Name        string `json:"name"`
 	DisplayName string `json:"display_name,omitempty"`
-	Scope       string `json:"scope"` // "repo", "org", "personal", "run"
+	Scope       string `json:"scope"`              // "repo", "org", "personal", "run"
 	Provider    string `json:"provider,omitempty"` // "env", "vault", "aws-secrets", "gcp-secrets"
 	// Ref is the reference identifier for the secret, never the value.
 	Ref string `json:"ref"`
@@ -222,9 +222,9 @@ func CapabilityPackFromJSON(data []byte) (*CapabilityPack, error) {
 
 // Sentinel errors for capability operations.
 var (
-	ErrCapabilityNotFound      = errors.New("relay: capability not found")
-	ErrInvalidCapabilityType   = errors.New("relay: invalid capability type")
-	ErrSecretValueNotAllowed   = errors.New("relay: secret values must not be stored in capability records")
+	ErrCapabilityNotFound    = errors.New("relay: capability not found")
+	ErrInvalidCapabilityType = errors.New("relay: invalid capability type")
+	ErrSecretValueNotAllowed = errors.New("relay: secret values must not be stored in capability records")
 )
 
 // ValidateCapabilityType checks that a capability type is recognized.

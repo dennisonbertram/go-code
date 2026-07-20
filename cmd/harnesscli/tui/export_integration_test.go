@@ -6,8 +6,8 @@ import (
 	"testing"
 
 	"go-agent-harness/cmd/harnesscli/tui"
-	"go-agent-harness/cmd/harnesscli/tui/components/transcriptexport"
 	"go-agent-harness/cmd/harnesscli/tui/components/inputarea"
+	"go-agent-harness/cmd/harnesscli/tui/components/transcriptexport"
 )
 
 func TestExportCommandWritesOutsideWorkingDirectory(t *testing.T) {

@@ -26,7 +26,7 @@ func nodeEqual(a, b Node) bool {
 
 func TestConstFold_Table(t *testing.T) {
 	tests := []struct {
-		input string
+		input  string
 		expect Node
 	}{
 		{"1+2*3", &NumberNode{9}},

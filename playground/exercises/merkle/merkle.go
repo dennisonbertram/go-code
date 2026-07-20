@@ -6,7 +6,7 @@ import (
 
 // MerkleTree represents a Merkle tree.
 type MerkleTree struct {
-	root  *node
+	root   *node
 	leaves []*node
 }
 

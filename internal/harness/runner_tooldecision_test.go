@@ -448,8 +448,8 @@ func TestAntiPatternAlertEmittedOnlyOnce(t *testing.T) {
 
 // modifyingPreToolHook is a test hook that replaces args with modified JSON.
 type modifyingPreToolHook struct {
-	name     string
-	newArgs  json.RawMessage
+	name    string
+	newArgs json.RawMessage
 }
 
 func (h *modifyingPreToolHook) Name() string { return h.name }
@@ -515,9 +515,9 @@ func TestHookMutationEventEmittedOnModify(t *testing.T) {
 	}
 
 	runner := NewRunner(prov, registry, RunnerConfig{
-		DefaultModel:      "test-model",
-		MaxSteps:          5,
-		PreToolUseHooks:   []PreToolUseHook{modHook},
+		DefaultModel:       "test-model",
+		MaxSteps:           5,
+		PreToolUseHooks:    []PreToolUseHook{modHook},
 		TraceHookMutations: true,
 	})
 

@@ -17,7 +17,7 @@ const (
 )
 
 type Op struct {
-	Kind OpKind
+	Kind  OpKind
 	Value int64 // only used for PUSH
 }
 

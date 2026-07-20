@@ -39,7 +39,7 @@ type Config struct {
 	GitHubToken string `yaml:"github_token"` // falls back to GITHUB_TOKEN env var
 
 	// Retry / backoff configuration.
-	RetryMaxAttempts int `yaml:"retry_max_attempts"` // default: 5
+	RetryMaxAttempts int `yaml:"retry_max_attempts"`  // default: 5
 	RetryBaseDelayMs int `yaml:"retry_base_delay_ms"` // default: 10000
 	RetryMaxDelayMs  int `yaml:"retry_max_delay_ms"`  // default: 300000
 }

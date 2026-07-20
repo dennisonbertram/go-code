@@ -213,10 +213,10 @@ func LoadReader(r io.Reader) ([]RolloutEvent, error) {
 	br := bufio.NewReaderSize(counter, 64*1024)
 
 	lineNum := 0
-	totalElements := 0 // HIGH-5 fix: global element budget across all lines
-	lastStep := -1 // tracks highest observed step in file order (monotonic enforcement)
+	totalElements := 0      // HIGH-5 fix: global element budget across all lines
+	lastStep := -1          // tracks highest observed step in file order (monotonic enforcement)
 	runStartedSeen := false // run.started must appear exactly once as the first event
-	terminalSeen := false // once run.completed or run.failed is seen, no more events allowed
+	terminalSeen := false   // once run.completed or run.failed is seen, no more events allowed
 	for {
 		lineNum++
 		// ReadLine handles arbitrarily long lines: it returns isPrefix=true
@@ -291,7 +291,6 @@ func LoadReader(r io.Reader) ([]RolloutEvent, error) {
 		if err := json.Unmarshal(line, &raw); err != nil {
 			return nil, fmt.Errorf("rollout: line %d: %w", lineNum, err)
 		}
-
 
 		// Extract step from data payload if present. Validate that the step is
 		// a finite, integral, non-negative value within bounds to prevent

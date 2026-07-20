@@ -58,15 +58,15 @@ type FileEngine struct {
 	basePrompt string
 	intents    map[string]string
 
-	modelProfiles  []compiledModelProfile
-	profileByName  map[string]compiledModelProfile
-	behaviorByID   map[string]string
-	talentByID     map[string]string
-	skillResolver  SkillResolver
-	profileOrder   []string
-	intentKeys     []string
-	behaviorKeys   []string
-	talentKeys     []string
+	modelProfiles []compiledModelProfile
+	profileByName map[string]compiledModelProfile
+	behaviorByID  map[string]string
+	talentByID    map[string]string
+	skillResolver SkillResolver
+	profileOrder  []string
+	intentKeys    []string
+	behaviorKeys  []string
+	talentKeys    []string
 }
 
 // ExtensionDirs returns the absolute paths to the behaviors and talents directories.

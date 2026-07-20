@@ -564,9 +564,9 @@ func TestComprehensive_09_MultiPhaseWorkflow(t *testing.T) {
 		}
 
 		return map[string]any{
-			"analyze":    r1.Output,
-			"implement":  r2.Output,
-			"verify":     r3.Output,
+			"analyze":     r1.Output,
+			"implement":   r2.Output,
+			"verify":      r3.Output,
 			"phases_done": 3,
 		}, nil
 	})
@@ -810,7 +810,7 @@ func TestComprehensive_13_ArgsPropagation(t *testing.T) {
 			return nil, fmt.Errorf("child expected map args")
 		}
 		return map[string]any{
-			"child_got_key": m["key"],
+			"child_got_key":   m["key"],
 			"child_got_extra": m["extra"],
 		}, nil
 	})
@@ -830,7 +830,7 @@ func TestComprehensive_13_ArgsPropagation(t *testing.T) {
 		}
 		return map[string]any{
 			"parent_got": m["key"],
-			"child":       childResult,
+			"child":      childResult,
 		}, nil
 	})
 
@@ -1017,7 +1017,7 @@ func TestComprehensive_18_LargePipeline(t *testing.T) {
 
 		assert.Len(t, results, itemCount)
 		// Verify first and last
-		assert.Equal(t, 10, results[0])  // (0*2+1)*10 = 10
+		assert.Equal(t, 10, results[0])            // (0*2+1)*10 = 10
 		assert.Equal(t, 990, results[itemCount-1]) // (49*2+1)*10 = 990
 		return map[string]any{"count": len(results)}, nil
 	})
@@ -1107,11 +1107,11 @@ func TestComprehensive_20_AgentAllOpts(t *testing.T) {
 
 	eng.Register("all-opts", func(ctx *workflow.Context) (any, error) {
 		r, err := ctx.Agent("complex task", &workflow.AgentOpts{
-			Label:      "my-label",
-			Phase:      "my-phase",
-			Model:      "claude-opus-4-8",
-			Isolation:  "worktree",
-			AgentType:  "code-reviewer",
+			Label:     "my-label",
+			Phase:     "my-phase",
+			Model:     "claude-opus-4-8",
+			Isolation: "worktree",
+			AgentType: "code-reviewer",
 		})
 		if err != nil {
 			return nil, err
@@ -1208,10 +1208,10 @@ func TestComprehensive_22_NestedBudget(t *testing.T) {
 
 		// Child's spending should be reflected in parent
 		return map[string]any{
-			"parent_spent_after_own": parentSpentAfterOwn,
+			"parent_spent_after_own":   parentSpentAfterOwn,
 			"parent_spent_after_child": ctx.Budget.Spent(),
-			"parent_remaining": ctx.Budget.Remaining(),
-			"child": childResult,
+			"parent_remaining":         ctx.Budget.Remaining(),
+			"child":                    childResult,
 		}, nil
 	})
 

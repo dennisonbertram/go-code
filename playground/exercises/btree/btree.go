@@ -116,33 +116,6 @@ func (n *BTreeNode) splitChild(i int, t int) {
 	n.children[i+1] = z
 }
 
-	for len(n.children) < i+2 {
-		n.children = append(n.children, nil)
-	}
-	y := n.children[i]
-	z := &BTreeNode{leaf: y.leaf, keys: append([]int{}, y.keys[t:]...)}
-	if !y.leaf {
-		z.children = append([]*BTreeNode{}, y.children[t:]...)
-		y.children = y.children[:t]
-	} else {
-		z.children = nil // explicitly set for clarity; leaf nodes have no children
-	}
-	midKey := y.keys[t-1]
-	y.keys = y.keys[:t-1]
-	for len(n.children) < i+1 {
-		n.children = append(n.children, nil)
-	}
-	if len(n.children) == i+1 {
-		n.children = append(n.children, z)
-	} else {
-		n.children = append(n.children[:i+1], append([]*BTreeNode{z}, n.children[i+1:]...)...)
-	}
-	n.keys = append(n.keys[:i], append([]int{midKey}, n.keys[i:]...)...)
-	for len(n.children) < len(n.keys)+1 {
-		n.children = append(n.children, nil)
-	}
-
-
 // InOrder returns the keys in sorted order
 func (b *BTree) InOrder() []int {
 	var res []int

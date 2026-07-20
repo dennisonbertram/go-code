@@ -65,10 +65,10 @@ func TestExecuteBash_Timeout(t *testing.T) {
 // Table-driven regression tests for bash.
 func TestExecuteBash_Table(t *testing.T) {
 	cases := []struct {
-		name      string
-		command   string
-		args      []string
-		wantError bool
+		name         string
+		command      string
+		args         []string
+		wantError    bool
 		wantContains string
 	}{
 		{

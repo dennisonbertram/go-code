@@ -53,12 +53,12 @@ func NewOrchestrator(cfg *Config) *Orchestrator {
 		subagentEnv := buildSubagentEnv()
 
 		dispatchCfg := DispatchConfig{
-			MaxConcurrent:      cfg.MaxConcurrentAgents,
-			StallTimeout:       5 * time.Minute,
-			PollInterval:       5 * time.Second,
-			HarnessURL:         cfg.HarnessURL,
-			BaseDir:            cfg.BaseDir,
-			SubagentEnv:        subagentEnv,
+			MaxConcurrent: cfg.MaxConcurrentAgents,
+			StallTimeout:  5 * time.Minute,
+			PollInterval:  5 * time.Second,
+			HarnessURL:    cfg.HarnessURL,
+			BaseDir:       cfg.BaseDir,
+			SubagentEnv:   subagentEnv,
 		}
 		o.dispatcher = NewDispatcherSimple(dispatchCfg, wsFactory, o.tracker)
 	}

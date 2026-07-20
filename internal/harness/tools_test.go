@@ -316,5 +316,3 @@ func TestInternalHelpersAndRunCommandBranches(t *testing.T) {
 		t.Fatalf("expected command output, got %q", output)
 	}
 }
-
-

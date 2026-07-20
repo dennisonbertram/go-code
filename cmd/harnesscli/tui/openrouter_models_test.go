@@ -144,8 +144,8 @@ func TestWithModels_UsesDisplayName(t *testing.T) {
 
 	serverModels := []modelswitcher.ServerModelEntry{
 		{ID: "openai/gpt-4.1", Provider: "openai", DisplayName: "OpenAI: GPT-4.1"},
-		{ID: "gpt-4.1-mini", Provider: "openai", DisplayName: ""},           // should use local map
-		{ID: "unknown-model", Provider: "unknown", DisplayName: ""},          // should fall back to ID
+		{ID: "gpt-4.1-mini", Provider: "openai", DisplayName: ""},                // should use local map
+		{ID: "unknown-model", Provider: "unknown", DisplayName: ""},              // should fall back to ID
 		{ID: "custom/model", Provider: "custom", DisplayName: "My Custom Model"}, // explicit name
 	}
 

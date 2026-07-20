@@ -295,8 +295,8 @@ func TestProvider_ExhaustRepeatLast_RepeatsLastTurn(t *testing.T) {
 		{Content: "last"},
 	}, fakeprovider.WithExhaustedBehavior(fakeprovider.ExhaustRepeatLast))
 	ctx := context.Background()
-	_, _ = p.Complete(ctx, simpleRequest()) // "first"
-	_, _ = p.Complete(ctx, simpleRequest()) // "last"
+	_, _ = p.Complete(ctx, simpleRequest())      // "first"
+	_, _ = p.Complete(ctx, simpleRequest())      // "last"
 	res, err := p.Complete(ctx, simpleRequest()) // repeat "last"
 	require.NoError(t, err)
 	assert.Equal(t, "last", res.Content)

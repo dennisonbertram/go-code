@@ -165,7 +165,7 @@ func TestTUI053_SelectUpMovesUp(t *testing.T) {
 	entries := testEntries()
 	m := sessionpicker.New(entries)
 	m = m.SelectDown() // now at index 1
-	m = m.SelectUp()  // back to index 0
+	m = m.SelectUp()   // back to index 0
 
 	e, ok := m.Selected()
 	if !ok {

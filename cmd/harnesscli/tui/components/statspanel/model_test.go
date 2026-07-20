@@ -257,7 +257,7 @@ func snapshotData() []statspanel.DataPoint {
 	pts := make([]statspanel.DataPoint, len(counts))
 	for i, c := range counts {
 		pts[i] = statspanel.DataPoint{
-			Date:  base.AddDate(0, 0, -(len(counts)-1-i)),
+			Date:  base.AddDate(0, 0, -(len(counts) - 1 - i)),
 			Count: c,
 			Cost:  float64(c) * 0.0175,
 		}

@@ -142,12 +142,12 @@ func CronGetTool(client tools.CronClient) tools.Tool {
 // CronDeleteTool returns a deferred tool for deleting a cron job.
 func CronDeleteTool(client tools.CronClient) tools.Tool {
 	def := tools.Definition{
-		Name:     "cron_delete",
+		Name:        "cron_delete",
 		Description: descriptions.Load("cron_delete"),
-		Action:   tools.ActionExecute,
-		Mutating: true,
-		Tier:     tools.TierDeferred,
-		Tags:     []string{"cron", "schedule", "automation"},
+		Action:      tools.ActionExecute,
+		Mutating:    true,
+		Tier:        tools.TierDeferred,
+		Tags:        []string{"cron", "schedule", "automation"},
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

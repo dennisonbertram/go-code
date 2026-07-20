@@ -113,7 +113,7 @@ func TestConfigFromEnv_MissingCredentials(t *testing.T) {
 	getenv := func(k string) string {
 		m := map[string]string{
 			// credentials intentionally missing
-			"S3_BUCKET": "my-bucket",
+			"S3_BUCKET":  "my-bucket",
 			"AWS_REGION": "us-east-1",
 		}
 		return m[k]

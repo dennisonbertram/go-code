@@ -23,8 +23,8 @@ func (c *captureWorkspace) Provision(ctx context.Context, opts workspace.Options
 	return c.inner.Provision(ctx, opts)
 }
 
-func (c *captureWorkspace) HarnessURL() string    { return c.inner.HarnessURL() }
-func (c *captureWorkspace) WorkspacePath() string  { return c.inner.WorkspacePath() }
+func (c *captureWorkspace) HarnessURL() string                { return c.inner.HarnessURL() }
+func (c *captureWorkspace) WorkspacePath() string             { return c.inner.WorkspacePath() }
 func (c *captureWorkspace) Destroy(ctx context.Context) error { return c.inner.Destroy(ctx) }
 
 // TestDispatcherPropagatesConfigTOML verifies that when DispatchConfig has

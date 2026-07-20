@@ -17,7 +17,7 @@ type IdentNode struct {
 }
 
 type BinOpNode struct {
-	Op string
+	Op          string
 	Left, Right Node
 }
 

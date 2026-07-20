@@ -10,18 +10,18 @@ import (
 
 // mockStore implements Store for testing.
 type mockStore struct {
-	MigrateFunc        func(ctx context.Context) error
-	CreateJobFunc      func(ctx context.Context, job Job) (Job, error)
-	GetJobFunc         func(ctx context.Context, id string) (Job, error)
-	GetJobByNameFunc   func(ctx context.Context, name string) (Job, error)
-	ListJobsFunc       func(ctx context.Context) ([]Job, error)
-	UpdateJobFunc      func(ctx context.Context, job Job) error
-	TouchJobRunFunc    func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error
-	DeleteJobFunc      func(ctx context.Context, id string) error
+	MigrateFunc         func(ctx context.Context) error
+	CreateJobFunc       func(ctx context.Context, job Job) (Job, error)
+	GetJobFunc          func(ctx context.Context, id string) (Job, error)
+	GetJobByNameFunc    func(ctx context.Context, name string) (Job, error)
+	ListJobsFunc        func(ctx context.Context) ([]Job, error)
+	UpdateJobFunc       func(ctx context.Context, job Job) error
+	TouchJobRunFunc     func(ctx context.Context, jobID string, lastRun, nextRun, updatedAt time.Time) error
+	DeleteJobFunc       func(ctx context.Context, id string) error
 	CreateExecutionFunc func(ctx context.Context, exec Execution) (Execution, error)
 	UpdateExecutionFunc func(ctx context.Context, exec Execution) error
 	ListExecutionsFunc  func(ctx context.Context, jobID string, limit, offset int) ([]Execution, error)
-	CloseFunc          func() error
+	CloseFunc           func() error
 }
 
 func (m *mockStore) Migrate(ctx context.Context) error {

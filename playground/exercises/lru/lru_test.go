@@ -13,43 +13,52 @@ func TestLRUTable(t *testing.T) {
 	tcs := []struct {
 		name     string
 		capacity int
-		puts     []struct{
+		puts     []struct {
 			k string
 			v string
 		}
-		gets    []struct{
+		gets []struct {
 			k  string
 			v  string
 			ok bool
 		}
 	}{
 		{
-			name: "no eviction",
+			name:     "no eviction",
 			capacity: 2,
-			puts: []struct{k, v string}{
+			puts: []struct{ k, v string }{
 				{"a", "1"}, {"b", "2"},
 			},
-			gets: []struct{k, v string; ok bool}{
+			gets: []struct {
+				k, v string
+				ok   bool
+			}{
 				{"a", "1", true}, {"b", "2", true},
 			},
 		},
 		{
-			name: "eviction order",
+			name:     "eviction order",
 			capacity: 2,
-			puts: []struct{k, v string}{
+			puts: []struct{ k, v string }{
 				{"a", "1"}, {"b", "2"}, {"c", "3"},
 			},
-			gets: []struct{k, v string; ok bool}{
+			gets: []struct {
+				k, v string
+				ok   bool
+			}{
 				{"a", "", false}, {"b", "2", true}, {"c", "3", true},
 			},
 		},
 		{
-			name: "update refreshes",
+			name:     "update refreshes",
 			capacity: 2,
-			puts: []struct{k, v string}{
+			puts: []struct{ k, v string }{
 				{"a", "1"}, {"b", "2"}, {"a", "x"}, {"c", "3"},
 			},
-			gets: []struct{k, v string; ok bool}{
+			gets: []struct {
+				k, v string
+				ok   bool
+			}{
 				{"b", "", false}, {"a", "x", true}, {"c", "3", true},
 			},
 		},
@@ -74,7 +83,7 @@ func TestLRUTable(t *testing.T) {
 func TestLRUConcurrent(t *testing.T) {
 	const N = 512
 	const rounds = 1024
-	lru := NewLRU(N/4)
+	lru := NewLRU(N / 4)
 	var found atomic.Uint64
 	wg := sync.WaitGroup{}
 	for i := 0; i < N; i++ {

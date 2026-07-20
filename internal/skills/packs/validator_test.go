@@ -8,7 +8,7 @@ import (
 func TestValidatePrereqs_AllMet(t *testing.T) {
 	m := &SkillManifest{
 		Name:        "test-pack",
-		RequiresCLI: []string{"go"},     // go should be on PATH in test env
+		RequiresCLI: []string{"go"}, // go should be on PATH in test env
 		RequiresEnv: []string{},
 	}
 	errs := ValidatePrereqs(m)

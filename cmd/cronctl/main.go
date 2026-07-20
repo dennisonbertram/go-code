@@ -13,9 +13,9 @@ import (
 )
 
 var (
-	runCommand = run
-	exitFunc   = os.Exit
-	osArgs     = os.Args
+	runCommand           = run
+	exitFunc             = os.Exit
+	osArgs               = os.Args
 	stdout     io.Writer = os.Stdout
 	stderr     io.Writer = os.Stderr
 )
@@ -258,4 +258,3 @@ func getBaseURL() string {
 var newClientFromEnv = func() *cron.Client {
 	return cron.NewClient(getBaseURL())
 }
-

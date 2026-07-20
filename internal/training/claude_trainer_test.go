@@ -45,11 +45,11 @@ func TestClaudeTrainer_Analyze(t *testing.T) {
 
 	trainer := NewClaudeTrainer("test-key", WithBaseURL(srv.URL))
 	bundle := TraceBundle{
-		RunID:       "run_test",
-		TaskID:      "task_1",
-		Outcome:     "pass",
-		Steps:       5,
-		CostUSD:     0.10,
+		RunID:        "run_test",
+		TaskID:       "task_1",
+		Outcome:      "pass",
+		Steps:        5,
+		CostUSD:      0.10,
 		SystemPrompt: "You are a coding assistant",
 		ToolCalls: []ToolCallTrace{
 			{Name: "read_file", Success: true, StepIdx: 1},

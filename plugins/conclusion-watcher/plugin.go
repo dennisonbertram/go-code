@@ -14,12 +14,12 @@ import (
 // ConclusionWatcher is the root plugin object. Create one per run (or share
 // across runs by calling ledger.Reset() between them — but per-run is safer).
 type ConclusionWatcher struct {
-	cfg              WatcherConfig
-	ledger           *ObservationLedger
-	interventionCount int64 // atomic counter
-	currentStep      int64 // atomic; incremented at start of each AfterMessage
-	mu               sync.Mutex // guards detections slice
-	detections       []DetectionResult
+	cfg               WatcherConfig
+	ledger            *ObservationLedger
+	interventionCount int64      // atomic counter
+	currentStep       int64      // atomic; incremented at start of each AfterMessage
+	mu                sync.Mutex // guards detections slice
+	detections        []DetectionResult
 }
 
 // New creates a ConclusionWatcher with the given config.

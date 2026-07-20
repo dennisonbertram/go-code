@@ -7,11 +7,11 @@ import (
 )
 
 type RateLimiter struct {
-	rps      float64
-	tokens   float64
-	last     time.Time
-	mu       sync.Mutex
-	next     http.Handler
+	rps    float64
+	tokens float64
+	last   time.Time
+	mu     sync.Mutex
+	next   http.Handler
 }
 
 func NewRateLimiter(rps float64, next http.Handler) *RateLimiter {

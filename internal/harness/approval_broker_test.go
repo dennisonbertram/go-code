@@ -18,11 +18,11 @@ func TestApprovalBrokerApproveLifecycle(t *testing.T) {
 
 	go func() {
 		approved, err := broker.Ask(context.Background(), ApprovalRequest{
-			RunID:    "run_1",
-			CallID:   "call_1",
-			Tool:     "bash",
-			Args:     `{"command":"rm -rf /tmp/test"}`,
-			Timeout:  2 * time.Second,
+			RunID:   "run_1",
+			CallID:  "call_1",
+			Tool:    "bash",
+			Args:    `{"command":"rm -rf /tmp/test"}`,
+			Timeout: 2 * time.Second,
 		})
 		resultCh <- approvalBrokerResult{approved: approved, err: err}
 	}()

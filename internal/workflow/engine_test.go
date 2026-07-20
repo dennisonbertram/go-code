@@ -87,7 +87,9 @@ func TestEngineStartComplete(t *testing.T) {
 	eng, mgr := newEngine(t)
 	eng.Register("test", func(ctx *workflow.Context) (any, error) {
 		r, err := ctx.Agent("do work", nil)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		return r.Output, nil
 	})
 	run, err := eng.Start(context.Background(), "test", nil)
@@ -140,7 +142,9 @@ func TestAgent(t *testing.T) {
 	eng, mgr := newEngine(t)
 	eng.Register("agent", func(ctx *workflow.Context) (any, error) {
 		r, err := ctx.Agent("hello", &workflow.AgentOpts{Label: "x"})
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		return r.Output, nil
 	})
 	run, _ := eng.Start(context.Background(), "agent", nil)
@@ -227,7 +231,9 @@ func TestPipelineErrorDropsItem(t *testing.T) {
 		results, _ := ctx.Pipeline(
 			[]any{"a", "b"},
 			func(prev any, item any, index int) (any, error) {
-				if item == "b" { return nil, fmt.Errorf("fail") }
+				if item == "b" {
+					return nil, fmt.Errorf("fail")
+				}
 				return item, nil
 			},
 			func(prev any, item any, index int) (any, error) {
@@ -254,8 +260,12 @@ func TestPhaseAndLog(t *testing.T) {
 	defer cancel()
 	hasPhase, hasLog := false, false
 	for _, ev := range history {
-		if ev.Type == workflow.EventWorkflowPhaseStarted { hasPhase = true }
-		if ev.Type == workflow.EventWorkflowLog { hasLog = true }
+		if ev.Type == workflow.EventWorkflowPhaseStarted {
+			hasPhase = true
+		}
+		if ev.Type == workflow.EventWorkflowLog {
+			hasLog = true
+		}
 	}
 	assert.True(t, hasPhase && hasLog)
 }
@@ -325,7 +335,9 @@ func TestNestedWorkflow(t *testing.T) {
 	eng.Register("inner", func(ctx *workflow.Context) (any, error) { return "in", nil })
 	eng.Register("outer", func(ctx *workflow.Context) (any, error) {
 		r, err := ctx.Workflow("inner", nil)
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		return map[string]any{"x": r}, nil
 	})
 	run, _ := eng.Start(context.Background(), "outer", nil)
@@ -401,7 +413,9 @@ func TestResume(t *testing.T) {
 	eng, _ := newEngine(t)
 	var calls atomic.Int64
 	eng.Register("resume", func(ctx *workflow.Context) (any, error) {
-		if calls.Add(1) == 1 { return nil, fmt.Errorf("fail") }
+		if calls.Add(1) == 1 {
+			return nil, fmt.Errorf("fail")
+		}
 		return "ok", nil
 	})
 	run, _ := eng.Start(context.Background(), "resume", nil)
@@ -433,7 +447,9 @@ func TestSubscribe(t *testing.T) {
 	defer cancel()
 	hasLog := false
 	for _, ev := range history {
-		if ev.Type == workflow.EventWorkflowLog { hasLog = true }
+		if ev.Type == workflow.EventWorkflowLog {
+			hasLog = true
+		}
 	}
 	assert.True(t, hasLog)
 }
@@ -446,7 +462,9 @@ func TestPatternAdversarialVerify(t *testing.T) {
 			[]any{"bugs", "perf"},
 			func(prev any, item any, index int) (any, error) {
 				r, err := ctx.Agent(fmt.Sprintf("find %s", item), &workflow.AgentOpts{Label: "r:" + item.(string)})
-				if err != nil { return nil, err }
+				if err != nil {
+					return nil, err
+				}
 				return r.Output, nil
 			},
 		)
@@ -463,7 +481,9 @@ func TestPatternLoopUntilCount(t *testing.T) {
 		var bugs []string
 		for len(bugs) < 3 {
 			r, err := ctx.Agent("find bug", nil)
-			if err != nil { return nil, err }
+			if err != nil {
+				return nil, err
+			}
 			bugs = append(bugs, r.Output)
 		}
 		return bugs, nil

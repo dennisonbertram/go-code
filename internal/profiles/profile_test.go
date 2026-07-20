@@ -282,6 +282,7 @@ allow = ["read"]
 	assert.Equal(t, []string{"read", "write"}, shared.AllowedTools)
 	assert.Equal(t, "project", shared.SourceTier)
 }
+
 // TestSaveProfile verifies that SaveProfile writes a TOML file correctly.
 func TestSaveProfile(t *testing.T) {
 	dir := t.TempDir()

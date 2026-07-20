@@ -12,13 +12,13 @@ import (
 
 // mockCronClient implements CronClient for testing.
 type mockCronClient struct {
-	createJobFn     func(ctx context.Context, req CronCreateJobRequest) (CronJob, error)
-	listJobsFn      func(ctx context.Context) ([]CronJob, error)
-	getJobFn        func(ctx context.Context, id string) (CronJob, error)
-	updateJobFn     func(ctx context.Context, id string, req CronUpdateJobRequest) (CronJob, error)
-	deleteJobFn     func(ctx context.Context, id string) error
-	listExecsFn     func(ctx context.Context, jobID string, limit, offset int) ([]CronExecution, error)
-	healthFn        func(ctx context.Context) error
+	createJobFn func(ctx context.Context, req CronCreateJobRequest) (CronJob, error)
+	listJobsFn  func(ctx context.Context) ([]CronJob, error)
+	getJobFn    func(ctx context.Context, id string) (CronJob, error)
+	updateJobFn func(ctx context.Context, id string, req CronUpdateJobRequest) (CronJob, error)
+	deleteJobFn func(ctx context.Context, id string) error
+	listExecsFn func(ctx context.Context, jobID string, limit, offset int) ([]CronExecution, error)
+	healthFn    func(ctx context.Context) error
 }
 
 func (m *mockCronClient) CreateJob(ctx context.Context, req CronCreateJobRequest) (CronJob, error) {

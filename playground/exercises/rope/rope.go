@@ -8,7 +8,7 @@ import (
 type Rope struct {
 	left   *Rope
 	right  *Rope
-	weight int // byte count in left subtree
+	weight int    // byte count in left subtree
 	data   string // only for leaf nodes
 }
 

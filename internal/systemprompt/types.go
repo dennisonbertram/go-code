@@ -27,32 +27,32 @@ type ResolveRequest struct {
 }
 
 type EnvironmentInfo struct {
-	OS         string
-	Arch       string
-	Hostname   string
-	Username   string
-	WorkingDir string
-	Shell      string
-	GoVersion  string
-	Model                string
-	InputCostPerMToken   float64
-	OutputCostPerMToken  float64
+	OS                  string
+	Arch                string
+	Hostname            string
+	Username            string
+	WorkingDir          string
+	Shell               string
+	GoVersion           string
+	Model               string
+	InputCostPerMToken  float64
+	OutputCostPerMToken float64
 }
 
 type RuntimeContextInput struct {
-	RunStartedAt          time.Time
-	Now                   time.Time
-	Step                  int
-	PromptTokensTotal     int
-	CompletionTokensTotal int
-	TotalTokens           int
-	LastTurnTokens        int
-	CostUSDTotal          float64
-	LastTurnCostUSD       float64
-	CostStatus            string
+	RunStartedAt           time.Time
+	Now                    time.Time
+	Step                   int
+	PromptTokensTotal      int
+	CompletionTokensTotal  int
+	TotalTokens            int
+	LastTurnTokens         int
+	CostUSDTotal           float64
+	LastTurnCostUSD        float64
+	CostStatus             string
 	EstimatedContextTokens int
 	MessageCount           int
-	Environment           EnvironmentInfo
+	Environment            EnvironmentInfo
 }
 
 type Warning struct {

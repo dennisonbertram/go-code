@@ -7,22 +7,22 @@ import (
 
 func TestParseCSV(t *testing.T) {
 	tests := []struct {
-		name string
+		name  string
 		input string
-		want []map[string]string
+		want  []map[string]string
 	}{
 		{
-			name: "empty input",
+			name:  "empty input",
 			input: "",
-			want: nil,
+			want:  nil,
 		},
 		{
-			name: "single row",
+			name:  "single row",
 			input: "a,b,c\n1,2,3",
-			want: []map[string]string{{"a": "1", "b": "2", "c": "3"}},
+			want:  []map[string]string{{"a": "1", "b": "2", "c": "3"}},
 		},
 		{
-			name: "multi row with trailing newline",
+			name:  "multi row with trailing newline",
 			input: "foo,bar\nhello,world\ngopher,go\n",
 			want: []map[string]string{
 				{"foo": "hello", "bar": "world"},
@@ -30,9 +30,9 @@ func TestParseCSV(t *testing.T) {
 			},
 		},
 		{
-			name: "header only with trailing newline",
+			name:  "header only with trailing newline",
 			input: "a,b,c\n",
-			want: nil,
+			want:  nil,
 		},
 	}
 

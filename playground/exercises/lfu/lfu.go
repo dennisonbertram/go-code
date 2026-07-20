@@ -11,25 +11,25 @@ type LFU struct {
 	mutex    sync.Mutex
 	items    map[int]*entry
 	freqs    map[int]*freqNode // frequency -> freq node
-	head     *freqNode // least freq
-	tail     *freqNode // most freq
+	head     *freqNode         // least freq
+	tail     *freqNode         // most freq
 }
 
 type entry struct {
-	key   int
-	value int
-	freq  int
-	prev  *entry
-	next  *entry
+	key    int
+	value  int
+	freq   int
+	prev   *entry
+	next   *entry
 	parent *freqNode
 }
 
 type freqNode struct {
-	freq  int
-	head  *entry // dummy head (for LRU at this freq)
-	tail  *entry // dummy tail
-	prev  *freqNode
-	next  *freqNode
+	freq int
+	head *entry // dummy head (for LRU at this freq)
+	tail *entry // dummy tail
+	prev *freqNode
+	next *freqNode
 }
 
 // NewLFU creates a new LFU cache with the given capacity.

@@ -27,11 +27,11 @@ const keyPrefix = "harness_sk_"
 // APIKey represents a stored API key record.
 type APIKey struct {
 	ID         string
-	KeyHash    string    // bcrypt hash of the raw key; NEVER log or return this in plaintext
-	KeyPrefix  string    // first 8 characters after "harness_sk_" for human identification
+	KeyHash    string // bcrypt hash of the raw key; NEVER log or return this in plaintext
+	KeyPrefix  string // first 8 characters after "harness_sk_" for human identification
 	TenantID   string
-	Name       string    // human-readable label, e.g. "dennison's CLI"
-	Scopes     []string  // e.g. ["runs:write", "runs:read"]
+	Name       string   // human-readable label, e.g. "dennison's CLI"
+	Scopes     []string // e.g. ["runs:write", "runs:read"]
 	CreatedAt  time.Time
 	LastUsedAt *time.Time
 	ExpiresAt  *time.Time
