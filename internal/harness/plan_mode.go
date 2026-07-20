@@ -78,6 +78,46 @@ func (r *Runner) awaitPlanApproval(ctx context.Context, runID, content string) (
 	return approved, nil
 }
 
+// planModePromptBlock returns the model-facing guidance injected into the
+// outgoing provider messages (as a trailing system message) while the run is
+// actively in plan mode. It tells the model that it is in read-only planning,
+// names the resolved plan file as the only writable target, and explains how to
+// finish: write the plan to the plan file and end the turn to present it,
+// optionally with 1-3 clearly labeled approaches under "## Approaches" (the
+// structured convention plan-exit option extraction relies on). It returns ""
+// when the run is not in PlanModeActive, so non-plan runs and post-approval
+// turns carry no block.
+func (r *Runner) planModePromptBlock(runID string) string {
+	r.mu.RLock()
+	st := r.runs[runID]
+	if st == nil || st.planMode != PlanModeActive {
+		r.mu.RUnlock()
+		return ""
+	}
+	planFile := st.planFile
+	r.mu.RUnlock()
+	return fmt.Sprintf(`PLAN MODE ACTIVE — you are in read-only planning mode.
+- Explore the codebase with read-only tools (read, grep, glob, ls, non-mutating bash commands).
+- The only file you may write is the designated plan file: %s. All other writes, edits, and mutating tool calls are denied (plan_mode_denied).
+- When the plan is ready, write it to %s and end your turn; ending your turn presents the plan to the operator for approval.
+- If you want to offer alternatives, end the plan with a "## Approaches" section listing 1-3 clearly labeled approaches.`, planFile, planFile)
+}
+
+// planModeDenialFeedback returns the user message appended to the run when the
+// operator denies a plan exit, reminding the model which plan file to revise.
+func (r *Runner) planModeDenialFeedback(runID string) string {
+	r.mu.RLock()
+	var planFile string
+	if st := r.runs[runID]; st != nil {
+		planFile = st.planFile
+	}
+	r.mu.RUnlock()
+	if strings.TrimSpace(planFile) == "" {
+		planFile = defaultPlanFile
+	}
+	return fmt.Sprintf("The operator requested changes to the plan. Revise the designated plan file (%s) and present the updated plan.", planFile)
+}
+
 // PlanModeState is the per-run lifecycle for an enforced planning phase.
 // inactive → active when the run starts with PlanMode enabled; active →
 // exit_pending while awaitPlanApproval blocks on the operator; exit_pending →
