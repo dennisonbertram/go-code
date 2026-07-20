@@ -159,7 +159,7 @@
 - [x] Write failing tests first, confirm red.
 - [x] Implement component `Styles` injection + derivation + model wiring.
 - [x] Run `go test ./cmd/harnesscli/... -count=1` green; gofmt/vet clean.
-- [ ] Update indexes/logs; commit, push `epic/810-theme-system-s2`, open PR.
+- [x] Update indexes/logs; commit, push `epic/810-theme-system-s2`, open PR #871.
 
 ## Risks and Mitigations
 
