@@ -1,6 +1,79 @@
-# Plan: shell mode — Slice 1: shell-mode input state with `!` prefix entry/exit
+# Plan: shell mode — epic #811 (slices 1-2)
 
-Parent epic: #811 (parent tracking: #803). This plan covers ONLY slice 1 of the epic.
+Parent epic: #811 (parent tracking: #803).
+
+## Slice 2: run shell-mode commands locally with streamed output card
+
+Status: `in implementation` (building on merged slice 1).
+
+### Context
+
+- Problem: slice 1 shipped shell-mode input state with a submit stub. Slice 2
+  executes the submitted command locally from the `harnesscli` TUI process and
+  streams stdout/stderr into the conversation view as a tool-style card.
+- User impact: `!echo hello` renders a `shell` card containing `hello`;
+  `!sleep 999` is interruptible with Esc/Ctrl-C; `!false` shows a non-zero exit.
+- Constraints: `Update()` must never block (async pattern from
+  `plugin/execute.go`); output bounded (head+tail, same 30KB cap as bash
+  plugins); kill the whole process group on interrupt (pattern from
+  `internal/harness/tools/exec_group_unix.go`, #786).
+
+### Scope
+
+- In scope:
+  - New `cmd/harnesscli/tui/shellexec.go` — `tea.Cmd`-based executor:
+    `exec.CommandContext(ctx, "sh", "-c", ...)` with configurable timeout
+    (default 120s), combined stdout/stderr, per-read delta messages (capped),
+    and a final done message carrying exit code + bounded head/tail output.
+  - `shellexec_kill_unix.go` / `shellexec_kill_other.go` — process-group kill
+    (mirrors `configureGroupKill`, which is unexported in its package).
+  - `cmd/harnesscli/tui/model.go` — route `CommandSubmittedMsg` to the executor
+    while `shellMode` is set (replacing the slice-1 stub); exit shell mode on
+    submit; card lifecycle via existing `handleToolStart`/`handleToolChunk`/
+    `handleToolResult`/`handleToolError` with tool name `shell`; Esc and
+    Ctrl-C kill the running command; `extractToolCommand` extended to `shell`.
+- Out of scope (later slices): context injection (3), Ctrl+B background
+  handoff (4), persisted shell history (5). No server/API changes.
+
+### Test Plan (TDD)
+
+- Executor unit tests (`shellexec_internal_test.go`, package `tui`):
+  stdout capture, stderr capture, non-zero exit code, timeout kills process,
+  output buffer bounded at cap, streaming deltas arrive before done,
+  `kill()` interrupts promptly.
+- Model tests (`shellmode_exec_test.go`, package `tui_test`):
+  submit runs the command and produces running → completed card with output;
+  `exit 1` shows non-zero exit in the card; Esc interrupts `sleep 999` fast;
+  shell mode resets to normal after submit. Update the slice-1 stub test to
+  the new execution behavior.
+- Regression: full `./cmd/harnesscli/...` suite stays green; slice-1
+  entry/exit tests unchanged.
+
+### Cross-Surface Impact Map
+
+- Config: None. Server API: None (shell mode runs in the TUI process).
+- TUI state: `shellExecs map[string]*shellExec` + `shellRunningID` +
+  `shellExecSeq` + `shellExecTimeout` on the root Model; executors run as
+  goroutines feeding tea messages.
+- Known rendering limitation: tooluse `ErrorView` shows only `ErrorText`
+  (agent bash errors behave the same), so failed commands report
+  `exit status N` plus the bounded output as reflowed error text; the pristine
+  streamed output remains visible while running. Refinable in later slices.
+
+### Implementation Checklist (slice 2)
+
+- [x] Slice 1 merged: input state, marker, border, entry/exit, stub submit.
+- [x] Write failing executor + model tests first; watch them fail.
+- [x] shellexec.go executor (start/delta/done, bounded buffer, timeout).
+- [x] Process-group kill files (unix + fallback).
+- [x] model.go: submit routes to executor; card lifecycle; Esc/Ctrl-C kill.
+- [x] `go test ./cmd/harnesscli/... -count=1` green; gofmt + go vet clean.
+- [x] Engineering-log entry; plan/index maintenance.
+- [ ] Commit, push `epic/811-shell-mode-s2`, open PR (do not merge).
+
+## Slice 1: shell-mode input state with `!` prefix entry/exit
+
+Status: `implemented` (merged to main via PR #843).
 
 ## Context
 

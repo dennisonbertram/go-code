@@ -73,6 +73,28 @@
 - Strict TDD: `cmd/harnesscli/tui/steer_events_test.go` (package `tui_test`, `sse_events_test.go` pattern) drives scripted `SSEEventMsg`s — marker+message in viewport, exactly one role-`user` transcript entry, distinction from a typed prompt, five malformed-payload shapes (no panic, no marker, transcript unchanged, run stays active).
 - Validation: `go test ./cmd/harnesscli/... -count=1` all ok (incl. `sse_events_test.go`, `escape_test.go`, `cancel_test.go`, `ctrlc_server_cancel_test.go`, `clipboard_test.go`, `keys_test.go` guards); `go test ./internal/server/ ./internal/harness/ -count=1` ok; gofmt/vet clean.
 
+## 2026-07-20 (Shell Mode Slice 2 — Epic #811)
+
+- Shell-mode submit now executes the command locally in the TUI process
+  (`sh -c`, 120s default timeout) and streams combined stdout/stderr into a
+  tool-style `shell` card, replacing the slice-1 stub. The executor
+  (`cmd/harnesscli/tui/shellexec.go`) is fully async: a pump goroutine feeds
+  output/done messages on a buffered channel that the model polls with a
+  tea.Cmd, so `Update()` never blocks.
+- Output is bounded twice: live deltas stop after 30KB, and the final done
+  message carries a 30KB head+tail buffer (same strategy as bash plugins), so
+  flood commands like `yes` stay memory-safe.
+- Esc and Ctrl-C kill the whole process group (`Setpgid` + group SIGKILL +
+  `WaitDelay`, mirroring `internal/harness/tools/exec_group_unix.go` #786);
+  the done message then finalizes the card as interrupted. Cards reuse the
+  existing `handleToolStart`/`handleToolChunk`/`handleToolResult`/
+  `handleToolError` pipeline; `extractToolCommand` now covers `shell`.
+- Known limitation: the tooluse `ErrorView` renders only `ErrorText`, so
+  failed commands report `exit status N` plus the bounded output as reflowed
+  error text (same behavior as agent bash errors today).
+- Validation: `go test ./cmd/harnesscli/... -count=1` green; gofmt/vet clean
+  on touched files.
+
 ## 2026-07-20 (Issue #854 TUI Subscription Credential Import)
 
 - Replaced the stale `/keys` startup hint based on nonexistent `KIMI_SUBSCRIPTION_AUTH` with synchronous, local-only reads of both harness-owned Codex and Kimi credential stores. The TUI stores only a non-secret availability marker.

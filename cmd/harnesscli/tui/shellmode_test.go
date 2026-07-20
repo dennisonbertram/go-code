@@ -155,7 +155,7 @@ func TestShellMode_PastedBangCommandEntersShellMode(t *testing.T) {
 	}
 }
 
-func TestShellMode_SubmitIsStubAndReturnsToNormalMode(t *testing.T) {
+func TestShellMode_SubmitExecutesAndReturnsToNormalMode(t *testing.T) {
 	m := initModel(t, 80, 24)
 	m = typeIntoModel(m, "!")
 	m = typeIntoModel(m, "echo hi")
@@ -163,24 +163,22 @@ func TestShellMode_SubmitIsStubAndReturnsToNormalMode(t *testing.T) {
 		t.Fatal("precondition: shell mode must be active")
 	}
 
-	// Simulate the input area emitting the submit message (slice 1 has no
-	// execution yet — the model must stub it out).
-	m2, _ := m.Update(inputarea.CommandSubmittedMsg{Value: "echo hi"})
+	// Slice 2: submitting in shell mode executes the command locally and shows
+	// a running "shell" card (the slice-1 stub status message is gone).
+	m2, cmd := m.Update(inputarea.CommandSubmittedMsg{Value: "echo hi"})
 	m = m2.(tui.Model)
 
 	if m.ShellMode() {
 		t.Error("submitting in shell mode must return to normal mode")
 	}
-	if m.RunActive() {
-		t.Error("the shell-mode submit stub must not start an agent run")
+	if strings.Contains(m.StatusMsg(), "not executed") {
+		t.Errorf("shell commands must execute now — stale stub status %q", m.StatusMsg())
 	}
-	status := m.StatusMsg()
-	if !strings.Contains(status, "not executed") {
-		t.Errorf("stub submit must set a status message saying the command was not executed, got %q", status)
+	if got := m.ActiveToolCallStatus(); got != "running" {
+		t.Errorf("submit must start local execution as a running shell card, got %q", got)
 	}
-	if !strings.Contains(status, "echo hi") {
-		t.Errorf("stub status message must name the command, got %q", status)
-	}
+	// Reap the spawned process before the test exits.
+	_ = drainShell(t, m, cmd)
 }
 
 func TestShellMode_SurvivesWindowResize(t *testing.T) {
