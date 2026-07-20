@@ -199,3 +199,57 @@ func stripANSI(s string) string {
 	}
 	return result.String()
 }
+
+func TestStatusbarShowsTitle(t *testing.T) {
+	sb := statusbar.New(80)
+	sb.SetModel("gpt-4.1-mini")
+	sb.SetTitle("fix auth bug")
+	view := sb.View()
+	if !strings.Contains(view, "fix auth bug") {
+		t.Errorf("status bar missing session title: %q", view)
+	}
+}
+
+func TestStatusbarTitleOmittedWhenEmpty(t *testing.T) {
+	withEmpty := statusbar.New(80)
+	withEmpty.SetModel("gpt-4.1-mini")
+	withEmpty.SetTitle("")
+
+	unset := statusbar.New(80)
+	unset.SetModel("gpt-4.1-mini")
+
+	if withEmpty.View() != unset.View() {
+		t.Errorf("empty title must render identically to an unset title:\nwith-empty: %q\nunset:      %q", withEmpty.View(), unset.View())
+	}
+}
+
+func TestStatusbarTitleTruncated(t *testing.T) {
+	sb := statusbar.New(80)
+	sb.SetModel("gpt-4.1-mini")
+	long := "this is an extremely long session title that must be clipped"
+	sb.SetTitle(long)
+	view := sb.View()
+	if strings.Contains(view, long) {
+		t.Errorf("status bar must truncate long titles, got full title in: %q", view)
+	}
+	stripped := stripANSI(view)
+	if len([]rune(stripped)) > 82 { // width + small ANSI tolerance
+		t.Errorf("status bar overflowed width 80 with a long title: %d runes: %q", len([]rune(stripped)), stripped)
+	}
+}
+
+func TestStatusbarTitleClearRestoresBaseline(t *testing.T) {
+	sb := statusbar.New(80)
+	sb.SetModel("gpt-4.1-mini")
+	baseline := sb.View()
+
+	sb.SetTitle("temporary")
+	if sb.View() == baseline {
+		t.Fatal("setting a title must change the rendered bar")
+	}
+
+	sb.SetTitle("")
+	if sb.View() != baseline {
+		t.Errorf("clearing the title must restore the baseline bar:\nbaseline: %q\ncleared:  %q", baseline, sb.View())
+	}
+}

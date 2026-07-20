@@ -566,8 +566,10 @@ func TestAPIKeySetMsg_DifferentProviders(t *testing.T) {
 // TestBuildCommandRegistry_FullBuiltinSet verifies that buildCommandRegistry
 // registers all expected built-in slash commands. We test this by observing which
 // commands appear in the /help overlay (which derives its list from the registry).
+// The window must be tall enough to fit every command row: the help dialog
+// renders (height-13) content lines and the registry holds ~28 commands.
 func TestBuildCommandRegistry_FullBuiltinSet(t *testing.T) {
-	m := initModel(t, 120, 40)
+	m := initModel(t, 120, 50)
 	m = sendSlashCommand(m, "/help")
 	v := m.View()
 

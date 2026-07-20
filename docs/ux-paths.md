@@ -336,6 +336,9 @@ Registry (`cmd_parser.go:79-194`): clear, context, export, help, keys, model, qu
 | `/profiles` | profile picker | OK | `model.go:1026-1033`; model_init_test.go |
 | `/sessions` | session picker | OK | `model.go:1035-1042`; `TestSS006_SessionsCommandOpensOverlay` |
 | `/new` | reset conversationID | OK | `model.go:1044-1053`; `TestSS005_NewCommandResetsConversationID` |
+| `/title <text>` | set session title; persists; shown in statusbar + picker | OK | `model.go` (`executeTitleCommand`); title_test.go |
+| `/title` (no args) | show current title / "No title set" hint | OK | title_test.go |
+| `/title clear` | remove session title | OK | title_test.go |
 | `/search <q>` | search transcript | OK | `model.go:1055-1068`; search_test.go (12+) |
 | `/search` (no args) | usage hint | OK | `model.go:1056-1058`; `TestSearch_BT002_EmptyQueryStatusMessage` |
 | `/history <q>` | search session meta | OK | `model.go:1070-1083`; `TestSearch_BT006_HistorySearchOpensOverlay` |

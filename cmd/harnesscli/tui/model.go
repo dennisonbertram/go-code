@@ -1560,6 +1560,60 @@ func executeSessionsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	return nil, false
 }
 
+// sessionTitle returns the stored title for the current conversation, or ""
+// when the session has no title (or no session is active).
+func (m Model) sessionTitle() string {
+	if m.sessionStore == nil || m.conversationID == "" {
+		return ""
+	}
+	if e, ok := m.sessionStore.Get(m.conversationID); ok {
+		return e.Title
+	}
+	return ""
+}
+
+// executeTitleCommand implements /title: with no args it shows the current
+// session's title, `/title <text>` names the session, and `/title clear`
+// removes the name. Titles persist in sessions.json and render in the
+// statusbar and /sessions picker.
+func executeTitleCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
+	if m.conversationID == "" {
+		return []tea.Cmd{m.setStatusMsg("No active session — start a run before setting a title")}, false
+	}
+	if m.sessionStore == nil {
+		return []tea.Cmd{m.setStatusMsg("Session store unavailable")}, false
+	}
+
+	// /title clear — remove the title (only when "clear" is the sole argument).
+	if len(cmd.Args) == 1 && cmd.Args[0] == "clear" {
+		m.sessionStore.SetTitle(m.conversationID, "")
+		if err := m.sessionStore.Save(); err != nil {
+			return []tea.Cmd{m.setStatusMsg("Could not save session title: " + err.Error())}, false
+		}
+		m.statusBar.SetTitle("")
+		return []tea.Cmd{m.setStatusMsg("Session title cleared")}, false
+	}
+
+	// /title — show the current title.
+	if len(cmd.Args) == 0 {
+		if title := m.sessionTitle(); title != "" {
+			return []tea.Cmd{m.setStatusMsg("Session title: " + title)}, false
+		}
+		return []tea.Cmd{m.setStatusMsg("No title set — use /title <text> to name this session")}, false
+	}
+
+	// /title <text> — set the title.
+	title := strings.Join(cmd.Args, " ")
+	if ok := m.sessionStore.SetTitle(m.conversationID, title); !ok {
+		return []tea.Cmd{m.setStatusMsg("Current session is not in the store yet — send a message first")}, false
+	}
+	if err := m.sessionStore.Save(); err != nil {
+		return []tea.Cmd{m.setStatusMsg("Could not save session title: " + err.Error())}, false
+	}
+	m.statusBar.SetTitle(title)
+	return []tea.Cmd{m.setStatusMsg("Session title set to: " + title)}, false
+}
+
 // executeRewindCommand intentionally requires an explicit point id and force
 // confirmation token. The server endpoint remains the authority for file
 // restore; this command never issues a destructive request implicitly.
@@ -1581,6 +1635,8 @@ func executeNewSessionCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.responseStarted = false
 	m.activeAssistantLineCount = 0
 	m.clearThinkingBar()
+	// A fresh session has no title; drop it from the status bar.
+	m.statusBar.SetTitle("")
 	return []tea.Cmd{m.setStatusMsg("New session started")}, false
 }
 
@@ -1814,6 +1870,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// Initialize/resize components
 		m.statusBar = statusbar.New(msg.Width)
 		m.statusBar.SetModel(m.statusBarModelLabel())
+		m.statusBar.SetTitle(m.sessionTitle())
 		m.statusBar.SetCost(m.cumulativeCostUSD)
 		m.statusBar.SetContext(m.totalTokens, m.contextWindowTotal())
 		m.interruptBanner.Width = msg.Width
@@ -2856,6 +2913,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			_ = m.sessionStore.Save()
 		}
+		// Reflect the session's title (new sessions have none) in the status bar.
+		m.statusBar.SetTitle(m.sessionTitle())
 		// Clear pending message preview now that it has been recorded.
 		m.pendingLastMsg = ""
 		// Start the SSE bridge for this run only if no cancel func is already
@@ -3478,6 +3537,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessionPicker = m.sessionPicker.Close()
 		m.overlayActive = false
 		m.activeOverlay = ""
+		// Show the picked session's title (if any) in the status bar.
+		m.statusBar.SetTitle(m.sessionTitle())
 		// Clear the viewport and transcript so stale messages from the previous
 		// conversation are not shown alongside the resumed session.
 		m.vp = viewport.New(m.width, m.layout.ViewportHeight)
