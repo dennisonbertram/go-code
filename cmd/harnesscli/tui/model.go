@@ -233,6 +233,11 @@ type Model struct {
 
 	// selectedGateway is the active routing gateway ("" = direct, "openrouter" = OpenRouter).
 	selectedGateway string
+
+	// serverModels is the last model list fetched from /v1/models, retained so
+	// capability pre-flights (e.g. image-modality gating for clipboard paste,
+	// epic #818) can consult it without a network round-trip.
+	serverModels []modelswitcher.ServerModelEntry
 	// gatewaySelected is the cursor index in the gatewayOptions overlay.
 	gatewaySelected int
 
@@ -480,6 +485,7 @@ func buildHelpDialog(reg *CommandRegistry, keys KeyMap) helpdialog.Model {
 		{Keys: "ctrl+e", Description: keys.EditMode.Help().Desc},
 		{Keys: "esc", Description: keys.Interrupt.Help().Desc},
 		{Keys: "ctrl+s", Description: keys.Copy.Help().Desc},
+		{Keys: "ctrl+v", Description: keys.PasteImage.Help().Desc},
 		{Keys: "ctrl+c", Description: "interrupt run (twice) / quit when idle"},
 	}
 
@@ -2020,10 +2026,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if alreadyReady {
 			m.historyStore = m.input.HistoryState()
 		}
+		// Pending attachment chips live on the input component; capture them
+		// before the re-create below so a resize never drops (or leaks) them.
+		pendingAttachments := m.input.Attachments()
 		m.input = inputarea.NewWithHistory(msg.Width, m.historyStore)
 		// Re-apply shell mode: the input component is re-created above, so its
 		// rendering state must be restored after every resize.
 		m.input = m.input.SetShellMode(m.shellMode)
+		// Re-apply pending image attachment chips (epic #818, slice 2).
+		m.input = m.input.WithAttachments(pendingAttachments)
 		// Re-wire autocomplete provider each time the input is re-created.
 		if m.autocompleteProvider != nil {
 			m.input = m.input.SetAutocompleteProvider(m.autocompleteProvider)
@@ -2846,6 +2857,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.dashboardOpenCmds()...)
 			return m, tea.Batch(cmds...)
 
+		// Epic #818 (slice 2): ctrl+v pastes an image from the system
+		// clipboard as an attachment chip in the input area. The modality
+		// pre-flight rejects up front (no subprocess) when the selected
+		// model is known to be text-only.
+		case key.Matches(msg, m.keys.PasteImage) && !m.overlayActive:
+			if err := m.imageModalityError(); err != nil {
+				cmds = append(cmds, m.setStatusMsg(err.Error()))
+				return m, tea.Batch(cmds...)
+			}
+			cmds = append(cmds, pasteImageCmd())
+			return m, tea.Batch(cmds...)
+
 		default:
 			// When model overlay is open (not config panel), intercept keys for navigation, search, and star.
 			if m.overlayActive && m.activeOverlay == "model" && !m.modelConfigMode {
@@ -2943,6 +2966,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// Sync autocomplete dropdown with current input value.
 			m.slashComplete = syncSlashComplete(m.slashComplete, m.input.Value())
 		}
+
+	case clipboardImageReadMsg:
+		cmds = append(cmds, m.handleClipboardImageRead(msg))
 
 	case inputarea.CommandSubmittedMsg:
 		// Whitespace-only submissions are never valid — neither a slash command
@@ -3583,6 +3609,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		currentStarred := m.modelSwitcher.StarredIDs()
 		m.modelSwitcher = m.modelSwitcher.WithModels(msg.Models).SetLoading(false)
 		m.modelSwitcher = m.modelSwitcher.WithStarred(currentStarred)
+		m.serverModels = msg.Models
 		// For OpenRouter models, availability depends solely on the OpenRouter API key.
 		if msg.Source == "openrouter" {
 			orKeySet := m.providerKeyConfigured("openrouter")

@@ -20,6 +20,10 @@ type ModelResponse struct {
 	Aliases           []string `json:"aliases"`
 	InputCostPerMTok  float64  `json:"input_cost_per_mtok"`
 	OutputCostPerMTok float64  `json:"output_cost_per_mtok"`
+	// Modalities lists the model's input modalities (e.g. "text", "image")
+	// from the catalog. Clients use it to pre-flight modality-gated input
+	// such as image paste (epic #818). Omitted when unknown.
+	Modalities []string `json:"modalities,omitempty"`
 }
 
 // ProviderResponse is the JSON shape for a single provider in the /v1/providers response.
@@ -254,6 +258,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				Aliases:           aliases,
 				InputCostPerMTok:  inputCost,
 				OutputCostPerMTok: outputCost,
+				Modalities:        result.Model.Modalities,
 			})
 		}
 	} else {
@@ -303,6 +308,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 					Aliases:           aliases,
 					InputCostPerMTok:  inputCost,
 					OutputCostPerMTok: outputCost,
+					Modalities:        model.Modalities,
 				})
 			}
 		}
