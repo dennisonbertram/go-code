@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>harnessd session visualizer</title>
+<link rel="stylesheet" href="/viz/style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>harnessd <span class="muted">session visualizer</span></h1>
+  <span id="status" class="badge badge-idle">disconnected</span>
+</header>
+
+<main>
+  <section id="token-panel" class="panel">
+    <p>
+      Enter an API key with <code>runs:read</code> scope to connect. The key is
+      kept in <code>sessionStorage</code> only and sent as an
+      <code>Authorization: Bearer</code> header on API requests — never in URLs,
+      cookies, or server logs beyond the existing header path.
+    </p>
+    <form id="token-form">
+      <input id="token-input" type="password" autocomplete="off"
+             placeholder="harness_sk_…" aria-label="API key">
+      <button type="submit">Connect</button>
+    </form>
+    <p id="token-error" class="error" hidden></p>
+  </section>
+
+  <section id="view-panel" class="panel" hidden>
+    <nav class="crumbs">
+      <a href="#/runs">#/runs</a>
+      <span class="muted">· read-only · list, detail, and timeline views arrive in later slices</span>
+    </nav>
+    <div id="view"></div>
+  </section>
+</main>
+
+<footer class="footer muted">
+  Served by harnessd from embedded assets. All data comes from the existing
+  <code>/v1</code> API over GET requests only.
+</footer>
+
+<script src="/viz/app.js"></script>
+</body>
+</html>
