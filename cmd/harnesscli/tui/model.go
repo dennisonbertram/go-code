@@ -383,6 +383,9 @@ func New(cfg TUIConfig) Model {
 		"openrouter": "OPENROUTER_API_KEY",
 		"openai":     "OPENAI_API_KEY",
 		"anthropic":  "ANTHROPIC_API_KEY",
+		// Subscription auth is managed with `harnesscli auth kimi`; this
+		// marker lets /keys display the provider without ever reading a token.
+		"kimi-subscription": "KIMI_SUBSCRIPTION_AUTH",
 	}
 	for provider, envVar := range envKeyVars {
 		if key := os.Getenv(envVar); key != "" {
