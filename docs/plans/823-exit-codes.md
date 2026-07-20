@@ -3,10 +3,26 @@
 ## Slice status
 
 - Slice 1 (docs contract): **merged** (PR #824, branch `epic/823-exit-codes`).
-- Slice 2 (map terminal events to exit codes): **this branch** (`epic/823-exit-codes-s2`), branched from `origin/main` after the Slice 1 merge.
-- Slices 3–4 (blocked detection; e2e + per-command docs): future branches.
+- Slice 2 (map terminal events to exit codes): **merged** (PR #861, branch `epic/823-exit-codes-s2`).
+- Slice 3 (exit 3 on blocked headless runs): **this branch** (`epic/823-exit-codes-s3`), branched from `origin/main` after the Slice 2 merge.
+- Slice 4 (e2e assertions + per-command docs): future branch.
 
-## Slice 2 scope
+## Slice 3 scope
+
+- `cmd/harnesscli/exitcodes.go`: `isBlockedEvent` (run.waiting_for_user, tool.approval_required, plan.approval_required) and `blockedEventReason` (question-blocked vs approval-blocked wording). The contract's blocked signals, in the same single-source-of-truth file as the code table.
+- `cmd/harnesscli/main.go`: `runBlockedError`; `processSSEBlock` returns it when a blocked signal arrives while `stdinIsTerminal()` is false (interactive stdin: stream unchanged, stays open — ask-user wiring is the other epic's scope); `run()` maps it to `exitBlocked` after `reportRunBlocked` prints the run ID, reason, and `harnesscli continue <run-id>` resume command to stderr. Terminal detection reuses the existing injectable `stdinIsTerminal` double (`cmd/harnesscli/plugins.go:107`); no new TTY dependency.
+- `cmd/harnesscli/runctl.go` `runContinue()`: same blocked mapping (contract applies to streaming continue).
+- Server-side run never auto-cancelled on the blocked path; blocked event line still printed to stdout (every-event-printed contract preserved).
+- Docs: contract page blocked section + status table now describe implemented behavior; engineering-log entry.
+
+## Slice 3 test plan (TDD)
+
+- Failing-first (`cmd/harnesscli/exitcodes_test.go`): all three blocked signals × (non-interactive stdin → exit 3, stderr names run ID + reason + event + resume command, no cancel POST reaches the server, blocked event line still on stdout; simulated TTY → stream continues and the subsequent terminal event's code is returned); `runContinue()` blocked → 3; unit tables for `isBlockedEvent` / `blockedEventReason`.
+- Servers hold the SSE stream open after the blocked signal so a regression to "stream forever" hangs the test, not just fails an assertion.
+- Regression guard: slice-2 exit-code tests and all existing `cmd/harnesscli` tests unchanged and green.
+- Verification: `go test ./cmd/harnesscli/... ./internal/harness/... ./test/e2e/... -count=1`, gofmt, go vet.
+
+## Slice 2 record (completed)
 
 - New `cmd/harnesscli/exitcodes.go`: constants `exitSuccess`(0) / `exitClientError`(1) / `exitRunFailed`(2) / `exitBlocked`(3) / `exitCancelled`(6) / `exitInterrupted`(130) and `exitCodeForTerminalEvent(harness.EventType) int`; unknown/empty/non-terminal events map to 1 (defensive non-zero default). `exitBlocked` is defined here and wired in Slice 3.
 - `cmd/harnesscli/main.go` `run()`: terminal return becomes `exitCodeForTerminalEvent(...)`; literal `1` returns in `run()` and `1`/`130` in `handleStreamError()` replaced with the named constants (one source of truth). `terminal_event=` stdout line and interrupt-cancel behavior untouched.

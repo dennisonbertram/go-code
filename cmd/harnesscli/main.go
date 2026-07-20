@@ -214,10 +214,35 @@ func run(args []string) int {
 	fmt.Fprintf(stdout, "run_id=%s\n", runID)
 	terminalEvent, err := streamRunEvents(ctx, streamHTTPClient, *baseURL, runID, stdout)
 	if err != nil {
+		var blocked *runBlockedError
+		if errors.As(err, &blocked) {
+			reportRunBlocked(runID, blocked.eventType)
+			return exitBlocked
+		}
 		return handleStreamError(ctx, requestHTTPClient, *baseURL, runID, err)
 	}
 	fmt.Fprintf(stdout, "terminal_event=%s\n", terminalEvent)
 	return exitCodeForTerminalEvent(harness.EventType(terminalEvent))
+}
+
+// runBlockedError is returned by the streaming loop when a blocked signal
+// (run.waiting_for_user, tool.approval_required, or plan.approval_required)
+// arrives while stdin is non-interactive. It is not a stream failure: the
+// server-side run is left intact so an operator can resume it later.
+type runBlockedError struct {
+	eventType harness.EventType
+}
+
+func (e *runBlockedError) Error() string {
+	return fmt.Sprintf("run blocked: %s", e.eventType)
+}
+
+// reportRunBlocked prints the blocked diagnosis for a headless caller: why
+// the run stopped, that the server-side run is untouched, and how to resume
+// it interactively.
+func reportRunBlocked(runID string, eventType harness.EventType) {
+	fmt.Fprintf(stderr, "harnesscli: run %s blocked: %s (%s); stdin is non-interactive, exiting; server-side run left intact\n", runID, blockedEventReason(eventType), eventType)
+	fmt.Fprintf(stderr, "harnesscli: resume with: harnesscli continue %s <prompt>\n", runID)
 }
 
 // handleStreamError decides how to report a streamRunEvents failure. If ctx
@@ -436,6 +461,14 @@ func processSSEBlock(raw string, out io.Writer) (string, bool, error) {
 
 	if harness.IsTerminalEvent(event.Type) {
 		return string(event.Type), true, nil
+	}
+	// A blocked signal with non-interactive stdin aborts the stream: the
+	// run is waiting on input a headless caller will never provide, so
+	// streaming further would block forever. With an interactive stdin the
+	// stream stays open (unchanged behavior); interactive answer wiring is
+	// the ask-user epic's scope.
+	if isBlockedEvent(event.Type) && !stdinIsTerminal() {
+		return "", false, &runBlockedError{eventType: event.Type}
 	}
 	return "", false, nil
 }
