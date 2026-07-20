@@ -13,7 +13,7 @@
 
 ## Documentation Contract
 
-- Feature status: `in implementation`
+- Feature status: `implemented`
 - Public docs affected: None; this is internal plumbing.
 - Spec docs to update before code: This plan and `2026-07-20-subscription-auth-foundation-846-impact-map.md`.
 - Implementation notes to add after code: Engineering/system logs and `CLAUDE.md`.
@@ -33,11 +33,11 @@
 - [x] Define acceptance criteria in tests.
 - [x] Document feature status and exact contract before code.
 - [x] Add the provider/model impact map before implementation.
-- [ ] Slice 1: add `TokenSource` interface and `StaticToken` adapter.
-- [ ] Slice 2: extend OpenAI-compatible config/client with dynamic auth and extra headers.
-- [ ] Slice 3: add generic refreshable token cache.
-- [ ] Slice 4: add catalog token-source registration and factory propagation.
-- [ ] Update append-only logs, `CLAUDE.md`, and indexes.
+- [x] Slice 1: add `TokenSource` interface and `StaticToken` adapter.
+- [x] Slice 2: extend OpenAI-compatible config/client with dynamic auth and extra headers.
+- [x] Slice 3: add generic refreshable token cache.
+- [x] Slice 4: add catalog token-source registration and factory propagation.
+- [x] Update append-only logs, `CLAUDE.md`, and indexes.
 - [ ] Run required formatting, vet, and regression gates.
 - [ ] Fetch/merge `origin/main` if advanced, then rerun regression.
 - [ ] Push branch and open PR without merging.

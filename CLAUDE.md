@@ -76,6 +76,7 @@ the SQLite conversation store persists the latest plan content per conversation.
 
 - OpenAI is the primary provider path.
 - Anthropic provider support exists in the provider catalog and should not be described as merely planned.
+- Subscription-auth foundation: `internal/provider.TokenSource` supplies request-time bearer credentials; `internal/provider/tokencache` supplies generic in-memory expiry-margin refresh caching. OpenAI-compatible clients accept optional `TokenSource` and static `ExtraHeaders`; the provider registry exposes `SetTokenSource`, which evicts its cached client. Never log credential values. Codex/Kimi OAuth refresh transport, credential import, persistence, and TUI surfaces are intentionally separate follow-on work.
 
 ## Benchmarks
 
