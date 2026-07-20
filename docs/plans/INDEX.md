@@ -16,6 +16,7 @@
 - `2026-07-19-acp-epic-746-plan.md` — ACP server mode epic #746 (in implementation).
 - `2026-07-20-live-model-discovery-849-plan.md` — provider-agnostic cached live model discovery for Epic #849.
 
+- `816-session-fork.md` — Slice-1 plan for epic #816 (`/fork`): `ConversationStore.ForkConversation` store primitive with TDD fork-integrity, divergence-isolation, and metadata-inheritance tests (in implementation).
 - `PLAN_TEMPLATE.md`: Required template for pre-implementation planning with checklist.
 - `IMPACT_MAP_TEMPLATE.md`: One-page cross-surface impact map template for provider/model flow changes.
 - `active-plan.md`: Current active plan tracker.

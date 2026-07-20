@@ -109,6 +109,14 @@ type ConversationStore interface {
 	// undo leaves the conversation unchanged. Returns an error if the
 	// conversation does not exist.
 	UndoPrompts(ctx context.Context, convID string, count int) (removedFromStep int, err error)
+	// ForkConversation duplicates the conversation srcID — its full message
+	// history in step order plus its metadata — under the new conversation ID
+	// newID, and returns the new conversation's metadata row. The fork inherits
+	// title, workspace, and tenant_id from the source; created_at/updated_at are
+	// fresh, and the pinned flag and token/cost counters start at zero-values.
+	// After the fork the two conversations diverge independently.
+	// Returns an error if srcID does not exist or newID is already taken.
+	ForkConversation(ctx context.Context, srcID, newID string) (*Conversation, error)
 }
 
 // PlanContentStore is an optional run-scoped extension implemented by the

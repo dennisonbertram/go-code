@@ -722,6 +722,22 @@ func (m *mockConversationStore) UpdateConversationMeta(_ context.Context, _, _, 
 func (m *mockConversationStore) GetConversationOwner(_ context.Context, _ string) (*harness.Conversation, error) {
 	return nil, nil
 }
+func (m *mockConversationStore) ForkConversation(_ context.Context, srcID, newID string) (*harness.Conversation, error) {
+	if m.messages == nil {
+		return nil, fmt.Errorf("fork: source conversation %q not found", srcID)
+	}
+	msgs, ok := m.messages[srcID]
+	if !ok {
+		return nil, fmt.Errorf("fork: source conversation %q not found", srcID)
+	}
+	if _, taken := m.messages[newID]; taken {
+		return nil, fmt.Errorf("fork: target conversation %q already exists", newID)
+	}
+	cp := make([]harness.Message, len(msgs))
+	copy(cp, msgs)
+	m.messages[newID] = cp
+	return &harness.Conversation{ID: newID, MsgCount: len(msgs)}, nil
+}
 
 func TestConversationMessagesEndpoint404(t *testing.T) {
 	t.Parallel()
