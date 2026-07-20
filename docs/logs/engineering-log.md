@@ -95,6 +95,32 @@
 - Validation: `go test ./cmd/harnesscli/... -count=1` green; gofmt/vet clean
   on touched files.
 
+## 2026-07-19 (Ctrl-V Image Paste + Chips — Epic #818 Slice 2)
+
+- Wired the slice-1 clipboard reader into the TUI: `ctrl+v` (new
+  `KeyMap.PasteImage`, also listed in the help dialog) runs a modality
+  pre-flight, then reads the clipboard image asynchronously; success appends
+  an `[image #N]` chip row above the input prompt, failure maps the typed
+  errors (`ErrClipboardNoImage`/`ErrClipboardHeadless`/`ErrClipboardUnsupported`)
+  to inline status messages.
+- `inputarea` owns chip state (`Attachment{Path, MediaType}`): Backspace on an
+  empty buffer removes the latest chip and deletes its temp directory
+  (`removeAttachmentFiles` seam); chips survive text submit (pending until
+  slice 3 sends them).
+- Modality pre-flight: `GET /v1/models` now returns the catalog `modalities`
+  (additive, both registry and catalog branches); the TUI keeps the fetched
+  list (`m.serverModels`) and rejects the paste before any subprocess when
+  the effective model is known text-only. Unknown modalities (offline, older
+  server, OpenRouter-sourced list) allow the paste — slice 3's server gate
+  enforces at send time.
+- Bug found and fixed during implementation (regression test added):
+  `WindowSizeMsg` re-creates the input component, which dropped pending
+  chips; attachments are now carried across the re-create via
+  `inputarea.Model.WithAttachments` (`TestPasteImageChipsSurviveWindowResize`).
+- Verified on macOS against the real clipboard (image set then restored):
+  paste → `[image #1]` + temp dir; Backspace → chip gone + temp dir deleted;
+  re-paste → `[image #1]`; text prompt submits with the chip pending.
+
 ## 2026-07-20 (Issue #854 TUI Subscription Credential Import)
 
 - Replaced the stale `/keys` startup hint based on nonexistent `KIMI_SUBSCRIPTION_AUTH` with synchronous, local-only reads of both harness-owned Codex and Kimi credential stores. The TUI stores only a non-secret availability marker.

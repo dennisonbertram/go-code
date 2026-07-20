@@ -122,6 +122,9 @@ type ServerModelEntry struct {
 	ID          string `json:"id"`
 	Provider    string `json:"provider"`
 	DisplayName string `json:"display_name,omitempty"` // optional: from OpenRouter "name" field
+	// Modalities lists the model's input modalities (e.g. "text", "image").
+	// Empty means unknown (older server or non-catalog source).
+	Modalities []string `json:"modalities,omitempty"`
 }
 
 // ReasoningEntry holds display information for a single reasoning effort level.

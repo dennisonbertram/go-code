@@ -26,6 +26,9 @@ type KeyMap struct {
 	Dashboard key.Binding
 	Quit      key.Binding
 	Copy      key.Binding
+	// PasteImage attaches a clipboard image to the input as a placeholder
+	// chip (epic #818, slice 2).
+	PasteImage key.Binding
 	// Modes
 	EditMode key.Binding
 	// ExpandTool toggles the expanded/collapsed view for the active tool call.
@@ -98,6 +101,10 @@ func DefaultKeyMap() KeyMap {
 		Copy: key.NewBinding(
 			key.WithKeys("ctrl+s"),
 			key.WithHelp("ctrl+s", "copy last response"),
+		),
+		PasteImage: key.NewBinding(
+			key.WithKeys("ctrl+v"),
+			key.WithHelp("ctrl+v", "paste image from clipboard"),
 		),
 		EditMode: key.NewBinding(
 			key.WithKeys("ctrl+e"),

@@ -23,6 +23,7 @@ type Model struct {
 	focused      bool
 	autocomplete AutocompleteProvider // may be nil
 	shellMode    bool
+	attachments  []Attachment
 }
 
 var (
@@ -195,6 +196,12 @@ func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
 		return newM, nil
 
 	case tea.KeyBackspace, tea.KeyDelete:
+		if m.value == "" && len(m.attachments) > 0 {
+			// Backspace on an empty buffer removes the most recent
+			// attachment chip (and its temp files) instead of deleting text.
+			m.removeLastAttachment()
+			break
+		}
 		if m.cursor > 0 && len(m.value) > 0 {
 			runes := []rune(m.value)
 			if m.cursor <= len(runes) {
@@ -350,6 +357,10 @@ func (m Model) renderLines(maxLines int) string {
 	}
 
 	out := sb.String()
+	if chips := m.chipsView(); chips != "" {
+		// Attachment chips render on their own row above the prompt.
+		out = chips + "\n" + out
+	}
 	if m.shellMode {
 		// Frame the whole input in the violet shell-mode border. Width() sets
 		// the content width; the border columns sit outside it, so subtract 2
