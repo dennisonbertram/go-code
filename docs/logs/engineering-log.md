@@ -1620,3 +1620,9 @@ Skipped creating separate issues for Op/EventMsg protocol (already covered by SS
 - Generalized the catalog's OpenRouter-only cache into provider-agnostic live model discovery.
 - OpenRouter, OpenAI, Anthropic, and DeepSeek now have five-minute cached listings when configured; failures retain stale cached results when present and otherwise leave the static catalog untouched.
 - Live listings add models while curated catalog metadata remains authoritative on matching IDs.
+## 2026-07-20 (Issue #848 Kimi Code Subscription Authentication)
+
+- Added a separate `kimi-subscription` provider that derives its model list from the existing metered `kimi` entry, preserving the metered path unchanged.
+- `harnesscli auth kimi login` reads the vendor credential only and stores a `0600` go-code-owned copy; status and logout never print a credential and logout never affects the vendor CLI.
+- Refresh uses a 30-second margin for the real 900-second TTL. Fake OAuth/API integration coverage proves a forced near-expiry refresh, rotated persistence, dynamic bearer authorization, and all `X-Kimi-Client-*` headers.
+- Live endpoint caveat: a single unauthenticated `OPTIONS https://auth.kimi.com/api/oauth/token` returned `405 Allow: POST`; no authenticated live refresh or completion was performed. The form/body and OpenAI-compatible wire contract are convention-based and must be manually verified.

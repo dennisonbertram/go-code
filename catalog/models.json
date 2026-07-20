@@ -537,6 +537,13 @@
         }
       }
     },
+    "kimi-subscription": {
+      "display_name": "Kimi Code Subscription",
+      "base_url": "https://api.kimi.com/coding/v1",
+      "api_key_optional": true,
+      "protocol": "openai_compat",
+      "models_from": "kimi"
+    },
     "qwen": {
       "display_name": "Qwen (DashScope)",
       "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",

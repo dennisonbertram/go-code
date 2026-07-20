@@ -18,6 +18,9 @@ type ProviderEntry struct {
 	Quirks         []string          `json:"quirks,omitempty"`
 	Models         map[string]Model  `json:"models"`
 	Aliases        map[string]string `json:"aliases,omitempty"`
+	// ModelsFrom mirrors models from another catalog provider at load time so
+	// subscription variants cannot silently drift from their metered peer.
+	ModelsFrom string `json:"models_from,omitempty"`
 }
 
 // Model describes a single LLM model's capabilities and metadata.

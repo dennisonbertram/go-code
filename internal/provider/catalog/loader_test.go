@@ -99,6 +99,16 @@ func TestLoadCatalogFromBytes_Valid(t *testing.T) {
 	}
 }
 
+func TestLoadCatalogFromBytes_DerivesKimiSubscriptionModels(t *testing.T) {
+	cat, err := LoadCatalogFromBytes([]byte(`{"catalog_version":"1","providers":{"kimi":{"base_url":"https://metered","api_key_env":"MOONSHOT_API_KEY","models":{"kimi-k2.5":{"context_window":1}}},"kimi-subscription":{"base_url":"https://api.kimi.com/coding/v1","api_key_optional":true,"models_from":"kimi"}}}`))
+	if err != nil {
+		t.Fatalf("LoadCatalogFromBytes: %v", err)
+	}
+	if got := cat.Providers["kimi-subscription"].Models["kimi-k2.5"].ContextWindow; got != 1 {
+		t.Fatalf("derived model context = %d", got)
+	}
+}
+
 func TestLoadCatalogFromBytes_EmptyVersion(t *testing.T) {
 	data := `{"catalog_version": "", "providers": {"p": {"base_url": "http://x", "api_key_env": "K", "models": {"m": {"context_window": 1}}}}}`
 	_, err := LoadCatalogFromBytes([]byte(data))

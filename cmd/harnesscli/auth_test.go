@@ -103,6 +103,37 @@ func TestRunAuth_NoSubcommand(t *testing.T) {
 	}
 }
 
+func TestRunAuthKimiLifecycleNeverPrintsCredential(t *testing.T) {
+	tmp := t.TempDir()
+	oldHome := os.Getenv("HOME")
+	t.Cleanup(func() { _ = os.Setenv("HOME", oldHome) })
+	_ = os.Setenv("HOME", tmp)
+	vendor := filepath.Join(tmp, ".kimi-code", "credentials")
+	if err := os.MkdirAll(vendor, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vendor, "kimi-code.json"), []byte(`{"access_token":"fake-access","refresh_token":"fake-refresh","expires_at":2000000000}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out, errOut bytes.Buffer
+	origOut, origErr := stdout, stderr
+	stdout, stderr = &out, &errOut
+	t.Cleanup(func() { stdout, stderr = origOut, origErr })
+	if got := runAuth([]string{"kimi", "login"}); got != 0 {
+		t.Fatalf("login = %d: %s", got, errOut.String())
+	}
+	if strings.Contains(out.String(), "fake-access") || strings.Contains(out.String(), "fake-refresh") {
+		t.Fatal("credential printed")
+	}
+	out.Reset()
+	if got := runAuth([]string{"kimi", "status"}); got != 0 || !strings.Contains(out.String(), "configured") {
+		t.Fatalf("status: %d %s", got, out.String())
+	}
+	if got := runAuth([]string{"kimi", "logout"}); got != 0 {
+		t.Fatal("logout failed")
+	}
+}
+
 func TestDispatch_AuthRouted(t *testing.T) {
 	origStdout := stdout
 	origStderr := stderr

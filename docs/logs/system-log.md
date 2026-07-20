@@ -573,3 +573,9 @@ Use this file to document systems, interfaces, and interactions as they are buil
 - `internal/provider/tokencache.Cache` owns only in-memory cache, expiry-margin, and single-flight synchronization. Provider-specific code supplies refresh transport and any credential persistence; this foundation never imports, stores, or logs provider credentials.
 - `openai.Config.TokenSource` and `ExtraHeaders` flow through the existing chat-completions and responses request paths. Nil `TokenSource` uses the existing static `APIKey` behavior; headers are copied on client construction.
 - `catalog.ProviderRegistry` holds optional runtime token sources alongside API-key overrides. A source marks a provider configured and causes `GetClient` to forward it to `ClientFactory`; changing either credential mode evicts the cached provider client.
+## 2026-07-20 (Kimi subscription auth — Epic #848)
+
+- System/component: `internal/provider/kimi`, Kimi catalog/bootstrap wiring, and `harnesscli auth kimi`.
+- Credentials flow: vendor `~/.kimi-code/credentials/kimi-code.json` is read once on explicit import; mutable state is only `~/.harness/subscription-auth/kimi.json` with mode `0600`.
+- Requests use the existing OpenAI-compatible client with a refreshable token source and static `X-Kimi-Client-*` headers. Refresh persistence is contained in the harness-owned store.
+- Operational limitation: live POST capability, not authenticated OAuth request shape or completion compatibility, was verified; manual service verification remains required.

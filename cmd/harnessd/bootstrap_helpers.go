@@ -20,6 +20,7 @@ import (
 	"go-agent-harness/internal/provider"
 	"go-agent-harness/internal/provider/anthropic"
 	"go-agent-harness/internal/provider/catalog"
+	"go-agent-harness/internal/provider/kimi"
 	openai "go-agent-harness/internal/provider/openai"
 	"go-agent-harness/internal/provider/pricing"
 	"go-agent-harness/internal/relay"
@@ -118,6 +119,9 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 	}
 
 	if bootstrap.providerRegistry != nil {
+		if source, err := kimi.NewTokenSource(kimi.DefaultStorePath(), "", nil); err == nil {
+			bootstrap.providerRegistry.SetTokenSource("kimi-subscription", source)
+		}
 		registerModelDiscoverers(bootstrap.providerRegistry)
 		bootstrap.providerRegistry.SetClientFactory(catalog.ClientFactory(func(apiKey, baseURL, providerName string, tokenSource provider.TokenSource) (catalog.ProviderClient, error) {
 			if providerName == "anthropic" {
@@ -154,6 +158,9 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 					return ""
 				}(),
 				Quirks: providerQuirks,
+			}
+			if providerName == "kimi-subscription" {
+				cfg.ExtraHeaders = kimi.ExtraHeaders()
 			}
 			if providerName == "openrouter" {
 				referer := os.Getenv("HARNESS_OPENROUTER_REFERER")
