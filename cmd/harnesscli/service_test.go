@@ -3,7 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,10 +19,28 @@ type recordedCommand struct {
 	args []string
 }
 
+// serviceRunnerFake records lifecycle-tool invocations and returns queued
+// errors in order (nil once the queue is drained), so tests can simulate
+// already-loaded, not-loaded, and failing service managers.
+type serviceRunnerFake struct {
+	calls []recordedCommand
+	errs  []error
+}
+
+func (f *serviceRunnerFake) run(name string, args ...string) error {
+	f.calls = append(f.calls, recordedCommand{name: name, args: append([]string(nil), args...)})
+	if len(f.errs) == 0 {
+		return nil
+	}
+	err := f.errs[0]
+	f.errs = f.errs[1:]
+	return err
+}
+
 // setupServiceTest isolates the service command surface: stdout/stderr are
 // captured, the platform is forced, and the lifecycle runner is replaced with
 // a recording fake so tests never exec real launchctl/systemctl.
-func setupServiceTest(t *testing.T, platform string) (outBuf, errBuf *bytes.Buffer, calls *[]recordedCommand) {
+func setupServiceTest(t *testing.T, platform string) (outBuf, errBuf *bytes.Buffer, runner *serviceRunnerFake) {
 	t.Helper()
 	origOut, origErr := stdout, stderr
 	origPlatform := servicePlatform
@@ -28,18 +49,49 @@ func setupServiceTest(t *testing.T, platform string) (outBuf, errBuf *bytes.Buff
 	outBuf, errBuf = &bytes.Buffer{}, &bytes.Buffer{}
 	stdout, stderr = outBuf, errBuf
 	servicePlatform = platform
-	calls = &[]recordedCommand{}
-	serviceRunLifecycle = func(name string, args ...string) error {
-		*calls = append(*calls, recordedCommand{name: name, args: append([]string(nil), args...)})
-		return nil
-	}
+	runner = &serviceRunnerFake{}
+	serviceRunLifecycle = runner.run
 
 	t.Cleanup(func() {
 		stdout, stderr = origOut, origErr
 		servicePlatform = origPlatform
 		serviceRunLifecycle = origRunner
 	})
-	return outBuf, errBuf, calls
+	return outBuf, errBuf, runner
+}
+
+// requireCalls asserts the exact sequence of lifecycle-tool invocations.
+func requireCalls(t *testing.T, got []recordedCommand, want ...recordedCommand) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("runner calls: got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i].name != want[i].name || strings.Join(got[i].args, " ") != strings.Join(want[i].args, " ") {
+			t.Errorf("call %d: got %v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
+// guiDomain is the launchd user domain for the current uid.
+func guiDomain() string { return fmt.Sprintf("gui/%d", os.Getuid()) }
+
+// installServiceForTest installs a unit with a fake binary via the real
+// install command and returns the unit path.
+func installServiceForTest(t *testing.T, platform string) string {
+	t.Helper()
+	if code := dispatch([]string{"service", "install", "--binary", "/fake/harnessd"}); code != 0 {
+		t.Fatalf("install exit code: got %d", code)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unitPath, err := serviceUnitPath(platform, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return unitPath
 }
 
 func writeFakeHarnessd(t *testing.T) (binDir, binPath string) {
@@ -121,7 +173,7 @@ func TestServiceRenderSystemdUnit(t *testing.T) {
 func TestServiceInstallLaunchdWritesFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	out, _, calls := setupServiceTest(t, "darwin")
+	out, _, runner := setupServiceTest(t, "darwin")
 
 	code := dispatch([]string{"service", "install", "--binary", "/fake/harnessd"})
 	if code != 0 {
@@ -143,9 +195,9 @@ func TestServiceInstallLaunchdWritesFile(t *testing.T) {
 	if info, err := os.Stat(filepath.Join(home, ".harness", "logs")); err != nil || !info.IsDir() {
 		t.Errorf("expected log dir ~/.harness/logs to be created: %v", err)
 	}
-	// Slice 1 install writes the unit only; it must not bootstrap/start anything.
-	if len(*calls) != 0 {
-		t.Errorf("install must not invoke lifecycle tools, got %v", *calls)
+	// Install writes the unit only; it must not bootstrap/start anything.
+	if len(runner.calls) != 0 {
+		t.Errorf("install must not invoke lifecycle tools, got %v", runner.calls)
 	}
 }
 
@@ -176,7 +228,7 @@ func TestServiceInstallSystemdWritesFile(t *testing.T) {
 func TestServiceInstallDryRunWritesNothing(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	out, _, calls := setupServiceTest(t, "darwin")
+	out, _, runner := setupServiceTest(t, "darwin")
 
 	code := dispatch([]string{"service", "install", "--dry-run", "--binary", "/fake/harnessd"})
 	if code != 0 {
@@ -193,8 +245,8 @@ func TestServiceInstallDryRunWritesNothing(t *testing.T) {
 	if !strings.Contains(out.String(), "<plist") || !strings.Contains(out.String(), "/fake/harnessd") {
 		t.Errorf("dry-run output should print the rendered plist")
 	}
-	if len(*calls) != 0 {
-		t.Errorf("dry-run must not invoke lifecycle tools, got %v", *calls)
+	if len(runner.calls) != 0 {
+		t.Errorf("dry-run must not invoke lifecycle tools, got %v", runner.calls)
 	}
 }
 
@@ -301,7 +353,7 @@ func TestServiceUninstallNotInstalledFails(t *testing.T) {
 func TestServiceUninstallRemovesFileAndBootsOut(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	_, _, calls := setupServiceTest(t, "darwin")
+	_, _, runner := setupServiceTest(t, "darwin")
 
 	if code := dispatch([]string{"service", "install", "--binary", "/fake/harnessd"}); code != 0 {
 		t.Fatalf("install exit code: got %d", code)
@@ -317,19 +369,15 @@ func TestServiceUninstallRemovesFileAndBootsOut(t *testing.T) {
 	}
 
 	// Best-effort launchctl bootout of the user agent before removal.
-	want := recordedCommand{
-		name: "launchctl",
-		args: []string{"bootout", fmt.Sprintf("gui/%d/com.gocode.harnessd", os.Getuid())},
-	}
-	if len(*calls) != 1 || (*calls)[0].name != want.name || strings.Join((*calls)[0].args, " ") != strings.Join(want.args, " ") {
-		t.Errorf("expected exactly %v, got %v", want, *calls)
-	}
+	requireCalls(t, runner.calls,
+		recordedCommand{name: "launchctl", args: []string{"bootout", guiDomain() + "/" + serviceLabel}},
+	)
 }
 
 func TestServiceUninstallSystemdDisableNow(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	_, _, calls := setupServiceTest(t, "linux")
+	_, _, runner := setupServiceTest(t, "linux")
 
 	if code := dispatch([]string{"service", "install", "--binary", "/fake/harnessd"}); code != 0 {
 		t.Fatalf("install exit code: got %d", code)
@@ -344,25 +392,294 @@ func TestServiceUninstallSystemdDisableNow(t *testing.T) {
 		t.Errorf("uninstall must remove %s", unitPath)
 	}
 
-	want := recordedCommand{name: "systemctl", args: []string{"--user", "disable", "--now", "harnessd.service"}}
-	if len(*calls) != 1 || (*calls)[0].name != want.name || strings.Join((*calls)[0].args, " ") != strings.Join(want.args, " ") {
-		t.Errorf("expected exactly %v, got %v", want, *calls)
+	requireCalls(t, runner.calls,
+		recordedCommand{name: "systemctl", args: []string{"--user", "disable", "--now", "harnessd.service"}},
+	)
+}
+
+// --- Slice 2: lifecycle commands (start/stop/status) ---
+
+func TestServiceStartLaunchdBootstraps(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	out, _, runner := setupServiceTest(t, "darwin")
+	unitPath := installServiceForTest(t, "darwin")
+
+	code := dispatch([]string{"service", "start"})
+	if code != 0 {
+		t.Fatalf("start exit code: got %d", code)
+	}
+	requireCalls(t, runner.calls,
+		recordedCommand{name: "launchctl", args: []string{"bootstrap", guiDomain(), unitPath}},
+	)
+	if !strings.Contains(out.String(), "started") {
+		t.Errorf("start output %q should confirm the service started", out.String())
 	}
 }
 
-func TestServiceLifecycleStubsNotImplemented(t *testing.T) {
+func TestServiceStartLaunchdAlreadyLoadedKickstarts(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	setupServiceTest(t, "darwin")
+	out, _, runner := setupServiceTest(t, "darwin")
+	unitPath := installServiceForTest(t, "darwin")
+	// First call (bootstrap) fails because the job is already loaded; the
+	// fallback kickstart -k succeeds and restarts it.
+	runner.errs = []error{errors.New("Bootstrap failed: 5: Input/output error")}
 
-	for _, sub := range []string{"start", "stop", "status"} {
-		_, errOut, _ := setupServiceTest(t, "darwin")
-		code := dispatch([]string{"service", sub})
-		if code == 0 {
-			t.Errorf("service %s must exit non-zero until implemented", sub)
+	code := dispatch([]string{"service", "start"})
+	if code != 0 {
+		t.Fatalf("start exit code: got %d", code)
+	}
+	requireCalls(t, runner.calls,
+		recordedCommand{name: "launchctl", args: []string{"bootstrap", guiDomain(), unitPath}},
+		recordedCommand{name: "launchctl", args: []string{"kickstart", "-k", guiDomain() + "/" + serviceLabel}},
+	)
+	if !strings.Contains(out.String(), "restarted") {
+		t.Errorf("start output %q should report the restart of an already-loaded service", out.String())
+	}
+}
+
+func TestServiceStartLaunchdBootstrapFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	_, errOut, runner := setupServiceTest(t, "darwin")
+	installServiceForTest(t, "darwin")
+	runner.errs = []error{errors.New("bootstrap exploded"), errors.New("kickstart exploded")}
+
+	code := dispatch([]string{"service", "start"})
+	if code == 0 {
+		t.Fatal("start must fail when both bootstrap and kickstart fail")
+	}
+	if !strings.Contains(errOut.String(), "service start") || !strings.Contains(errOut.String(), "bootstrap exploded") {
+		t.Errorf("error %q should surface the bootstrap failure", errOut.String())
+	}
+}
+
+func TestServiceStartSystemdStarts(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	out, _, runner := setupServiceTest(t, "linux")
+	installServiceForTest(t, "linux")
+
+	code := dispatch([]string{"service", "start"})
+	if code != 0 {
+		t.Fatalf("start exit code: got %d", code)
+	}
+	requireCalls(t, runner.calls,
+		recordedCommand{name: "systemctl", args: []string{"--user", "start", "harnessd.service"}},
+	)
+	if !strings.Contains(out.String(), "started") {
+		t.Errorf("start output %q should confirm the service started", out.String())
+	}
+}
+
+func TestServiceStartSystemdFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	_, errOut, runner := setupServiceTest(t, "linux")
+	installServiceForTest(t, "linux")
+	runner.errs = []error{errors.New("Failed to start harnessd.service: Unit not found")}
+
+	code := dispatch([]string{"service", "start"})
+	if code == 0 {
+		t.Fatal("start must fail when systemctl start fails")
+	}
+	if !strings.Contains(errOut.String(), "service start") {
+		t.Errorf("error %q should name the failing command", errOut.String())
+	}
+}
+
+func TestServiceStartNotInstalledFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_, errOut, runner := setupServiceTest(t, "darwin")
+
+	code := dispatch([]string{"service", "start"})
+	if code == 0 {
+		t.Fatal("start before install must fail")
+	}
+	unitPath := filepath.Join(home, "Library", "LaunchAgents", "com.gocode.harnessd.plist")
+	if !strings.Contains(errOut.String(), "not installed") || !strings.Contains(errOut.String(), unitPath) {
+		t.Errorf("error %q should say not installed and name the unit path", errOut.String())
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("start before install must not invoke lifecycle tools, got %v", runner.calls)
+	}
+}
+
+func TestServiceStartUnsupportedPlatformFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	_, errOut, _ := setupServiceTest(t, "windows")
+
+	code := dispatch([]string{"service", "start"})
+	if code == 0 {
+		t.Fatal("start on an unsupported platform must fail")
+	}
+	if !strings.Contains(errOut.String(), "unsupported platform") {
+		t.Errorf("error %q should report the unsupported platform", errOut.String())
+	}
+}
+
+func TestServiceStopLaunchdBootsOut(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	out, _, runner := setupServiceTest(t, "darwin")
+	installServiceForTest(t, "darwin")
+
+	code := dispatch([]string{"service", "stop"})
+	if code != 0 {
+		t.Fatalf("stop exit code: got %d", code)
+	}
+	requireCalls(t, runner.calls,
+		recordedCommand{name: "launchctl", args: []string{"bootout", guiDomain() + "/" + serviceLabel}},
+	)
+	if !strings.Contains(out.String(), "stopped") {
+		t.Errorf("stop output %q should confirm the service stopped", out.String())
+	}
+}
+
+func TestServiceStopSystemdStops(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	out, _, runner := setupServiceTest(t, "linux")
+	installServiceForTest(t, "linux")
+
+	code := dispatch([]string{"service", "stop"})
+	if code != 0 {
+		t.Fatalf("stop exit code: got %d", code)
+	}
+	requireCalls(t, runner.calls,
+		recordedCommand{name: "systemctl", args: []string{"--user", "stop", "harnessd.service"}},
+	)
+	if !strings.Contains(out.String(), "stopped") {
+		t.Errorf("stop output %q should confirm the service stopped", out.String())
+	}
+}
+
+func TestServiceStopRunnerErrorFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	_, errOut, runner := setupServiceTest(t, "darwin")
+	installServiceForTest(t, "darwin")
+	runner.errs = []error{errors.New("Boot-out failed: 3: No such process")}
+
+	code := dispatch([]string{"service", "stop"})
+	if code == 0 {
+		t.Fatal("stop must fail when the service manager errors")
+	}
+	if !strings.Contains(errOut.String(), "service stop") || !strings.Contains(errOut.String(), "No such process") {
+		t.Errorf("error %q should surface the bootout failure", errOut.String())
+	}
+}
+
+func TestServiceStopNotInstalledFails(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	_, errOut, runner := setupServiceTest(t, "darwin")
+
+	code := dispatch([]string{"service", "stop"})
+	if code == 0 {
+		t.Fatal("stop before install must fail")
+	}
+	if !strings.Contains(errOut.String(), "not installed") {
+		t.Errorf("error %q should say not installed", errOut.String())
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("stop before install must not invoke lifecycle tools, got %v", runner.calls)
+	}
+}
+
+func TestServiceStatusNotInstalledFails(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	_, errOut, _ := setupServiceTest(t, "darwin")
+
+	code := dispatch([]string{"service", "status"})
+	if code == 0 {
+		t.Fatal("status before install must fail")
+	}
+	unitPath := filepath.Join(home, "Library", "LaunchAgents", "com.gocode.harnessd.plist")
+	if !strings.Contains(errOut.String(), "not installed") || !strings.Contains(errOut.String(), unitPath) {
+		t.Errorf("error %q should say not installed and name the unit path", errOut.String())
+	}
+}
+
+func TestServiceStatusInstalledNotRunningLaunchd(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	out, _, runner := setupServiceTest(t, "darwin")
+	unitPath := installServiceForTest(t, "darwin")
+	// launchctl print exits non-zero when the job is not loaded.
+	runner.errs = []error{errors.New("Could not find service \"com.gocode.harnessd\" in domain for uid")}
+
+	code := dispatch([]string{"service", "status"})
+	if code != 0 {
+		t.Fatalf("status exit code: got %d", code)
+	}
+	requireCalls(t, runner.calls,
+		recordedCommand{name: "launchctl", args: []string{"print", guiDomain() + "/" + serviceLabel}},
+	)
+	if !strings.Contains(out.String(), "not running") || !strings.Contains(out.String(), unitPath) {
+		t.Errorf("status output %q should report installed-but-not-running and the unit path", out.String())
+	}
+}
+
+func TestServiceStatusInstalledNotRunningSystemd(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	out, _, runner := setupServiceTest(t, "linux")
+	installServiceForTest(t, "linux")
+	// systemctl is-active exits non-zero (3) when the unit is inactive.
+	runner.errs = []error{errors.New("exit status 3")}
+
+	code := dispatch([]string{"service", "status"})
+	if code != 0 {
+		t.Fatalf("status exit code: got %d", code)
+	}
+	requireCalls(t, runner.calls,
+		recordedCommand{name: "systemctl", args: []string{"--user", "is-active", "harnessd.service"}},
+	)
+	if !strings.Contains(out.String(), "not running") {
+		t.Errorf("status output %q should report installed-but-not-running", out.String())
+	}
+}
+
+func TestServiceStatusRunningHealthy(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	out, _, runner := setupServiceTest(t, "darwin")
+	installServiceForTest(t, "darwin")
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/healthz" {
+			w.WriteHeader(http.StatusOK)
+			return
 		}
-		if !strings.Contains(errOut.String(), "not yet implemented") {
-			t.Errorf("service %s error %q should say not yet implemented", sub, errOut.String())
-		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	code := dispatch([]string{"service", "status", "--base-url", ts.URL})
+	if code != 0 {
+		t.Fatalf("status exit code: got %d", code)
+	}
+	requireCalls(t, runner.calls,
+		recordedCommand{name: "launchctl", args: []string{"print", guiDomain() + "/" + serviceLabel}},
+	)
+	text := out.String()
+	if !strings.Contains(text, "running") || !strings.Contains(text, "healthy") {
+		t.Errorf("status output %q should report running and healthy", text)
+	}
+	if !strings.Contains(text, ts.URL+"/healthz") {
+		t.Errorf("status output %q should name the probed health URL", text)
+	}
+}
+
+func TestServiceStatusRunningButUnreachable(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	out, _, runner := setupServiceTest(t, "darwin")
+	installServiceForTest(t, "darwin")
+
+	// Port 1 is never listening: the service manager reports the job loaded
+	// but the daemon does not answer the health probe.
+	code := dispatch([]string{"service", "status", "--base-url", "http://127.0.0.1:1"})
+	if code != 0 {
+		t.Fatalf("status exit code: got %d", code)
+	}
+	requireCalls(t, runner.calls,
+		recordedCommand{name: "launchctl", args: []string{"print", guiDomain() + "/" + serviceLabel}},
+	)
+	text := out.String()
+	if !strings.Contains(text, "running") || !strings.Contains(text, "unreachable") {
+		t.Errorf("status output %q should report running-but-unreachable", text)
 	}
 }
 
