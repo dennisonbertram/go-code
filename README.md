@@ -59,6 +59,23 @@ Completed runs also keep a searchable workflow recap when persistence is enabled
 goal, changed files, tests run, failure cause, fix pattern, useful commands, and
 a continuation prompt. `go-code search <query>` matches those recap fields.
 
+### Run as an OS service (optional)
+
+To keep `harnessd` running across logins and crashes without managing a
+terminal, install it as a user-level OS service (launchd on macOS,
+`systemd --user` on Linux — no sudo):
+
+```bash
+harnesscli service install   # write the unit file
+harnesscli service start     # start it now
+harnesscli service status    # installed? running? healthy?
+harnesscli service stop
+harnesscli service uninstall
+```
+
+Details, flags, log locations, and troubleshooting:
+[`docs/runbooks/distribution.md`](docs/runbooks/distribution.md#os-service-install).
+
 ## API Keys
 
 Set the provider keys you plan to use before starting a run:
@@ -96,7 +113,7 @@ go run ./cmd/harnessd
 go run ./cmd/harnesscli -base-url http://127.0.0.1:8080 -prompt "Summarize the repository"
 ```
 
-Long-running local servers should be started in tmux:
+Long-running local servers for repository development agents should be started in tmux (the runbook rule for dev workflows — end users should prefer `harnesscli service install`, above):
 
 ```bash
 tmux new-session -d -s go-code-server 'cd /path/to/go-code && go run ./cmd/harnessd'
