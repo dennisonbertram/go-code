@@ -5,21 +5,26 @@ import (
 	"encoding/xml"
 	"flag"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"go-agent-harness/internal/config"
 )
 
-// This file implements "harnesscli service install|uninstall" — user-level OS
-// service management for harnessd (launchd on macOS, systemd --user on Linux).
-// The generated unit runs harnessd with the same address resolution the daemon
-// itself uses (internal/config: default :8080, HARNESS_ADDR override), passed
-// through the unit's environment. Lifecycle subcommands (start/stop/status)
-// land in the next slice; here they are recognized stubs.
+// This file implements "harnesscli service install|uninstall|start|stop|status"
+// — user-level OS service management for harnessd (launchd on macOS, systemd
+// --user on Linux). The generated unit runs harnessd with the same address
+// resolution the daemon itself uses (internal/config: default :8080,
+// HARNESS_ADDR override), passed through the unit's environment. Lifecycle
+// commands shell out to launchctl/systemctl behind the injectable
+// serviceRunLifecycle runner; unit tests substitute a recording fake and never
+// exec real service managers.
 
 const (
 	// serviceLabel is the launchd job label and the reverse-DNS stem of the
@@ -37,15 +42,29 @@ const (
 // versa.
 var servicePlatform = runtime.GOOS
 
-// serviceRunLifecycle executes a lifecycle tool (launchctl/systemctl). It is a
-// var so tests can substitute a recording fake — unit tests must never exec
-// real service managers.
+// serviceRunLifecycle executes a lifecycle tool (launchctl/systemctl). On
+// failure the returned error wraps the tool's combined output so callers
+// surface actionable messages (e.g. "Boot-out failed: 3: No such process");
+// on success all output is discarded so chatty verbs like "launchctl print"
+// stay quiet. It is a var so tests can substitute a recording fake — unit
+// tests must never exec real service managers.
 var serviceRunLifecycle = func(name string, args ...string) error {
 	cmd := exec.Command(name, args...)
-	cmd.Stdout = stderr
-	cmd.Stderr = stderr
-	return cmd.Run()
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		if trimmed := strings.TrimSpace(out.String()); trimmed != "" {
+			return fmt.Errorf("%w: %s", err, trimmed)
+		}
+		return err
+	}
+	return nil
 }
+
+// serviceHealthClient probes the daemon's /healthz endpoint. The timeout is
+// short: a local daemon answers in milliseconds or not at all.
+var serviceHealthClient = &http.Client{Timeout: 3 * time.Second}
 
 // serviceOptions carries the resolved values embedded in a generated unit
 // file. All fields must be absolute (or address) values — the renderers are
@@ -75,7 +94,7 @@ func (o serviceOptions) stderrLogPath() string {
 func runService(args []string) int {
 	if len(args) == 0 {
 		fmt.Fprintln(stderr, "harnesscli service: subcommand required")
-		fmt.Fprintln(stderr, "usage: harnesscli service <install|uninstall> [--flags]")
+		fmt.Fprintln(stderr, "usage: harnesscli service <install|uninstall|start|stop|status> [--flags]")
 		return 1
 	}
 	switch args[0] {
@@ -83,11 +102,14 @@ func runService(args []string) int {
 		return runServiceInstall(args[1:])
 	case "uninstall":
 		return runServiceUninstall(args[1:])
-	case "start", "stop", "status":
-		fmt.Fprintf(stderr, "harnesscli service %s: not yet implemented (install and uninstall are available; lifecycle commands land in the next slice)\n", args[0])
-		return 1
+	case "start":
+		return runServiceStart(args[1:])
+	case "stop":
+		return runServiceStop(args[1:])
+	case "status":
+		return runServiceStatus(args[1:])
 	default:
-		fmt.Fprintf(stderr, "harnesscli service: unknown subcommand %q (try: install, uninstall)\n", args[0])
+		fmt.Fprintf(stderr, "harnesscli service: unknown subcommand %q (try: install, uninstall, start, stop, status)\n", args[0])
 		return 1
 	}
 }
@@ -103,6 +125,177 @@ func serviceUnitPath(platform, home string) (string, error) {
 	default:
 		return "", fmt.Errorf("unsupported platform %q (user services are supported on macOS via launchd and Linux via systemd --user)", platform)
 	}
+}
+
+// requireInstalledUnit resolves the unit path for the current platform and
+// verifies the unit file exists. On failure it prints the error to stderr and
+// returns ok=false; lifecycle commands must not touch the service manager
+// before install.
+func requireInstalledUnit(verb string) (unitPath string, ok bool) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "harnesscli service %s: resolve home directory: %v\n", verb, err)
+		return "", false
+	}
+	unitPath, err = serviceUnitPath(servicePlatform, home)
+	if err != nil {
+		fmt.Fprintf(stderr, "harnesscli service %s: %v\n", verb, err)
+		return "", false
+	}
+	if _, err := os.Stat(unitPath); os.IsNotExist(err) {
+		fmt.Fprintf(stderr, "harnesscli service %s: service not installed (no unit file at %s); run 'harnesscli service install' first\n", verb, unitPath)
+		return "", false
+	} else if err != nil {
+		fmt.Fprintf(stderr, "harnesscli service %s: stat unit file: %v\n", verb, err)
+		return "", false
+	}
+	return unitPath, true
+}
+
+// guiServiceTarget returns the launchd domain target ("gui/<uid>") or, when
+// withLabel is true, the full service target ("gui/<uid>/<label>").
+func guiServiceTarget(withLabel bool) string {
+	target := fmt.Sprintf("gui/%d", os.Getuid())
+	if withLabel {
+		target += "/" + serviceLabel
+	}
+	return target
+}
+
+// runServiceStart implements "harnesscli service start".
+func runServiceStart(args []string) int {
+	fs := flag.NewFlagSet("service start", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	unitPath, ok := requireInstalledUnit("start")
+	if !ok {
+		return 1
+	}
+
+	switch servicePlatform {
+	case "darwin":
+		if err := serviceRunLifecycle("launchctl", "bootstrap", guiServiceTarget(false), unitPath); err != nil {
+			// Bootstrap fails when the job is already loaded; kickstart -k
+			// restarts it instead, so "start" is idempotent for callers.
+			if kerr := serviceRunLifecycle("launchctl", "kickstart", "-k", guiServiceTarget(true)); kerr != nil {
+				fmt.Fprintf(stderr, "harnesscli service start: launchctl bootstrap: %v\n", err)
+				return 1
+			}
+			fmt.Fprintln(stdout, "harnessd service restarted (already loaded)")
+			return 0
+		}
+	case "linux":
+		if err := serviceRunLifecycle("systemctl", "--user", "start", serviceSystemdUnitName); err != nil {
+			fmt.Fprintf(stderr, "harnesscli service start: %v\n", err)
+			return 1
+		}
+	default:
+		fmt.Fprintf(stderr, "harnesscli service start: unsupported platform %q (user services are supported on macOS via launchd and Linux via systemd --user)\n", servicePlatform)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, "harnessd service started")
+	return 0
+}
+
+// runServiceStop implements "harnesscli service stop".
+func runServiceStop(args []string) int {
+	fs := flag.NewFlagSet("service stop", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	if _, ok := requireInstalledUnit("stop"); !ok {
+		return 1
+	}
+
+	switch servicePlatform {
+	case "darwin":
+		if err := serviceRunLifecycle("launchctl", "bootout", guiServiceTarget(true)); err != nil {
+			fmt.Fprintf(stderr, "harnesscli service stop: %v\n", err)
+			return 1
+		}
+	case "linux":
+		if err := serviceRunLifecycle("systemctl", "--user", "stop", serviceSystemdUnitName); err != nil {
+			fmt.Fprintf(stderr, "harnesscli service stop: %v\n", err)
+			return 1
+		}
+	default:
+		fmt.Fprintf(stderr, "harnesscli service stop: unsupported platform %q (user services are supported on macOS via launchd and Linux via systemd --user)\n", servicePlatform)
+		return 1
+	}
+
+	fmt.Fprintln(stdout, "harnessd service stopped")
+	return 0
+}
+
+// runServiceStatus implements "harnesscli service status". It reports three
+// layers: installed (unit file present, enforced by requireInstalledUnit),
+// running (service-manager query), and healthy (HTTP probe of the daemon's
+// /healthz). A query error from the service manager means "not running" —
+// both "launchctl print" and "systemctl --user is-active" exit non-zero for
+// that normal state — so it is reported, not treated as a command failure.
+func runServiceStatus(args []string) int {
+	fs := flag.NewFlagSet("service status", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	baseURL := fs.String("base-url", "http://localhost:8080", "harness API base URL for the health probe")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+
+	unitPath, ok := requireInstalledUnit("status")
+	if !ok {
+		return 1
+	}
+
+	if !serviceUnitRunning(servicePlatform) {
+		fmt.Fprintln(stdout, "status: installed, not running")
+		fmt.Fprintf(stdout, "unit: %s\n", unitPath)
+		fmt.Fprintln(stdout, "hint: run 'harnesscli service start'")
+		return 0
+	}
+
+	fmt.Fprintln(stdout, "status: running")
+	fmt.Fprintf(stdout, "unit: %s\n", unitPath)
+	healthURL := strings.TrimRight(*baseURL, "/") + "/healthz"
+	if err := probeServiceHealth(healthURL); err != nil {
+		fmt.Fprintf(stdout, "health: unreachable (%s: %v)\n", healthURL, err)
+		return 0
+	}
+	fmt.Fprintf(stdout, "health: healthy (%s)\n", healthURL)
+	return 0
+}
+
+// serviceUnitRunning queries the platform service manager for the
+// loaded/active state of the harnessd unit.
+func serviceUnitRunning(platform string) bool {
+	switch platform {
+	case "darwin":
+		return serviceRunLifecycle("launchctl", "print", guiServiceTarget(true)) == nil
+	case "linux":
+		return serviceRunLifecycle("systemctl", "--user", "is-active", serviceSystemdUnitName) == nil
+	default:
+		return false
+	}
+}
+
+// probeServiceHealth GETs the daemon's health endpoint and requires a 2xx
+// response.
+func probeServiceHealth(healthURL string) error {
+	resp, err := serviceHealthClient.Get(healthURL)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("status %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // renderServiceUnit renders the unit file for the given platform.
@@ -334,7 +527,7 @@ func unloadServiceBestEffort(platform string) {
 	switch platform {
 	case "darwin":
 		name = "launchctl"
-		args = []string{"bootout", fmt.Sprintf("gui/%d/%s", os.Getuid(), serviceLabel)}
+		args = []string{"bootout", guiServiceTarget(true)}
 	case "linux":
 		name = "systemctl"
 		args = []string{"--user", "disable", "--now", serviceSystemdUnitName}
