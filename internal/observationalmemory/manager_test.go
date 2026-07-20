@@ -436,8 +436,8 @@ func TestSnippetTokenBudgetRespectedUnderImportanceWeighting(t *testing.T) {
 			msgs[j] = TranscriptMessage{Index: int64(j), Role: "user", Content: "Some content to observe round " + string(rune('A'+i))}
 		}
 		if _, err := svc.Observe(context.Background(), ObserveRequest{
-			Scope:   scope,
-			RunID:   "r1",
+			Scope:    scope,
+			RunID:    "r1",
 			Messages: msgs,
 		}); err != nil {
 			t.Fatalf("observe %d: %v", i, err)

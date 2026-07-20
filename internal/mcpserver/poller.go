@@ -114,8 +114,8 @@ func (p *RunPoller) poll() {
 		if terminalStatuses[current] {
 			// Publish run/completed notification.
 			params := map[string]any{
-				"run_id": runID,
-				"status": current,
+				"run_id":   runID,
+				"status":   current,
 				"cost_usd": 0,
 			}
 			if status.Error != "" {

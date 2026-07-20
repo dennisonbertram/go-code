@@ -9,10 +9,10 @@ import (
 
 func TestBoundedChan_ProducerConsumer(t *testing.T) {
 	const (
-		nProducers = 10
-		nConsumers = 10
+		nProducers          = 10
+		nConsumers          = 10
 		elementsPerProducer = 1000
-		capacity = 32
+		capacity            = 32
 	)
 	ch := New[int](capacity)
 	var wg sync.WaitGroup
@@ -86,7 +86,7 @@ func TestBoundedChan_SendRespectCtxCanceled(t *testing.T) {
 	go func() {
 		done <- ch.Send(ctx2, 2) // this will block, buffer is full
 	}()
-	time.Sleep(10*time.Millisecond)
+	time.Sleep(10 * time.Millisecond)
 	cancel2()
 	select {
 	case err := <-done:

@@ -6,7 +6,7 @@ import "github.com/charmbracelet/lipgloss"
 type Emphasis int
 
 const (
-	EmphasisNone      Emphasis = iota
+	EmphasisNone Emphasis = iota
 	EmphasisBold
 	EmphasisItalic
 	EmphasisUnderline

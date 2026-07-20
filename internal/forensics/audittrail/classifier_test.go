@@ -100,7 +100,7 @@ func TestIsStateModifying_SubstringKeywords(t *testing.T) {
 		{"create_something", true},
 		{"modify_something", true},
 		// These should NOT match
-		{"writer", false},  // "write" substring but not keyword separated
+		{"writer", false}, // "write" substring but not keyword separated
 		{"readwriter", false},
 	}
 
@@ -121,14 +121,14 @@ func TestIsStateModifying_CamelCaseNames(t *testing.T) {
 		tool     string
 		expected bool
 	}{
-		{"applyPatch", true},      // camelCase "apply" matches keyword
-		{"commitChanges", true},   // camelCase "commit" matches keyword
-		{"persistRecord", true},   // camelCase "persist" matches keyword
-		{"deleteRecord", true},    // camelCase "delete" matches keyword
-		{"updateConfig", true},    // camelCase "update" matches keyword
-		{"readFile", false},       // "read" is not a keyword
-		{"listDirectory", false},  // neither token is a keyword
-		{"getStatus", false},      // neither token is a keyword
+		{"applyPatch", true},     // camelCase "apply" matches keyword
+		{"commitChanges", true},  // camelCase "commit" matches keyword
+		{"persistRecord", true},  // camelCase "persist" matches keyword
+		{"deleteRecord", true},   // camelCase "delete" matches keyword
+		{"updateConfig", true},   // camelCase "update" matches keyword
+		{"readFile", false},      // "read" is not a keyword
+		{"listDirectory", false}, // neither token is a keyword
+		{"getStatus", false},     // neither token is a keyword
 	}
 	for _, tc := range tests {
 		t.Run(tc.tool, func(t *testing.T) {
@@ -147,11 +147,11 @@ func TestIsStateModifying_HyphenSeparated(t *testing.T) {
 		tool     string
 		expected bool
 	}{
-		{"put-object", true},      // "put" matches keyword
-		{"persist-record", true},  // "persist" matches keyword
-		{"patch-file", true},      // "patch" matches keyword
-		{"read-file", false},      // "read" is not a keyword
-		{"list-dir", false},       // neither is a keyword
+		{"put-object", true},     // "put" matches keyword
+		{"persist-record", true}, // "persist" matches keyword
+		{"patch-file", true},     // "patch" matches keyword
+		{"read-file", false},     // "read" is not a keyword
+		{"list-dir", false},      // neither is a keyword
 	}
 	for _, tc := range tests {
 		t.Run(tc.tool, func(t *testing.T) {

@@ -32,20 +32,20 @@ const (
 
 // Goal represents a persistent, verifiable unit of work.
 type Goal struct {
-	ID          string            `json:"id"`
-	Name        string            `json:"name"`
-	Description string            `json:"description"`
-	Status      Status            `json:"status"`
-	Progress    Progress          `json:"progress"`
-	DependsOn   []string          `json:"depends_on,omitempty"`  // IDs of goals that must complete first
-	Blocks      []string          `json:"blocks,omitempty"`      // IDs of goals this one blocks
-	VerifyCriteria string         `json:"verify_criteria"`       // How to verify completion (e.g., "all tests pass", "PR merged")
-	Metadata    map[string]string `json:"metadata,omitempty"`
-	Result      string            `json:"result,omitempty"`      // Output/result on completion
-	Error       string            `json:"error,omitempty"`       // Error message on failure
-	CreatedAt   time.Time         `json:"created_at"`
-	UpdatedAt   time.Time         `json:"updated_at"`
-	CompletedAt *time.Time        `json:"completed_at,omitempty"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	Description    string            `json:"description"`
+	Status         Status            `json:"status"`
+	Progress       Progress          `json:"progress"`
+	DependsOn      []string          `json:"depends_on,omitempty"` // IDs of goals that must complete first
+	Blocks         []string          `json:"blocks,omitempty"`     // IDs of goals this one blocks
+	VerifyCriteria string            `json:"verify_criteria"`      // How to verify completion (e.g., "all tests pass", "PR merged")
+	Metadata       map[string]string `json:"metadata,omitempty"`
+	Result         string            `json:"result,omitempty"` // Output/result on completion
+	Error          string            `json:"error,omitempty"`  // Error message on failure
+	CreatedAt      time.Time         `json:"created_at"`
+	UpdatedAt      time.Time         `json:"updated_at"`
+	CompletedAt    *time.Time        `json:"completed_at,omitempty"`
 }
 
 // Progress tracks completion progress for a goal.
@@ -68,10 +68,10 @@ type GoalManager interface {
 
 // GoalFilter filters goal queries.
 type GoalFilter struct {
-	Status   Status `json:"status,omitempty"`   // Filter by status
-	Limit    int    `json:"limit,omitempty"`    // Max results (0 = unlimited)
-	Offset   int    `json:"offset,omitempty"`   // Pagination offset
-	SortBy   string `json:"sort_by,omitempty"`  // Field to sort by
+	Status   Status `json:"status,omitempty"`    // Filter by status
+	Limit    int    `json:"limit,omitempty"`     // Max results (0 = unlimited)
+	Offset   int    `json:"offset,omitempty"`    // Pagination offset
+	SortBy   string `json:"sort_by,omitempty"`   // Field to sort by
 	SortDesc bool   `json:"sort_desc,omitempty"` // Sort descending
 }
 

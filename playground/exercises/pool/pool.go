@@ -5,14 +5,14 @@ import (
 )
 
 type WorkerPool struct {
-	jobs    chan jobWrapper
-	wg      sync.WaitGroup
-	quit    chan struct{}
+	jobs chan jobWrapper
+	wg   sync.WaitGroup
+	quit chan struct{}
 }
 
 type jobWrapper struct {
-	job      func() interface{}
-	retCh    chan interface{}
+	job   func() interface{}
+	retCh chan interface{}
 }
 
 func NewWorkerPool(workers int) *WorkerPool {

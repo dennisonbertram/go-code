@@ -5,10 +5,10 @@ import (
 )
 
 type WorkerPool struct {
-	jobs      chan jobRequest
-	wg        sync.WaitGroup
-	shutdown  chan struct{}
-	once      sync.Once
+	jobs     chan jobRequest
+	wg       sync.WaitGroup
+	shutdown chan struct{}
+	once     sync.Once
 }
 
 type jobRequest struct {

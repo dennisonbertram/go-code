@@ -23,23 +23,23 @@ func TestMergeIntervals(t *testing.T) {
 		},
 		{
 			name:      "no overlaps",
-			intervals: [][]int{{1,2},{3,4},{5,6}},
-			want:      [][]int{{1,2},{3,4},{5,6}},
+			intervals: [][]int{{1, 2}, {3, 4}, {5, 6}},
+			want:      [][]int{{1, 2}, {3, 4}, {5, 6}},
 		},
 		{
 			name:      "all overlapping",
-			intervals: [][]int{{1,4},{2,5},{3,6}},
-			want:      [][]int{{1,6}},
+			intervals: [][]int{{1, 4}, {2, 5}, {3, 6}},
+			want:      [][]int{{1, 6}},
 		},
 		{
 			name:      "adjacent intervals",
-			intervals: [][]int{{1,2},{2,3},{3,4}},
-			want:      [][]int{{1,4}},
+			intervals: [][]int{{1, 2}, {2, 3}, {3, 4}},
+			want:      [][]int{{1, 4}},
 		},
 		{
 			name:      "example input",
-			intervals: [][]int{{1,3},{2,6},{8,10},{15,18}},
-			want:      [][]int{{1,6},{8,10},{15,18}},
+			intervals: [][]int{{1, 3}, {2, 6}, {8, 10}, {15, 18}},
+			want:      [][]int{{1, 6}, {8, 10}, {15, 18}},
 		},
 	}
 

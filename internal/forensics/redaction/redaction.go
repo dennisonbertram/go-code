@@ -324,4 +324,3 @@ func RedactPayload(p *Pipeline, eventType string, payload map[string]any) (map[s
 	}
 	return p.Apply(eventType, payload)
 }
-

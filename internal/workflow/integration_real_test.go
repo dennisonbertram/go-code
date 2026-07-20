@@ -765,7 +765,7 @@ func TestReal_17_AdversarialVerify(t *testing.T) {
 		}
 
 		return map[string]any{
-			"claim":  r1.Output,
+			"claim":   r1.Output,
 			"verdict": r2.Output,
 		}, nil
 	})
@@ -855,8 +855,8 @@ func TestReal_19_WorkflowSaveResume(t *testing.T) {
 				return nil, err
 			}
 			return map[string]any{
-				"step0": s["step0_result"],
-				"step1": r.Output,
+				"step0":    s["step0_result"],
+				"step1":    r.Output,
 				"all_done": true,
 			}, nil
 		}
@@ -920,9 +920,9 @@ func TestReal_20_FullCICDSimulation(t *testing.T) {
 		}
 
 		return map[string]any{
-			"build":  r1.Output,
-			"test":   r2.Output,
-			"deploy": r3.Output,
+			"build":             r1.Output,
+			"test":              r2.Output,
+			"deploy":            r3.Output,
 			"pipeline_complete": true,
 		}, nil
 	})

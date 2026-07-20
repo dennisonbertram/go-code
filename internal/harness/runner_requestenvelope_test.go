@@ -48,9 +48,9 @@ func TestRequestEnvelopeSnapshotEmitted(t *testing.T) {
 		{Content: "done"},
 	}}
 	runner := NewRunner(prov, NewRegistry(), RunnerConfig{
-		DefaultModel:            "test-model",
-		MaxSteps:                2,
-		CaptureRequestEnvelope:  true,
+		DefaultModel:           "test-model",
+		MaxSteps:               2,
+		CaptureRequestEnvelope: true,
 	})
 
 	run, err := runner.StartRun(RunRequest{

@@ -162,9 +162,9 @@ func TestBuildSnapshot_ToolResultsSeparated(t *testing.T) {
 	t.Parallel()
 
 	msgs := []contextwindow.MessageForEstimate{
-		{Role: "user", Content: "aaaa"},            // 1 token → conv
-		{Role: "tool", Content: "aaaa aaaa aaaa"},  // 3 tokens → tool
-		{Role: "assistant", Content: "aaaa"},        // 1 token → conv
+		{Role: "user", Content: "aaaa"},           // 1 token → conv
+		{Role: "tool", Content: "aaaa aaaa aaaa"}, // 3 tokens → tool
+		{Role: "assistant", Content: "aaaa"},      // 1 token → conv
 	}
 	snap := contextwindow.BuildSnapshot(1, "", msgs, 0, false, 0)
 

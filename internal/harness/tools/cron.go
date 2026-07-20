@@ -133,10 +133,10 @@ func cronGetTool(client CronClient) Tool {
 
 func cronDeleteTool(client CronClient) Tool {
 	def := Definition{
-		Name:     "cron_delete",
+		Name:        "cron_delete",
 		Description: descriptions.Load("cron_delete"),
-		Action:   ActionExecute,
-		Mutating: true,
+		Action:      ActionExecute,
+		Mutating:    true,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

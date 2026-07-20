@@ -33,13 +33,13 @@ func TestCostAnomalyEventEmittedWhenEnabled(t *testing.T) {
 	// Step 3: LLM returns no tool calls → run completes.
 	prov := &stubProvider{turns: []CompletionResult{
 		{
-			ToolCalls: []ToolCall{{ID: "c1", Name: "noop_ca", Arguments: `{}`}},
-			Cost:      &CompletionCost{TotalUSD: 0.01},
+			ToolCalls:  []ToolCall{{ID: "c1", Name: "noop_ca", Arguments: `{}`}},
+			Cost:       &CompletionCost{TotalUSD: 0.01},
 			CostStatus: CostStatusAvailable,
 		},
 		{
-			ToolCalls: []ToolCall{{ID: "c2", Name: "noop_ca", Arguments: `{}`}},
-			Cost:      &CompletionCost{TotalUSD: 0.50},
+			ToolCalls:  []ToolCall{{ID: "c2", Name: "noop_ca", Arguments: `{}`}},
+			Cost:       &CompletionCost{TotalUSD: 0.50},
 			CostStatus: CostStatusAvailable,
 		},
 		{Content: "done"},
@@ -120,13 +120,13 @@ func TestCostAnomalyEventNotEmittedWhenDisabled(t *testing.T) {
 	// Spike cost that would trigger anomaly if detection were enabled.
 	prov := &stubProvider{turns: []CompletionResult{
 		{
-			ToolCalls: []ToolCall{{ID: "c1", Name: "noop_ca_disabled", Arguments: `{}`}},
-			Cost:      &CompletionCost{TotalUSD: 0.01},
+			ToolCalls:  []ToolCall{{ID: "c1", Name: "noop_ca_disabled", Arguments: `{}`}},
+			Cost:       &CompletionCost{TotalUSD: 0.01},
 			CostStatus: CostStatusAvailable,
 		},
 		{
-			ToolCalls: []ToolCall{{ID: "c2", Name: "noop_ca_disabled", Arguments: `{}`}},
-			Cost:      &CompletionCost{TotalUSD: 0.50},
+			ToolCalls:  []ToolCall{{ID: "c2", Name: "noop_ca_disabled", Arguments: `{}`}},
+			Cost:       &CompletionCost{TotalUSD: 0.50},
 			CostStatus: CostStatusAvailable,
 		},
 		{Content: "done"},

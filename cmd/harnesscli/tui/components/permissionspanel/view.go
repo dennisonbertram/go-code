@@ -8,10 +8,10 @@ import (
 
 // Color palette — matches the TUI-052 spec.
 var (
-	specialColor = lipgloss.AdaptiveColor{Light: "#43BF6D", Dark: "#73F59F"}  // green check
-	errorColor   = lipgloss.AdaptiveColor{Light: "#FF5F87", Dark: "#FF5F87"}  // red X
+	specialColor   = lipgloss.AdaptiveColor{Light: "#43BF6D", Dark: "#73F59F"} // green check
+	errorColor     = lipgloss.AdaptiveColor{Light: "#FF5F87", Dark: "#FF5F87"} // red X
 	highlightColor = lipgloss.AdaptiveColor{Light: "#874BFD", Dark: "#7D56F4"} // tool name
-	dimColor     = lipgloss.AdaptiveColor{Light: "#9B9B9B", Dark: "#5C5C5C"}  // dim text
+	dimColor       = lipgloss.AdaptiveColor{Light: "#9B9B9B", Dark: "#5C5C5C"} // dim text
 )
 
 // styles are package-level so they are initialised once.

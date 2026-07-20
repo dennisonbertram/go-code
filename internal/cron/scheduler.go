@@ -24,8 +24,8 @@ type Scheduler struct {
 	jitterCfg   JitterConfig
 	jitterCache map[string]time.Duration // jobID|schedule -> jitter offset
 	sleepFn     func(time.Duration)      // injectable sleep for testing; defaults to time.Sleep
-	done        chan struct{}           // closed by Stop to interrupt in-flight jitter waits
-	stopOnce    sync.Once               // guards closing done so a double Stop cannot panic
+	done        chan struct{}            // closed by Stop to interrupt in-flight jitter waits
+	stopOnce    sync.Once                // guards closing done so a double Stop cannot panic
 }
 
 // SchedulerConfig holds scheduler configuration.

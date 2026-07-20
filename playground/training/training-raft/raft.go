@@ -96,5 +96,7 @@ func (rn *RaftNode) stepDown() {
 }
 
 var ErrNotLeader = &NotLeaderError{}
+
 type NotLeaderError struct{}
+
 func (e *NotLeaderError) Error() string { return "not leader" }

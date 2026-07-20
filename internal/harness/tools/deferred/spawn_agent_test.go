@@ -26,10 +26,10 @@ func (m *mockSpawnRunner) RunPrompt(ctx context.Context, prompt string) (string,
 }
 
 type mockSpawnForkedRunner struct {
-	output    tools.ForkResult
-	err       error
+	output     tools.ForkResult
+	err        error
 	lastConfig tools.ForkConfig
-	lastCtx   context.Context
+	lastCtx    context.Context
 }
 
 func (m *mockSpawnForkedRunner) RunPrompt(ctx context.Context, prompt string) (string, error) {

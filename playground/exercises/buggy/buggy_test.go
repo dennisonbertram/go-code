@@ -15,12 +15,12 @@ func TestSumSlice_Single(t *testing.T) {
 }
 
 func TestSumSlice_Multi(t *testing.T) {
-	cases := []struct{
+	cases := []struct {
 		input []int
-		want int
+		want  int
 	}{
-		{[]int{1,2,3}, 6},
-		{[]int{-1,1}, 0},
+		{[]int{1, 2, 3}, 6},
+		{[]int{-1, 1}, 0},
 		{[]int{100, 200, 300}, 600},
 	}
 	for _, c := range cases {

@@ -49,8 +49,8 @@ func writeTestJSONL(t *testing.T, dir, runID string) string {
 			"success": true,
 		}},
 		{Ts: "2026-03-14T12:00:03Z", Seq: 4, Type: "llm.completion.finished", Data: map[string]any{
-			"content": "I found the issue.",
-			"usage":   map[string]any{"total_tokens": 500.0},
+			"content":  "I found the issue.",
+			"usage":    map[string]any{"total_tokens": 500.0},
 			"cost_usd": 0.01,
 		}},
 		{Ts: "2026-03-14T12:00:04Z", Seq: 5, Type: "run.completed", Data: map[string]any{

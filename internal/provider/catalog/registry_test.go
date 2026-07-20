@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+
+	"go-agent-harness/internal/provider"
 )
 
 func registryTestCatalog() *Catalog {
@@ -400,6 +402,43 @@ func TestMaxContextTokens_NilCatalog(t *testing.T) {
 	}
 	if tokens != 0 {
 		t.Errorf("expected 0 tokens for nil catalog, got %d", tokens)
+	}
+}
+
+func TestSetTokenSourceConfiguresProviderPropagatesToFactoryAndEvictsClient(t *testing.T) {
+	t.Parallel()
+
+	reg := NewProviderRegistryWithEnv(registryTestCatalog(), fakeGetenv(map[string]string{}))
+	var seen []provider.TokenSource
+	reg.SetClientFactory(func(_ string, _ string, providerName string, tokenSource provider.TokenSource) (ProviderClient, error) {
+		seen = append(seen, tokenSource)
+		return &stubClient{providerName: providerName}, nil
+	})
+
+	firstSource := provider.StaticToken("fake-first-source")
+	reg.SetTokenSource("openai", firstSource)
+	if !reg.IsConfigured("openai") {
+		t.Fatal("provider with token source is not configured")
+	}
+	firstClient, err := reg.GetClient("openai")
+	if err != nil {
+		t.Fatalf("GetClient() error: %v", err)
+	}
+	if len(seen) != 1 || seen[0] != firstSource {
+		t.Fatal("client factory did not receive the registered token source")
+	}
+
+	secondSource := provider.StaticToken("fake-second-source")
+	reg.SetTokenSource("openai", secondSource)
+	secondClient, err := reg.GetClient("openai")
+	if err != nil {
+		t.Fatalf("GetClient() after source replacement error: %v", err)
+	}
+	if firstClient == secondClient {
+		t.Fatal("SetTokenSource did not evict the cached client")
+	}
+	if len(seen) != 2 || seen[1] != secondSource {
+		t.Fatal("client factory did not receive the replacement token source")
 	}
 }
 

@@ -15,7 +15,6 @@ import (
 //
 // Entries are keyed by "source:deliveryID" so dedup is scoped per source.
 // Safe for concurrent use.
-//
 type DeliveryDedupCache struct {
 	mu      sync.Mutex
 	ttl     time.Duration

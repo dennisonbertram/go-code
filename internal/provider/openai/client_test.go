@@ -2182,9 +2182,9 @@ func TestResponsesAPIUsageNormalization(t *testing.T) {
 	t.Parallel()
 
 	usage, status := normalizeResponsesUsage(&responsesUsage{
-		InputTokens:  100,
-		OutputTokens: 50,
-		TotalTokens:  150,
+		InputTokens:         100,
+		OutputTokens:        50,
+		TotalTokens:         150,
 		InputTokensDetails:  &responsesInputDetails{CachedTokens: 25},
 		OutputTokensDetails: &responsesOutputDetails{ReasoningTokens: 8},
 	})
@@ -2488,9 +2488,9 @@ func TestNoParallelToolsOmittedByDefault(t *testing.T) {
 
 	// NoParallelTools is false (default zero value)
 	client, err := NewClient(Config{
-		APIKey:   "test-key",
-		BaseURL:  testServer.URL,
-		Model:    "gpt-4.1-mini",
+		APIKey:  "test-key",
+		BaseURL: testServer.URL,
+		Model:   "gpt-4.1-mini",
 	})
 	if err != nil {
 		t.Fatalf("new client: %v", err)

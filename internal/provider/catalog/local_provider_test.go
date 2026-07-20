@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go-agent-harness/internal/harness"
+	"go-agent-harness/internal/provider"
 	"go-agent-harness/internal/provider/catalog"
 	"go-agent-harness/internal/provider/openai"
 )
@@ -105,12 +106,13 @@ func openAICompatLocalHandler(t *testing.T) http.Handler {
 
 func newOpenAIClientFactory(t *testing.T) catalog.ClientFactory {
 	t.Helper()
-	return func(apiKey, baseURL, providerName string) (catalog.ProviderClient, error) {
+	return func(apiKey, baseURL, providerName string, tokenSource provider.TokenSource) (catalog.ProviderClient, error) {
 		if apiKey == "" {
 			t.Errorf("expected non-empty API key for optional local provider, got empty")
 		}
 		client, err := openai.NewClient(openai.Config{
 			APIKey:       apiKey,
+			TokenSource:  tokenSource,
 			BaseURL:      baseURL,
 			ProviderName: providerName,
 		})

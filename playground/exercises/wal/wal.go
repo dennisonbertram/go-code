@@ -9,8 +9,8 @@ import (
 )
 
 type WAL struct {
-	file *os.File
-	path string
+	file     *os.File
+	path     string
 	writeLsn uint64
 }
 
@@ -21,8 +21,8 @@ func NewWAL(path string) (*WAL, error) {
 		return nil, err
 	}
 	w := &WAL{
-		file: f,
-		path: path,
+		file:     f,
+		path:     path,
 		writeLsn: 1, // LSN starts at 1
 	}
 	// Set LSN to next available

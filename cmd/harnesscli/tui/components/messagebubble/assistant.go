@@ -19,8 +19,8 @@ func looksLikeMarkdown(text string) bool {
 }
 
 const (
-	assistantDotPrefix   = "⏺ "
-	assistantBodyIndent  = "  "
+	assistantDotPrefix      = "⏺ "
+	assistantBodyIndent     = "  "
 	assistantDotPrefixRunes = 2 // rune count of "⏺ "
 )
 

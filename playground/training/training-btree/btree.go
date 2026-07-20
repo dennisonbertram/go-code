@@ -99,7 +99,6 @@ func (bt *BTree) splitChild(parent *btreeNode, i int) {
 	parent.keys = append(parent.keys[:i], append([]int{mid}, parent.keys[i:]...)...)
 }
 
-
 // InOrder returns all keys in sorted order
 func (bt *BTree) InOrder() []int {
 	var out []int

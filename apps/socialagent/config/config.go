@@ -64,13 +64,13 @@ type Config struct {
 // optional fields, and validates that required fields are present.
 func Load() (*Config, error) {
 	cfg := &Config{
-		TelegramBotToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
-		WebhookSecret:    os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
-		HarnessURL:       os.Getenv("HARNESS_URL"),
-		DatabaseURL:      os.Getenv("DATABASE_URL"),
-		ListenAddr:       os.Getenv("LISTEN_ADDR"),
-		SystemPrompt:     os.Getenv("SOCIALAGENT_SYSTEM_PROMPT"),
-		MCPServerURL:     os.Getenv("MCP_SERVER_URL"),
+		TelegramBotToken:  os.Getenv("TELEGRAM_BOT_TOKEN"),
+		WebhookSecret:     os.Getenv("TELEGRAM_WEBHOOK_SECRET"),
+		HarnessURL:        os.Getenv("HARNESS_URL"),
+		DatabaseURL:       os.Getenv("DATABASE_URL"),
+		ListenAddr:        os.Getenv("LISTEN_ADDR"),
+		SystemPrompt:      os.Getenv("SOCIALAGENT_SYSTEM_PROMPT"),
+		MCPServerURL:      os.Getenv("MCP_SERVER_URL"),
 		SafetyScreenerURL: os.Getenv("SAFETY_SCREENER_URL"),
 	}
 

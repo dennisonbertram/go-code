@@ -288,9 +288,9 @@ func TestPOC6_MigrationWorkflow(t *testing.T) {
 
 	// Simulate a multi-step migration workflow
 	type step struct {
-		id          string
-		name        string
-		dependsOn   []string
+		id             string
+		name           string
+		dependsOn      []string
 		verifyCriteria string
 	}
 	steps := []step{

@@ -68,15 +68,15 @@ func applyPatchTool(workspaceRoot string, sandboxScope SandboxScope) Tool {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"path":        map[string]any{"type": "string", "description": "relative file path inside workspace"},
-				"file_path":   map[string]any{"type": "string", "description": "alias of path"},
-				"find":        map[string]any{"type": "string"},
-				"replace":     map[string]any{"type": "string"},
-				"replace_all": map[string]any{"type": "boolean"},
-				"occurrence":  map[string]any{"type": "integer", "description": "replace only the Nth occurrence (1-based, 1..10000); counts non-overlapping matches only; 0 or absent means replace first match; mutually exclusive with replace_all when > 0"},
+				"path":         map[string]any{"type": "string", "description": "relative file path inside workspace"},
+				"file_path":    map[string]any{"type": "string", "description": "alias of path"},
+				"find":         map[string]any{"type": "string"},
+				"replace":      map[string]any{"type": "string"},
+				"replace_all":  map[string]any{"type": "boolean"},
+				"occurrence":   map[string]any{"type": "integer", "description": "replace only the Nth occurrence (1-based, 1..10000); counts non-overlapping matches only; 0 or absent means replace first match; mutually exclusive with replace_all when > 0"},
 				"patch":        map[string]any{"type": "string", "description": "unified diff patch payload"},
-			"diff":         map[string]any{"type": "string", "description": "alias of patch"},
-			"unified_diff": map[string]any{"type": "string", "description": "alias of patch"},
+				"diff":         map[string]any{"type": "string", "description": "alias of patch"},
+				"unified_diff": map[string]any{"type": "string", "description": "alias of patch"},
 				"edits": map[string]any{
 					"type": "array",
 					"items": map[string]any{

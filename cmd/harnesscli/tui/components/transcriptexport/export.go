@@ -10,7 +10,7 @@ import (
 
 // TranscriptEntry represents a single entry in the conversation transcript.
 type TranscriptEntry struct {
-	Role      string    // "user", "assistant", "tool"
+	Role      string // "user", "assistant", "tool"
 	Content   string
 	Timestamp time.Time
 	ToolName  string // only for role=="tool"

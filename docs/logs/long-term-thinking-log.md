@@ -1,5 +1,12 @@
 # Long-Term Thinking Log
 
+## 2026-07-20 (Subscription-Auth Foundation — Epic #846)
+
+- Command intent: Add provider-layer dynamic bearer credential and extra-header plumbing, a generic refresh cache, and registry token-source support; commit each test-first slice, verify, push, and open a PR without merging it.
+- User intent: Establish a safe reusable foundation for expiring Codex and Kimi subscription credentials without implementing either provider's OAuth or disk import yet.
+- Success definition: `provider.TokenSource` and `StaticToken` exist; OpenAI-compatible requests dynamically obtain bearer tokens and apply static extra headers; a provider-neutral cache single-flights refreshes and retains a still-valid token when refresh fails; the registry treats a token source as credentials and forwards it to factories; static-key behavior remains unchanged.
+- Guardrails: Never log, print, fixture, or expose token values; use obviously-fake placeholders only; no OAuth dependency, TUI edits, refresh endpoints, or credential persistence.
+
 ## 2026-07-19 (Agent Client Protocol Server Mode — Epic #746)
 
 - Command intent: Implement ACP server mode and all eight child slices (#751, #754, #758, #760, #771, #772, #773, #774), commit each slice, then push and open a PR without merging it.

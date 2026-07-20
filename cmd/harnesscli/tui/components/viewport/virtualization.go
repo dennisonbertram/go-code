@@ -54,7 +54,7 @@ func ClampOffset(offset, height, totalLines int) int {
 // or ScrollDown to the end re-enables it.
 type VirtualizedModel struct {
 	lines      []string
-	offset     int  // absolute index of first visible line
+	offset     int // absolute index of first visible line
 	height     int
 	maxHistory int  // 0 = unlimited
 	atBottom   bool // whether to pin to bottom on append

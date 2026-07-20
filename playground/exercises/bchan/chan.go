@@ -7,12 +7,12 @@ import (
 
 // BoundedChan is a generic bounded, blocking channel.
 type BoundedChan[T any] struct {
-	cap     int
-	mu      sync.Mutex
+	cap      int
+	mu       sync.Mutex
 	notFull  *sync.Cond // Wait when full
 	notEmpty *sync.Cond // Wait when empty
-	data    []T
-	closed  bool
+	data     []T
+	closed   bool
 }
 
 // New creates a new bounded channel with the given capacity.

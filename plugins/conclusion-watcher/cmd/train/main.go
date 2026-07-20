@@ -41,9 +41,9 @@ type inputEvent struct {
 // eventPayload holds the fields relevant to both message.created and tool_call.completed events.
 type eventPayload struct {
 	// For message.created
-	Role      string         `json:"role"`
-	Content   string         `json:"content"`
-	ToolCalls []payloadTool  `json:"tool_calls"`
+	Role      string        `json:"role"`
+	Content   string        `json:"content"`
+	ToolCalls []payloadTool `json:"tool_calls"`
 	// For tool_call.completed
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
@@ -58,13 +58,13 @@ type payloadTool struct {
 
 // outputRecord is one line written to the output JSONL.
 type outputRecord struct {
-	RunID                    string          `json:"run_id"`
-	Step                     int             `json:"step"`
-	HasUnjustifiedConclusion bool            `json:"has_unjustified_conclusion"`
+	RunID                    string           `json:"run_id"`
+	Step                     int              `json:"step"`
+	HasUnjustifiedConclusion bool             `json:"has_unjustified_conclusion"`
 	Patterns                 []cw.PatternType `json:"patterns"`
-	Evidence                 string          `json:"evidence"`
-	Explanation              string          `json:"explanation"`
-	OriginalText             string          `json:"original_text"`
+	Evidence                 string           `json:"evidence"`
+	Explanation              string           `json:"explanation"`
+	OriginalText             string           `json:"original_text"`
 }
 
 // summaryReport holds aggregate stats built from output records.

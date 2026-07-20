@@ -20,8 +20,8 @@ import (
 )
 
 var (
-	runMain      = run
-	exitFunc     = os.Exit
+	runMain                = run
+	exitFunc               = os.Exit
 	stdinReader  io.Reader = os.Stdin
 	stdoutWriter io.Writer = os.Stdout
 	getenvFunc             = os.Getenv

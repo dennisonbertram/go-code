@@ -11,18 +11,18 @@ import (
 )
 
 const (
-	defaultBaseURL       = "https://api.anthropic.com"
-	defaultModel         = "claude-opus-4-6"
-	anthropicAPIVersion  = "2023-06-01"
-	maxTokensDefault     = 4096
+	defaultBaseURL      = "https://api.anthropic.com"
+	defaultModel        = "claude-opus-4-6"
+	anthropicAPIVersion = "2023-06-01"
+	maxTokensDefault    = 4096
 )
 
 // ClaudeTrainer uses the Anthropic API to analyze run traces.
 type ClaudeTrainer struct {
-	apiKey   string
-	baseURL  string
-	model    string
-	client   *http.Client
+	apiKey  string
+	baseURL string
+	model   string
+	client  *http.Client
 }
 
 // ClaudeTrainerOption configures a ClaudeTrainer.

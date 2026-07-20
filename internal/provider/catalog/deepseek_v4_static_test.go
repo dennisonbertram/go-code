@@ -50,37 +50,37 @@ func TestDeepSeekV4StaticCatalogEntries(t *testing.T) {
 	}
 
 	tests := []struct {
-		modelID          string
+		modelID           string
 		wantContextWindow int
-		wantInputPer1M   float64
-		wantOutputPer1M  float64
-		wantCacheRead1M  float64
-		wantReasoning    bool
-		wantToolCalling  bool
-		wantStreaming    bool
-		wantQuirk        string
+		wantInputPer1M    float64
+		wantOutputPer1M   float64
+		wantCacheRead1M   float64
+		wantReasoning     bool
+		wantToolCalling   bool
+		wantStreaming     bool
+		wantQuirk         string
 	}{
 		{
-			modelID:          "deepseek/deepseek-v4-pro",
+			modelID:           "deepseek/deepseek-v4-pro",
 			wantContextWindow: 1048576,
-			wantInputPer1M:   0.435,
-			wantOutputPer1M:  0.87,
-			wantCacheRead1M:  0.003625,
-			wantReasoning:    true,
-			wantToolCalling:  true,
-			wantStreaming:    true,
-			wantQuirk:        "reasoning_content_passback",
+			wantInputPer1M:    0.435,
+			wantOutputPer1M:   0.87,
+			wantCacheRead1M:   0.003625,
+			wantReasoning:     true,
+			wantToolCalling:   true,
+			wantStreaming:     true,
+			wantQuirk:         "reasoning_content_passback",
 		},
 		{
-			modelID:          "deepseek/deepseek-v4-flash",
+			modelID:           "deepseek/deepseek-v4-flash",
 			wantContextWindow: 1048576,
-			wantInputPer1M:   0.14,
-			wantOutputPer1M:  0.28,
-			wantCacheRead1M:  0.0028,
-			wantReasoning:    true,
-			wantToolCalling:  true,
-			wantStreaming:    true,
-			wantQuirk:        "reasoning_content_passback",
+			wantInputPer1M:    0.14,
+			wantOutputPer1M:   0.28,
+			wantCacheRead1M:   0.0028,
+			wantReasoning:     true,
+			wantToolCalling:   true,
+			wantStreaming:     true,
+			wantQuirk:         "reasoning_content_passback",
 		},
 	}
 

@@ -19,9 +19,9 @@ func opsEq(a, b []Op) bool {
 
 func TestVMCorrectness(t *testing.T) {
 	tests := []struct {
-		name string
-		ops  []Op
-		expect int64
+		name        string
+		ops         []Op
+		expect      int64
 		errExpected bool
 	}{
 		{

@@ -12,7 +12,6 @@ import (
 	"go-agent-harness/internal/cron"
 )
 
-
 func TestMainDelegatesToRunAndExit(t *testing.T) {
 	origRun := runCommand
 	origExit := exitFunc

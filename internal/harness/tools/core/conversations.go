@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	defaultListConversationsLimit  = 20
-	maxListConversationsLimit      = 100
+	defaultListConversationsLimit   = 20
+	maxListConversationsLimit       = 100
 	defaultSearchConversationsLimit = 10
 	maxSearchConversationsLimit     = 50
 )

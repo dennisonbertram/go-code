@@ -428,8 +428,8 @@ func TestAuditWriter_HashConcatenationCollisionPrevented(t *testing.T) {
 		return entries[0].EntryHash
 	}
 
-	hash1 := write("a", "bc")  // run_id="a", event_type="bc"
-	hash2 := write("ab", "c")  // run_id="ab", event_type="c"
+	hash1 := write("a", "bc") // run_id="a", event_type="bc"
+	hash2 := write("ab", "c") // run_id="ab", event_type="c"
 	if hash1 == hash2 {
 		t.Errorf("hash collision detected: run_id='a'+event_type='bc' produces same hash as run_id='ab'+event_type='c'; JSON preimage must prevent this")
 	}

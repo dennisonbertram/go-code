@@ -72,8 +72,8 @@ func TaskCompleteTool(runner tools.AgentRunner) tools.Tool {
 		}
 
 		var args struct {
-			Summary  string               `json:"summary"`
-			Status   string               `json:"status,omitempty"`
+			Summary  string                `json:"summary"`
+			Status   string                `json:"status,omitempty"`
 			Findings []TaskCompleteFinding `json:"findings,omitempty"`
 		}
 		if err := json.Unmarshal(raw, &args); err != nil {

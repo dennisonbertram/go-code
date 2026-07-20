@@ -14,24 +14,24 @@ import (
 
 // mockStore implements UserStore for testing.
 type mockStore struct {
-	profiles            []db.UserProfile
-	user                *db.User
-	profile             *db.UserProfile
-	activity            []db.ActivityEntry
-	insights            []db.UserInsight
-	communityStats      *db.CommunityStats
-	savedMessage        *db.Message
-	pendingMessages     []db.Message
-	saveInsightErr      error
-	searchErr           error
-	getUserErr          error
-	getProfileErr       error
-	getActivityErr      error
-	getInsightsErr      error
+	profiles             []db.UserProfile
+	user                 *db.User
+	profile              *db.UserProfile
+	activity             []db.ActivityEntry
+	insights             []db.UserInsight
+	communityStats       *db.CommunityStats
+	savedMessage         *db.Message
+	pendingMessages      []db.Message
+	saveInsightErr       error
+	searchErr            error
+	getUserErr           error
+	getProfileErr        error
+	getActivityErr       error
+	getInsightsErr       error
 	getCommunityStatsErr error
-	saveMessageErr      error
-	getPendingMsgsErr   error
-	markDeliveredErr    error
+	saveMessageErr       error
+	getPendingMsgsErr    error
+	markDeliveredErr     error
 }
 
 func (m *mockStore) SearchProfiles(_ context.Context, _ string, _ int) ([]db.UserProfile, error) {
@@ -126,15 +126,15 @@ func TestSearchUsers_ReturnsResults(t *testing.T) {
 	store := &mockStore{
 		profiles: []db.UserProfile{
 			{
-				UserID:    "uid-1",
-				Summary:   "Loves hiking and photography",
-				Interests: []string{"hiking", "photography"},
+				UserID:     "uid-1",
+				Summary:    "Loves hiking and photography",
+				Interests:  []string{"hiking", "photography"},
 				LookingFor: "adventure buddies",
 			},
 			{
-				UserID:    "uid-2",
-				Summary:   "Software engineer interested in open source",
-				Interests: []string{"programming", "open source"},
+				UserID:     "uid-2",
+				Summary:    "Software engineer interested in open source",
+				Interests:  []string{"programming", "open source"},
 				LookingFor: "collaborators",
 			},
 		},
@@ -177,9 +177,9 @@ func TestGetUserProfile_Found(t *testing.T) {
 			DisplayName: "Alice",
 		},
 		profile: &db.UserProfile{
-			UserID:    "uid-alice",
-			Summary:   "Alice loves baking and hiking",
-			Interests: []string{"baking", "hiking"},
+			UserID:     "uid-alice",
+			Summary:    "Alice loves baking and hiking",
+			Interests:  []string{"baking", "hiking"},
 			LookingFor: "friends",
 		},
 		insights: []db.UserInsight{

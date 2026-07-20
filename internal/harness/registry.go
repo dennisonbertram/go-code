@@ -302,11 +302,11 @@ func (r *Registry) RegisterMCPTools(serverName string, toolDefs []htools.MCPTool
 			return mcpReg.CallTool(ctx, regServer, origName, args)
 		})
 		r.tools[toolName] = registeredTool{
-			def:       def,
-			handler:   handler,
-			tier:      htools.TierDeferred,
-			tags:      []string{"mcp", "integration", "external", "dynamic", "mcp_server:" + serverName},
-			inflight:  &sync.WaitGroup{},
+			def:      def,
+			handler:  handler,
+			tier:     htools.TierDeferred,
+			tags:     []string{"mcp", "integration", "external", "dynamic", "mcp_server:" + serverName},
+			inflight: &sync.WaitGroup{},
 			// Conservative default: every MCP tool is mutating.
 			mutating:  true,
 			mcpServer: serverName,

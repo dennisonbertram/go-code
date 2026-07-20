@@ -46,20 +46,20 @@ type ObservationChunk struct {
 }
 
 type Record struct {
-	MemoryID                    string               `json:"memory_id"`
-	Scope                       ScopeKey             `json:"scope"`
-	Enabled                     bool                 `json:"enabled"`
-	StateVersion                int64                `json:"state_version"`
-	LastObservedMessageIndex    int64                `json:"last_observed_message_index"`
-	ActiveObservations          []ObservationChunk   `json:"active_observations"`
-	ActiveObservationTokens     int                  `json:"active_observation_tokens"`
-	ActiveReflection            string               `json:"active_reflection"`
-	ActiveReflectionTokens      int                  `json:"active_reflection_tokens"`
-	LastReflectedObservationSeq int64                `json:"last_reflected_observation_seq"`
+	MemoryID                    string                `json:"memory_id"`
+	Scope                       ScopeKey              `json:"scope"`
+	Enabled                     bool                  `json:"enabled"`
+	StateVersion                int64                 `json:"state_version"`
+	LastObservedMessageIndex    int64                 `json:"last_observed_message_index"`
+	ActiveObservations          []ObservationChunk    `json:"active_observations"`
+	ActiveObservationTokens     int                   `json:"active_observation_tokens"`
+	ActiveReflection            string                `json:"active_reflection"`
+	ActiveReflectionTokens      int                   `json:"active_reflection_tokens"`
+	LastReflectedObservationSeq int64                 `json:"last_reflected_observation_seq"`
 	StructuredReflection        *StructuredReflection `json:"structured_reflection,omitempty"`
-	Config                      Config               `json:"config"`
-	CreatedAt                   time.Time            `json:"created_at"`
-	UpdatedAt                   time.Time            `json:"updated_at"`
+	Config                      Config                `json:"config"`
+	CreatedAt                   time.Time             `json:"created_at"`
+	UpdatedAt                   time.Time             `json:"updated_at"`
 }
 
 type Status struct {

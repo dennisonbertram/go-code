@@ -9,7 +9,7 @@ import (
 func JSONStatusHandler(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]interface{}{
 		"status": "ok",
-		"ts": time.Now().Unix(),
+		"ts":     time.Now().Unix(),
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)

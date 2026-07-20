@@ -2,7 +2,7 @@ package catalog
 
 // Catalog is the top-level structure for the multi-provider model catalog.
 type Catalog struct {
-	CatalogVersion string                  `json:"catalog_version"`
+	CatalogVersion string                   `json:"catalog_version"`
 	Providers      map[string]ProviderEntry `json:"providers"`
 }
 

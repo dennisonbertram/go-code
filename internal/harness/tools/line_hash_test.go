@@ -301,7 +301,7 @@ func TestEditWithoutHashFieldsPreservesExistingBehavior(t *testing.T) {
 	args, _ := json.Marshal(map[string]any{
 		"path":     "legacy.txt",
 		"old_text": "bar",
-		"new_text":  "BAR",
+		"new_text": "BAR",
 	})
 	out, err := tool.Handler(context.Background(), json.RawMessage(args))
 	if err != nil {

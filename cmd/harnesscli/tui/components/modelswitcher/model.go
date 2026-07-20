@@ -553,11 +553,12 @@ func isFuzzySubsequence(f, q string) bool {
 }
 
 // visibleModels returns the filtered + ordered model list.
-// - When searchActive (query non-empty, or explicit EnterSearch()): flat
-//   cross-provider list filtered by query.
-// - When browseLevel == 1 and search is not active: models filtered to
-//   activeProvider only.
-// - When browseLevel == 0: all models (for Accept() compatibility).
+//   - When searchActive (query non-empty, or explicit EnterSearch()): flat
+//     cross-provider list filtered by query.
+//   - When browseLevel == 1 and search is not active: models filtered to
+//     activeProvider only.
+//   - When browseLevel == 0: all models (for Accept() compatibility).
+//
 // Starred models appear first in all cases, filtered by searchQuery.
 // IsCurrent is set dynamically based on currentModelID.
 //

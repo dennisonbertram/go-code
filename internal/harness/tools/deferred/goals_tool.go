@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	tools "go-agent-harness/internal/harness/tools"
 	"go-agent-harness/internal/goals"
+	tools "go-agent-harness/internal/harness/tools"
 )
 
 // GoalCreator is the interface the tool needs from the goals manager.
@@ -55,8 +55,8 @@ func NewGoalTools(mgr GoalCreator) func() tools.Tool {
 							"description": "How to verify completion (e.g., 'all tests pass')",
 						},
 						"status": map[string]any{
-							"type":        "string",
-							"enum":        []any{"pending", "running", "verifying", "completed", "failed", "cancelled"},
+							"type": "string",
+							"enum": []any{"pending", "running", "verifying", "completed", "failed", "cancelled"},
 						},
 						"depends_on": map[string]any{
 							"type":  "array",

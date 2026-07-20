@@ -202,11 +202,11 @@ func TestContextWindowWarning_EmittedWhenThresholdExceeded(t *testing.T) {
 	}}
 
 	runner := NewRunner(provider, NewRegistry(), RunnerConfig{
-		DefaultModel:                    "gpt-4.1-mini",
-		MaxSteps:                        4,
-		ContextWindowSnapshotEnabled:    true,
-		ModelContextWindow:              10, // tiny window
-		ContextWindowWarningThreshold:   0.5, // warn at 50%
+		DefaultModel:                  "gpt-4.1-mini",
+		MaxSteps:                      4,
+		ContextWindowSnapshotEnabled:  true,
+		ModelContextWindow:            10,  // tiny window
+		ContextWindowWarningThreshold: 0.5, // warn at 50%
 	})
 
 	// Prompt that is long enough to exceed 50% of 10 tokens.
@@ -254,11 +254,11 @@ func TestContextWindowWarning_NotEmittedBelowThreshold(t *testing.T) {
 
 	// Large context window, normal threshold: no warning.
 	runner := NewRunner(provider, NewRegistry(), RunnerConfig{
-		DefaultModel:                   "gpt-4.1-mini",
-		MaxSteps:                       4,
-		ContextWindowSnapshotEnabled:   true,
-		ModelContextWindow:             128000,
-		ContextWindowWarningThreshold:  0.95, // warn only at 95%
+		DefaultModel:                  "gpt-4.1-mini",
+		MaxSteps:                      4,
+		ContextWindowSnapshotEnabled:  true,
+		ModelContextWindow:            128000,
+		ContextWindowWarningThreshold: 0.95, // warn only at 95%
 	})
 
 	run, err := runner.StartRun(RunRequest{Prompt: "Hi"})
@@ -287,11 +287,11 @@ func TestContextWindowWarning_NoWarningWhenThresholdZero(t *testing.T) {
 	}}
 
 	runner := NewRunner(provider, NewRegistry(), RunnerConfig{
-		DefaultModel:                   "gpt-4.1-mini",
-		MaxSteps:                       4,
-		ContextWindowSnapshotEnabled:   true,
-		ModelContextWindow:             10, // tiny window — would trigger warnings
-		ContextWindowWarningThreshold:  0,  // disabled
+		DefaultModel:                  "gpt-4.1-mini",
+		MaxSteps:                      4,
+		ContextWindowSnapshotEnabled:  true,
+		ModelContextWindow:            10, // tiny window — would trigger warnings
+		ContextWindowWarningThreshold: 0,  // disabled
 	})
 
 	run, err := runner.StartRun(RunRequest{Prompt: "Hello world this is a long prompt for testing"})

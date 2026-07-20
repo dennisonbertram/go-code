@@ -27,7 +27,7 @@ func TestLFUCapacityTwoEvictionOrder(t *testing.T) {
 	c := NewLFU(2)
 	c.Put(1, 1)
 	c.Put(2, 2)
-	c.Get(1) // {1:2, 2:1}
+	c.Get(1)    // {1:2, 2:1}
 	c.Put(3, 3) // evicts 2
 	_, ok := c.Get(2)
 	if ok {

@@ -25,20 +25,20 @@ func TestSQLiteStore_CreateGetRoundTrip(t *testing.T) {
 
 	completed := time.Date(2026, 7, 12, 10, 30, 0, 123456789, time.UTC)
 	full := &Goal{
-		ID:          "g-full",
-		Name:        "Full goal",
-		Description: "a description",
-		Status:      StatusCompleted,
-		Progress:    Progress{Total: 10, Completed: 4, Percent: 40},
-		DependsOn:   []string{"a", "b"},
-		Blocks:      []string{"c"},
+		ID:             "g-full",
+		Name:           "Full goal",
+		Description:    "a description",
+		Status:         StatusCompleted,
+		Progress:       Progress{Total: 10, Completed: 4, Percent: 40},
+		DependsOn:      []string{"a", "b"},
+		Blocks:         []string{"c"},
 		VerifyCriteria: "all tests pass",
-		Metadata:    map[string]string{"key1": "val1", "key2": "val2"},
-		Result:      "done",
-		Error:       "",
-		CreatedAt:   time.Date(2026, 7, 12, 9, 0, 0, 111, time.UTC),
-		UpdatedAt:   time.Date(2026, 7, 12, 9, 30, 0, 222, time.UTC),
-		CompletedAt: &completed,
+		Metadata:       map[string]string{"key1": "val1", "key2": "val2"},
+		Result:         "done",
+		Error:          "",
+		CreatedAt:      time.Date(2026, 7, 12, 9, 0, 0, 111, time.UTC),
+		UpdatedAt:      time.Date(2026, 7, 12, 9, 30, 0, 222, time.UTC),
+		CompletedAt:    &completed,
 	}
 	if err := st.Create(ctx, full); err != nil {
 		t.Fatalf("Create full: %v", err)

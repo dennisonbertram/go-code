@@ -205,10 +205,10 @@ func (f *fakeActivityLogger) LogActivity(ctx context.Context, userID, displayNam
 // fakeScreener implements gateway.Screener for tests. It can be configured
 // to mark messages as safe or unsafe, or to return an error (fail-open).
 type fakeScreener struct {
-	mu      sync.Mutex
-	result  *safety.Result
-	err     error
-	calls   []string // texts passed to Screen
+	mu     sync.Mutex
+	result *safety.Result
+	err    error
+	calls  []string // texts passed to Screen
 }
 
 func (f *fakeScreener) Screen(ctx context.Context, text string) (*safety.Result, error) {

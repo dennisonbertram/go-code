@@ -10,10 +10,10 @@ import (
 // (SUMMARY / SUPERSESSIONS / CONTRADICTIONS sections). SchemaVersion==0 means
 // legacy plain-text — the entire raw string is stored in Summary.
 type StructuredReflection struct {
-	Summary        string         `json:"summary"`
-	Supersessions  []Supersession `json:"supersessions,omitempty"`
+	Summary        string          `json:"summary"`
+	Supersessions  []Supersession  `json:"supersessions,omitempty"`
 	Contradictions []Contradiction `json:"contradictions,omitempty"`
-	SchemaVersion  int            `json:"schema_version"`
+	SchemaVersion  int             `json:"schema_version"`
 }
 
 // Supersession records that a newer observation replaces an older one.
@@ -105,7 +105,7 @@ func ParseStructuredReflection(raw string) StructuredReflection {
 
 // parseSupersessions parses lines of the form:
 //
-//	- [seq:N] replaces [seq:M]: reason
+//   - [seq:N] replaces [seq:M]: reason
 func parseSupersessions(block string) []Supersession {
 	var out []Supersession
 	for _, line := range strings.Split(block, "\n") {
@@ -147,7 +147,7 @@ func parseSupersessions(block string) []Supersession {
 
 // parseContradictions parses lines of the form:
 //
-//	- [seq:N] vs [seq:M]: detail
+//   - [seq:N] vs [seq:M]: detail
 func parseContradictions(block string) []Contradiction {
 	var out []Contradiction
 	for _, line := range strings.Split(block, "\n") {

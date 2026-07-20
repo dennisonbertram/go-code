@@ -79,7 +79,7 @@ func TestNoDataRaces(t *testing.T) {
 			node.stepDown()
 			node.RequestVote(1, 0)
 			node.AppendEntries(1, nil)
-		} (i)
+		}(i)
 	}
 	wg.Wait()
 }

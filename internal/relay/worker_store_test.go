@@ -99,13 +99,13 @@ func runWorkerStoreContractTests(t *testing.T, factory workerStoreFactory) {
 		ctx := context.Background()
 
 		w := &relay.Worker{
-			ID:         "",
-			Name:       "bad",
-			TenantID:   "t1",
-			Status:     relay.WorkerStatusOnline,
-			TrustTier:  relay.TrustTierStandard,
-			CreatedAt:  time.Now(),
-			UpdatedAt:  time.Now(),
+			ID:        "",
+			Name:      "bad",
+			TenantID:  "t1",
+			Status:    relay.WorkerStatusOnline,
+			TrustTier: relay.TrustTierStandard,
+			CreatedAt: time.Now(),
+			UpdatedAt: time.Now(),
 		}
 		if err := s.RegisterWorker(ctx, w); err != relay.ErrInvalidWorkerID {
 			t.Errorf("RegisterWorker with empty ID: got %v, want ErrInvalidWorkerID", err)
@@ -255,13 +255,13 @@ func runWorkerStoreContractTests(t *testing.T, factory workerStoreFactory) {
 		w1 := &relay.Worker{
 			ID: "w-online", TenantID: "t1", Name: "Online",
 			LocationType: relay.LocationLocal, Status: relay.WorkerStatusOnline,
-			TrustTier: relay.TrustTierStandard,
+			TrustTier:     relay.TrustTierStandard,
 			LastHeartbeat: now, CreatedAt: now, UpdatedAt: now,
 		}
 		w2 := &relay.Worker{
 			ID: "w-stale", TenantID: "t1", Name: "Stale",
 			LocationType: relay.LocationLocal, Status: relay.WorkerStatusStale,
-			TrustTier: relay.TrustTierStandard,
+			TrustTier:     relay.TrustTierStandard,
 			LastHeartbeat: now.Add(-time.Hour), CreatedAt: now, UpdatedAt: now,
 		}
 
@@ -400,21 +400,21 @@ func runWorkerStoreContractTests(t *testing.T, factory workerStoreFactory) {
 		w1 := &relay.Worker{
 			ID: "w-fresh", TenantID: "t1", Name: "Fresh",
 			LocationType: relay.LocationLocal, Status: relay.WorkerStatusOnline,
-			TrustTier: relay.TrustTierStandard,
+			TrustTier:     relay.TrustTierStandard,
 			LastHeartbeat: now, CreatedAt: now, UpdatedAt: now,
 		}
 		// Worker that heartbeated long ago should become stale.
 		w2 := &relay.Worker{
 			ID: "w-old", TenantID: "t1", Name: "Old",
 			LocationType: relay.LocationLocal, Status: relay.WorkerStatusOnline,
-			TrustTier: relay.TrustTierStandard,
+			TrustTier:     relay.TrustTierStandard,
 			LastHeartbeat: now.Add(-2 * relay.StaleDuration), CreatedAt: now, UpdatedAt: now,
 		}
 		// Worker already offline should not be affected.
 		w3 := &relay.Worker{
 			ID: "w-offline", TenantID: "t1", Name: "Offline",
 			LocationType: relay.LocationLocal, Status: relay.WorkerStatusOffline,
-			TrustTier: relay.TrustTierStandard,
+			TrustTier:     relay.TrustTierStandard,
 			LastHeartbeat: now.Add(-2 * relay.StaleDuration), CreatedAt: now, UpdatedAt: now,
 		}
 		for _, w := range []*relay.Worker{w1, w2, w3} {

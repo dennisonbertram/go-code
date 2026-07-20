@@ -10,10 +10,10 @@ import "context"
 type PatternType string
 
 const (
-	PatternHedgeAssertion        PatternType = "hedge_assertion"
-	PatternUnverifiedFileClaim   PatternType = "unverified_file_claim"
-	PatternPrematureCompletion   PatternType = "premature_completion"
-	PatternSkippedDiagnostic     PatternType = "skipped_diagnostic"
+	PatternHedgeAssertion         PatternType = "hedge_assertion"
+	PatternUnverifiedFileClaim    PatternType = "unverified_file_claim"
+	PatternPrematureCompletion    PatternType = "premature_completion"
+	PatternSkippedDiagnostic      PatternType = "skipped_diagnostic"
 	PatternArchitectureAssumption PatternType = "architecture_assumption"
 )
 
@@ -37,7 +37,7 @@ const (
 type DetectionResult struct {
 	Pattern    PatternType `json:"pattern"`
 	Confidence float64     `json:"confidence"` // 0.0–1.0
-	Evidence   string      `json:"evidence"`    // excerpt that triggered the match
+	Evidence   string      `json:"evidence"`   // excerpt that triggered the match
 	Step       int         `json:"step"`
 	RunID      string      `json:"run_id"`
 }

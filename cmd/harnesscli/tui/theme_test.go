@@ -12,18 +12,18 @@ func TestTUI006_ThemeHasRequiredStyles(t *testing.T) {
 	// Verify all required style categories exist (non-zero)
 	styles := map[string]interface{}{
 		"UserMsgStyle":      th.UserMsgStyle,
-		"AssistantMsgStyle":  th.AssistantMsgStyle,
-		"ThinkingStyle":      th.ThinkingStyle,
-		"ToolNameStyle":      th.ToolNameStyle,
-		"ToolResultStyle":    th.ToolResultStyle,
-		"ErrorStyle":         th.ErrorStyle,
-		"StatusBarStyle":     th.StatusBarStyle,
-		"StatusModelStyle":   th.StatusModelStyle,
-		"DimStyle":           th.DimStyle,
-		"BoldStyle":          th.BoldStyle,
-		"CodeStyle":          th.CodeStyle,
-		"DiffAddStyle":       th.DiffAddStyle,
-		"DiffRemoveStyle":    th.DiffRemoveStyle,
+		"AssistantMsgStyle": th.AssistantMsgStyle,
+		"ThinkingStyle":     th.ThinkingStyle,
+		"ToolNameStyle":     th.ToolNameStyle,
+		"ToolResultStyle":   th.ToolResultStyle,
+		"ErrorStyle":        th.ErrorStyle,
+		"StatusBarStyle":    th.StatusBarStyle,
+		"StatusModelStyle":  th.StatusModelStyle,
+		"DimStyle":          th.DimStyle,
+		"BoldStyle":         th.BoldStyle,
+		"CodeStyle":         th.CodeStyle,
+		"DiffAddStyle":      th.DiffAddStyle,
+		"DiffRemoveStyle":   th.DiffRemoveStyle,
 	}
 	// If theme compiles and fields exist, test passes
 	_ = styles

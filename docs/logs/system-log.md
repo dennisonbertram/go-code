@@ -567,3 +567,9 @@ Use this file to document systems, interfaces, and interactions as they are buil
 # 2026-07-19 — Plugin bundle subsystem
 
 - `internal/plugins` owns bundle validation, safe staged installation, persisted lifecycle state, marketplace index parsing, and discovery. `harnessd` loads enabled skills/commands and gates agents/MCP/hooks on trust.
+# 2026-07-20 — Subscription-auth provider foundation (Epic #846)
+
+- `internal/provider.TokenSource` is the credential boundary: provider clients call `Token(ctx)` at request construction, allowing a future expiring-credential provider to refresh without creating a parallel HTTP client.
+- `internal/provider/tokencache.Cache` owns only in-memory cache, expiry-margin, and single-flight synchronization. Provider-specific code supplies refresh transport and any credential persistence; this foundation never imports, stores, or logs provider credentials.
+- `openai.Config.TokenSource` and `ExtraHeaders` flow through the existing chat-completions and responses request paths. Nil `TokenSource` uses the existing static `APIKey` behavior; headers are copied on client construction.
+- `catalog.ProviderRegistry` holds optional runtime token sources alongside API-key overrides. A source marks a provider configured and causes `GetClient` to forward it to `ClientFactory`; changing either credential mode evicts the cached provider client.

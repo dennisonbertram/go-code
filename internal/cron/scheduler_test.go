@@ -971,7 +971,7 @@ func TestFireJob_SkipsExecutionWhenJobPausedInStore(t *testing.T) {
 			return exec, nil
 		},
 		UpdateExecutionFunc: func(ctx context.Context, exec Execution) error { return nil },
-		UpdateJobFunc: func(ctx context.Context, job Job) error { return nil },
+		UpdateJobFunc:       func(ctx context.Context, job Job) error { return nil },
 	}
 	executor := &mockExecutor{
 		ExecuteFunc: func(ctx context.Context, job Job) (string, error) {

@@ -1,10 +1,10 @@
 package lfqueue
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
-	"runtime"
 )
 
 func TestQueueStress(t *testing.T) {

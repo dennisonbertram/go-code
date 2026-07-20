@@ -27,7 +27,13 @@ import (
 type ModelAPILookupFn func(providerName, modelID string) string
 
 type Config struct {
-	APIKey            string
+	APIKey string
+	// TokenSource optionally supplies a bearer credential for every request.
+	// When nil, APIKey preserves the existing static-key behavior.
+	TokenSource provider.TokenSource
+	// ExtraHeaders are static headers sent with every request. NewClient copies
+	// the map so later caller mutations cannot affect a long-lived client.
+	ExtraHeaders      map[string]string
 	BaseURL           string
 	Model             string
 	Client            *http.Client
@@ -52,6 +58,8 @@ type Config struct {
 
 type Client struct {
 	apiKey            string
+	tokenSource       provider.TokenSource
+	extraHeaders      map[string]string
 	baseURL           string
 	model             string
 	client            *http.Client
@@ -68,7 +76,7 @@ type Client struct {
 }
 
 func NewClient(config Config) (*Client, error) {
-	if config.APIKey == "" {
+	if config.APIKey == "" && config.TokenSource == nil {
 		return nil, fmt.Errorf("openai api key is required")
 	}
 	baseURL := config.BaseURL
@@ -95,6 +103,8 @@ func NewClient(config Config) (*Client, error) {
 	baseURL = strings.TrimSuffix(baseURL, "/v1")
 	return &Client{
 		apiKey:            config.APIKey,
+		tokenSource:       config.TokenSource,
+		extraHeaders:      cloneHeaders(config.ExtraHeaders),
 		baseURL:           baseURL,
 		model:             model,
 		client:            httpClient,
@@ -109,6 +119,35 @@ func NewClient(config Config) (*Client, error) {
 		openRouterTitle:   config.OpenRouterTitle,
 		retry:             config.Retry,
 	}, nil
+}
+
+func cloneHeaders(headers map[string]string) map[string]string {
+	if headers == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(headers))
+	for key, value := range headers {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func (c *Client) applyAuthAndExtraHeaders(ctx context.Context, req *http.Request) error {
+	credential := c.apiKey
+	if c.tokenSource != nil {
+		var err error
+		credential, err = c.tokenSource.Token(ctx)
+		if err != nil {
+			return fmt.Errorf("retrieve bearer credential: %w", err)
+		}
+	}
+	for key, value := range c.extraHeaders {
+		req.Header.Set(key, value)
+	}
+	// Apply authorization last so a caller-supplied extra header cannot replace
+	// the credential source selected for this request.
+	req.Header.Set("Authorization", "Bearer "+credential)
+	return nil
 }
 
 // nonStreamingHeaderTimeout bounds Transport.ResponseHeaderTimeout. For a
@@ -301,7 +340,9 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("create request: %w", err)
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if err := c.applyAuthAndExtraHeaders(streamCtx, httpReq); err != nil {
+		return harness.CompletionResult{}, err
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if c.providerName == "openrouter" {
 		if c.openRouterReferer != "" {
@@ -584,12 +625,12 @@ func (c *Client) resultFromCompletionResponse(model string, response completionR
 }
 
 type completionRequest struct {
-	Model           string         `json:"model"`
-	Messages        []chatMessage  `json:"messages"`
-	Tools           []toolSpec     `json:"tools,omitempty"`
-	ToolChoice      string         `json:"tool_choice,omitempty"`
-	Stream          bool           `json:"stream,omitempty"`
-	StreamOptions   *streamOptions `json:"stream_options,omitempty"`
+	Model         string         `json:"model"`
+	Messages      []chatMessage  `json:"messages"`
+	Tools         []toolSpec     `json:"tools,omitempty"`
+	ToolChoice    string         `json:"tool_choice,omitempty"`
+	Stream        bool           `json:"stream,omitempty"`
+	StreamOptions *streamOptions `json:"stream_options,omitempty"`
 	// ReasoningEffort controls the thinking budget for o-series models.
 	// Valid values: "low", "medium", "high". Omitted when empty.
 	ReasoningEffort   string `json:"reasoning_effort,omitempty"`
@@ -1105,12 +1146,12 @@ type responsesResponse struct {
 
 // responsesOutputItem is one item in the output[] array.
 type responsesOutputItem struct {
-	Type    string                   `json:"type"`               // "message" or "function_call"
-	Content []responsesContentBlock  `json:"content,omitempty"`  // for type == "message"
-	ID      string                   `json:"id,omitempty"`
-	CallID  string                   `json:"call_id,omitempty"`  // for type == "function_call"
-	Name    string                   `json:"name,omitempty"`
-	Arguments string                 `json:"arguments,omitempty"`
+	Type      string                  `json:"type"`              // "message" or "function_call"
+	Content   []responsesContentBlock `json:"content,omitempty"` // for type == "message"
+	ID        string                  `json:"id,omitempty"`
+	CallID    string                  `json:"call_id,omitempty"` // for type == "function_call"
+	Name      string                  `json:"name,omitempty"`
+	Arguments string                  `json:"arguments,omitempty"`
 }
 
 // responsesContentBlock is a block inside output[].content[].
@@ -1121,11 +1162,11 @@ type responsesContentBlock struct {
 
 // responsesUsage holds token counts as reported by the Responses API.
 type responsesUsage struct {
-	InputTokens         int                       `json:"input_tokens"`
-	OutputTokens        int                       `json:"output_tokens"`
-	TotalTokens         int                       `json:"total_tokens"`
-	InputTokensDetails  *responsesInputDetails    `json:"input_tokens_details,omitempty"`
-	OutputTokensDetails *responsesOutputDetails   `json:"output_tokens_details,omitempty"`
+	InputTokens         int                     `json:"input_tokens"`
+	OutputTokens        int                     `json:"output_tokens"`
+	TotalTokens         int                     `json:"total_tokens"`
+	InputTokensDetails  *responsesInputDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokensDetails *responsesOutputDetails `json:"output_tokens_details,omitempty"`
 }
 
 type responsesInputDetails struct {
@@ -1378,7 +1419,9 @@ func (c *Client) completeWithResponsesAPI(ctx context.Context, req harness.Compl
 	if err != nil {
 		return harness.CompletionResult{}, fmt.Errorf("create responses request: %w", err)
 	}
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+	if err := c.applyAuthAndExtraHeaders(streamCtx, httpReq); err != nil {
+		return harness.CompletionResult{}, err
+	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	if c.providerName == "openrouter" {
 		if c.openRouterReferer != "" {

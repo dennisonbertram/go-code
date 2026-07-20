@@ -1029,7 +1029,7 @@ func TestCompleteStreamingToolCall(t *testing.T) {
 			argParts = append(argParts, d.ToolCall.Arguments)
 		}
 	}
-	if !slices.Equal(argParts, []string{`{"path":`, `"/"}` }) {
+	if !slices.Equal(argParts, []string{`{"path":`, `"/"}`}) {
 		t.Fatalf("unexpected tool arg deltas: %+v", argParts)
 	}
 }
@@ -1280,7 +1280,7 @@ func TestCompleteStreamingError(t *testing.T) {
 	client := newTestClient(t, srv)
 	_, err := client.Complete(context.Background(), harness.CompletionRequest{
 		Messages: []harness.Message{{Role: "user", Content: "Hi"}},
-		Stream: func(_ harness.CompletionDelta) {},
+		Stream:   func(_ harness.CompletionDelta) {},
 	})
 	if err == nil {
 		t.Fatal("expected error")

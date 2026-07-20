@@ -10,7 +10,7 @@ func TestLRUEvictionAndGetPut(t *testing.T) {
 	cases := []struct {
 		capacity int
 		opers    []struct {
-			op   string
+			op    string
 			key   string
 			value string
 			want  string
@@ -20,7 +20,7 @@ func TestLRUEvictionAndGetPut(t *testing.T) {
 		{
 			capacity: 2,
 			opers: []struct {
-				op   string
+				op    string
 				key   string
 				value string
 				want  string

@@ -10,15 +10,15 @@ import (
 // blockingCancelProvider blocks until its release channel is closed or ctx is done.
 // It respects context cancellation so that CancelRun can interrupt it.
 type blockingCancelProvider struct {
-	mu       sync.Mutex
-	blockCh  chan struct{} // closed to signal "now blocking"
+	mu        sync.Mutex
+	blockCh   chan struct{} // closed to signal "now blocking"
 	releaseCh chan struct{} // closed to unblock
-	calls    int
+	calls     int
 }
 
 func newBlockingCancelProvider() *blockingCancelProvider {
 	return &blockingCancelProvider{
-		blockCh:  make(chan struct{}),
+		blockCh:   make(chan struct{}),
 		releaseCh: make(chan struct{}),
 	}
 }

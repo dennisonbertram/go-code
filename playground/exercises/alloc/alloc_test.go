@@ -8,7 +8,7 @@ import (
 func Test_SlabCorrectness(t *testing.T) {
 	a := NewAllocator([]int{8, 16, 32, 64, 128, 256})
 	tests := []struct {
-		size     int
+		size       int
 		expectSlab int
 	}{
 		{1, 8}, {8, 8}, {9, 16}, {22, 32}, {70, 128}, {255, 256},
@@ -37,7 +37,7 @@ func Test_SlabReuse(t *testing.T) {
 }
 
 func Test_LargeFallback(t *testing.T) {
-	a := NewAllocator([]int{16,32,64})
+	a := NewAllocator([]int{16, 32, 64})
 	b := a.Alloc(128)
 	if cap(b) != 128 {
 		t.Errorf("Large fallback: got cap %d, want 128", cap(b))
@@ -50,7 +50,7 @@ func Test_ConcurrentSafe(t *testing.T) {
 	a := NewAllocator([]int{8, 16, 32, 64, 128, 256})
 	N := 128
 	WG := sync.WaitGroup{}
-	WG.Add(N*2)
+	WG.Add(N * 2)
 	for i := 0; i < N; i++ {
 		go func(i int) {
 			defer WG.Done()

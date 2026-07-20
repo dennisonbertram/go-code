@@ -52,7 +52,9 @@ func TestPOC11_AdversarialVerifyPattern(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusAccepted, rec.Code)
-	var findResp struct{ RunID string `json:"run_id"` }
+	var findResp struct {
+		RunID string `json:"run_id"`
+	}
 	json.Unmarshal(rec.Body.Bytes(), &findResp)
 
 	// Step 2: Start verify-bug workflow (in parallel)
@@ -60,7 +62,9 @@ func TestPOC11_AdversarialVerifyPattern(t *testing.T) {
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusAccepted, rec.Code)
-	var verifyResp struct{ RunID string `json:"run_id"` }
+	var verifyResp struct {
+		RunID string `json:"run_id"`
+	}
 	json.Unmarshal(rec.Body.Bytes(), &verifyResp)
 
 	// Step 3: Start assess-severity workflow
@@ -68,7 +72,9 @@ func TestPOC11_AdversarialVerifyPattern(t *testing.T) {
 	rec = httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusAccepted, rec.Code)
-	var assessResp struct{ RunID string `json:"run_id"` }
+	var assessResp struct {
+		RunID string `json:"run_id"`
+	}
 	json.Unmarshal(rec.Body.Bytes(), &assessResp)
 
 	// Wait for all to complete
@@ -80,7 +86,9 @@ func TestPOC11_AdversarialVerifyPattern(t *testing.T) {
 		rec = httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
-		var resp struct{ Status string `json:"status"` }
+		var resp struct {
+			Status string `json:"status"`
+		}
 		json.Unmarshal(rec.Body.Bytes(), &resp)
 		assert.Equal(t, "completed", resp.Status)
 	}
@@ -107,7 +115,9 @@ func TestPOC12_LoopUntilDryPattern(t *testing.T) {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusAccepted, rec.Code)
-		var resp struct{ RunID string `json:"run_id"` }
+		var resp struct {
+			RunID string `json:"run_id"`
+		}
 		json.Unmarshal(rec.Body.Bytes(), &resp)
 		runIDs = append(runIDs, resp.RunID)
 	}
@@ -151,7 +161,9 @@ func TestPOC13_MultiPhaseEventTracking(t *testing.T) {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusAccepted, rec.Code)
-	var startResp struct{ RunID string `json:"run_id"` }
+	var startResp struct {
+		RunID string `json:"run_id"`
+	}
 	json.Unmarshal(rec.Body.Bytes(), &startResp)
 
 	// Wait for completion
