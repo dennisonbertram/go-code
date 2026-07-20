@@ -85,6 +85,11 @@ type DefaultRegistryOptions struct {
 	// GoalManager, when non-nil, enables the goals tool for persistent,
 	// cross-session goal tracking. Backed by a persistent store in production.
 	GoalManager deferred.GoalCreator
+	// JobTracker, when non-nil, registers this registry's background-job
+	// manager for daemon-wide enumeration/kill (GET /v1/tasks,
+	// POST /v1/jobs/{id}/kill; epic #814 slice 2). The manager unregisters
+	// itself when the registry shuts down.
+	JobTracker *JobTracker
 }
 
 // conversationStoreAdapter adapts ConversationStore (harness package) to htools.ConversationReader.
@@ -495,6 +500,17 @@ func NewDefaultRegistryWithOptions(workspaceRoot string, opts DefaultRegistryOpt
 	// -- Register all tools in the registry --
 	registry = NewRegistry()
 	registry.RegisterShutdownHook(jobManager.Shutdown)
+
+	// Expose this registry's background jobs to the daemon-wide /v1/tasks
+	// union (epic #814 slice 2). The manager unregisters when the registry
+	// shuts down so the tracker does not retain dead registries.
+	if opts.JobTracker != nil {
+		jobTrackerRef := opts.JobTracker.Register(jobManager)
+		registry.RegisterShutdownHook(func(context.Context) error {
+			opts.JobTracker.Unregister(jobTrackerRef)
+			return nil
+		})
+	}
 
 	for _, t := range coreTools {
 		def := ToolDefinition{

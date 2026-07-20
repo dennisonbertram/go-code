@@ -1,8 +1,11 @@
 package server
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"go-agent-harness/internal/harness"
@@ -11,13 +14,12 @@ import (
 	"go-agent-harness/internal/subagents"
 )
 
-// Task type values returned by GET /v1/tasks. bash_job arrives with the
-// background-jobs slice of epic #814; the union endpoint unions the three
-// daemon-reachable sources first.
+// Task type values returned by GET /v1/tasks.
 const (
 	TaskTypeSubagent = "subagent"
 	TaskTypeCron     = "cron"
 	TaskTypeCallback = "callback"
+	TaskTypeBashJob  = "bash_job"
 )
 
 // Task action values advertise which stop/control operations the client can
@@ -101,6 +103,17 @@ func (s *Server) handleTasks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	if s.jobTracker != nil {
+		caller := TenantIDFromContext(r.Context())
+		for _, tj := range s.jobTracker.List() {
+			// Same tenant rule as callbacks/cron above.
+			if caller != "" && tj.Info.TenantID != caller {
+				continue
+			}
+			tasks = append(tasks, taskFromBashJob(tj, now))
+		}
+	}
+
 	// Deterministic ordering: oldest first, ties broken by type then id, so
 	// clients and tests see a stable list regardless of map iteration order.
 	sort.Slice(tasks, func(i, j int) bool {
@@ -173,6 +186,70 @@ func taskFromCallback(info tools.CallbackInfo, now time.Time) Task {
 		AgeSeconds: taskAgeSeconds(info.CreatedAt, now),
 		Actions:    []string{TaskActionCancel},
 	}
+}
+
+// taskFromBashJob maps a tracked background bash job onto the unified DTO.
+// Running jobs can be cancelled (via POST /v1/jobs/{id}/kill); finished jobs
+// offer no actions — the JobManager TTL reclaims them.
+func taskFromBashJob(tj harness.TrackedJob, now time.Time) Task {
+	actions := []string{}
+	if tj.Info.Running {
+		actions = []string{TaskActionCancel}
+	}
+	return Task{
+		ID:         tj.TaskID,
+		Type:       TaskTypeBashJob,
+		Status:     tj.Info.Status(),
+		Label:      tj.Info.Command,
+		StartedAt:  tj.Info.StartedAt,
+		AgeSeconds: taskAgeSeconds(tj.Info.StartedAt, now),
+		Actions:    actions,
+	}
+}
+
+// handleJobByID serves POST /v1/jobs/{id}/kill, the daemon-side kill path for
+// background bash jobs (epic #814 slice 2). The {id} is the namespaced task
+// ID from GET /v1/tasks ("<managerRef>:<shellID>"). Requires runs:write,
+// matching the mutating subagent/cron routes. Cross-tenant kills are 404
+// (not 403), matching subagent cancel semantics.
+func (s *Server) handleJobByID(w http.ResponseWriter, r *http.Request) {
+	if s.jobTracker == nil {
+		writeError(w, http.StatusNotImplemented, "not_configured", "job tracker is not configured")
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/jobs/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] != "kill" {
+		writeError(w, http.StatusNotFound, "not_found", "job action not found")
+		return
+	}
+	id := parts[0]
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+	if !hasScope(r.Context(), store.ScopeRunsWrite) {
+		writeScopeError(w, store.ScopeRunsWrite)
+		return
+	}
+	// Tenant scoping: when auth is enabled, the caller may only kill their own
+	// tenant's jobs. Mirrors the list filter in handleTasks.
+	if caller := TenantIDFromContext(r.Context()); caller != "" {
+		tj, ok := s.jobTracker.Get(id)
+		if !ok || tj.Info.TenantID != caller {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("job %q not found", id))
+			return
+		}
+	}
+	if err := s.jobTracker.Kill(id); err != nil {
+		if errors.Is(err, harness.ErrJobNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("job %q not found", id))
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "kill_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "killed": true})
 }
 
 // taskAgeSeconds computes a non-negative age in whole seconds. Clock skew or

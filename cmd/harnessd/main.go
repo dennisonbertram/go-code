@@ -609,6 +609,13 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		log.Printf("delayed callbacks enabled")
 	}
 
+	// Daemon-level background bash job tracker (epic #814 slice 2). Every
+	// tool registry built with baseRegistryOptions — main, per-run
+	// provisioned-workspace, and subagent worktree registries — registers its
+	// JobManager here so GET /v1/tasks can enumerate bash jobs daemon-wide
+	// and POST /v1/jobs/{id}/kill can terminate them.
+	jobTracker := harness.NewJobTracker()
+
 	// MCP server startup: TOML config (layers 1-3, no profile) then env var
 	// servers are registered additively. TOML entries take precedence over env
 	// var entries with the same name.
@@ -761,6 +768,7 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		ModelCatalog:       modelCatalog,
 		CronClient:         cronClient,
 		CallbackManager:    callbackMgr,
+		JobTracker:         jobTracker,
 		Activations:        activations,
 		Sourcegraph: htools.SourcegraphConfig{
 			Endpoint: sourcegraphEndpoint,
@@ -942,6 +950,7 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		callbackStarter:      callbackStarter,
 		callbackBridge:       callbackBridge,
 		callbackMgr:          callbackMgr,
+		jobTracker:           jobTracker,
 		msgSummarizer:        msgSummarizer,
 		skillManager:         skillManager,
 		hooksSummary:         hooksSummary,

@@ -31,3 +31,10 @@ func (m *JobManager) Output(shellID string, wait bool) (map[string]any, error) {
 func (m *JobManager) Kill(shellID string) (map[string]any, error) {
 	return m.kill(shellID)
 }
+
+// List is an exported wrapper for the unexported list method, returning a
+// snapshot of all tracked background jobs. Used by the daemon-level job
+// tracker backing the /v1/tasks union (epic #814).
+func (m *JobManager) List() []JobInfo {
+	return m.list()
+}

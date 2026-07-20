@@ -447,6 +447,7 @@ type serverBootstrapOptions struct {
 	rolloutDir       string
 	hooksSummary     hooks.Summary
 	callbackMgr      *htools.CallbackManager
+	jobTracker       *harness.JobTracker
 }
 
 func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
@@ -475,5 +476,6 @@ func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
 		RolloutDir:       opts.rolloutDir,
 		HooksSummary:     opts.hooksSummary,
 		CallbackLister:   opts.callbackMgr,
+		JobTracker:       opts.jobTracker,
 	}
 }
