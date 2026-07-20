@@ -7,6 +7,13 @@
 - Success definition: read-only CLI credential import into `~/.harness/subscription-auth/kimi.json`; `auth kimi login|status|logout`; 30-second refresh safety margin; derived (not duplicated) Kimi model catalog; dynamic bearer plus client headers; fake-server completion/refresh integration coverage; no credential logging.
 - Guardrails: Live `/api/oauth/token` was confirmed only as POST-capable by one unauthenticated OPTIONS probe. No authenticated refresh or completion was sent to the live service; conventional OAuth2 form details and OpenAI compatibility require manual verification before production reliance.
 
+## 2026-07-20 (Codex ChatGPT-Subscription Authentication — Epic #847)
+
+- Command intent: Implement, test, commit by slice, push, and open (without merging) the `codex-subscription` authentication provider.
+- User intent: Reuse an existing ChatGPT-authenticated vendor Codex session without a separate metered OpenAI API key.
+- Success definition: a read-only import creates a `0600` harness-owned credential; refresh uses the verified OAuth contract; the catalog mirrors OpenAI models structurally; harnessd sends the dynamic bearer and account header; CLI/TUI surface safe status; a fake HTTPS request survives forced expiry refresh.
+- Guardrails: never write under `~/.codex`, never log credentials, no OAuth dependency, retain OpenAI API-key behavior, and explicitly report whether live ChatGPT validation was possible.
+
 ## 2026-07-20 (Subscription-Auth Foundation — Epic #846)
 
 - Command intent: Add provider-layer dynamic bearer credential and extra-header plumbing, a generic refresh cache, and registry token-source support; commit each test-first slice, verify, push, and open a PR without merging it.
