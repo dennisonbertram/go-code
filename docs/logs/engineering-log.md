@@ -48,6 +48,13 @@
   `go test ./cmd/harnesscli/... -count=1` green; acceptance
   `printf '...initialize...' | harness acp` prints a single JSON-RPC result
   with capabilities and exits 0.
+## 2026-07-19 (Unified /tasks Panel — Epic #814, Slice 1)
+
+- Added `GET /v1/tasks` (`internal/server/http_tasks.go`): a read-scoped union endpoint returning subagents, cron jobs, and pending delayed callbacks as one `Task` DTO (`id`, `type`, `status`, `label`, `started_at`, `age_seconds`, `actions`). Unconfigured sources are skipped, so an empty daemon returns `{"tasks": []}`; a failing source fails the request rather than silently dropping entries.
+- Added `CallbackManager.ListAll` (`internal/harness/tools/delayed_callback.go`) for cross-conversation enumeration of pending callbacks; fired/canceled callbacks stay excluded, matching `List` semantics.
+- Tenant scoping reuses the existing per-source helpers verbatim (`filterSubagentsByTenant`, `filterCronJobsByTenant`) and mirrors the cron exact-match shape for callbacks; auth matches `/v1/subagents` and `/v1/cron/jobs` (`runs:read`).
+- Wired the daemon's `*tools.CallbackManager` into `server.ServerOptions.CallbackLister` through `cmd/harnessd` (`main.go` → `runtime_container.go` → `bootstrap_helpers.go`).
+- Validation: failing-first tests in `internal/server/http_tasks_test.go` (7 handler tests) and `TestCallbackManagerListAll`; `go test ./internal/server/ ./cmd/harnessd/ -count=1` pass. `go test ./internal/harness/tools/ -count=1` has one pre-existing failure (`TestJobManagerRunForegroundStreamingOverlongLineReturnsPromptly`) that fails identically on main (a439dc9f) and is unrelated to this slice.
 
 ## 2026-07-19 (ACP Server Mode — Epic #746)
 

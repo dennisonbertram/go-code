@@ -928,6 +928,80 @@ VALUES (?, ?, 'system', ?, 1)
 	return targetStep, nil
 }
 
+// ForkConversation duplicates srcID's metadata row and full message history
+// under newID. The fork inherits title, workspace, and tenant_id from the
+// source; created_at/updated_at are fresh, and pinned plus the token/cost
+// counters start at zero-values. After the fork the two conversations diverge
+// independently. Returns an error if srcID does not exist or newID is taken.
+func (s *SQLiteConversationStore) ForkConversation(ctx context.Context, srcID, newID string) (*Conversation, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("fork: begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Load the source metadata row; it must exist.
+	var src Conversation
+	var srcCreated, srcUpdated string
+	var srcPinned int
+	err = tx.QueryRowContext(ctx, `
+SELECT id, title, msg_count, created_at, updated_at, prompt_tokens, completion_tokens, cost_usd, pinned, workspace, tenant_id
+FROM conversations WHERE id = ?
+`, srcID).Scan(&src.ID, &src.Title, &src.MsgCount, &srcCreated, &srcUpdated,
+		&src.PromptTokens, &src.CompletionTokens, &src.CostUSD, &srcPinned, &src.Workspace, &src.TenantID)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("fork: source conversation %q not found", srcID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("fork: load source conversation: %w", err)
+	}
+
+	// The target ID must be free.
+	var taken int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM conversations WHERE id = ?`, newID).Scan(&taken); err != nil {
+		return nil, fmt.Errorf("fork: check target conversation: %w", err)
+	}
+	if taken > 0 {
+		return nil, fmt.Errorf("fork: target conversation %q already exists", newID)
+	}
+
+	// Insert the fork metadata row with fresh timestamps and zeroed counters.
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO conversations (id, title, msg_count, created_at, updated_at, prompt_tokens, completion_tokens, cost_usd, pinned, workspace, tenant_id)
+VALUES (?, ?, ?, ?, ?, 0, 0, 0.0, 0, ?, ?)
+`, newID, src.Title, src.MsgCount, now, now, src.Workspace, src.TenantID); err != nil {
+		return nil, fmt.Errorf("fork: insert conversation: %w", err)
+	}
+
+	// Copy the full message history verbatim, preserving step order. The
+	// conv_msgs_fts_insert trigger keeps the FTS index in sync per row.
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO conversation_messages (conversation_id, step, role, content, tool_calls_json, tool_call_id, name, is_meta, is_compact_summary)
+SELECT ?, step, role, content, tool_calls_json, tool_call_id, name, is_meta, is_compact_summary
+FROM conversation_messages
+WHERE conversation_id = ?
+ORDER BY step ASC
+`, newID, srcID); err != nil {
+		return nil, fmt.Errorf("fork: copy messages: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("fork: commit: %w", err)
+	}
+
+	nowParsed, _ := time.Parse(time.RFC3339Nano, now)
+	return &Conversation{
+		ID:        newID,
+		Title:     src.Title,
+		CreatedAt: nowParsed,
+		UpdatedAt: nowParsed,
+		MsgCount:  src.MsgCount,
+		Workspace: src.Workspace,
+		TenantID:  src.TenantID,
+	}, nil
+}
+
 // SearchMessages performs a full-text search over message content using the FTS5 index.
 // When tenantID is non-empty, results are restricted to conversations owned by that
 // tenant by joining the FTS hits against the conversations table on conversation_id.

@@ -2377,6 +2377,9 @@ func (f *failingConversationStore) UpdateConversationMeta(_ context.Context, _, 
 func (f *failingConversationStore) GetConversationOwner(_ context.Context, _ string) (*Conversation, error) {
 	return nil, fmt.Errorf("store get owner failed")
 }
+func (f *failingConversationStore) ForkConversation(_ context.Context, _, _ string) (*Conversation, error) {
+	return nil, fmt.Errorf("store fork failed")
+}
 
 // ---------------------------------------------------------------------------
 // Token/cost wiring: runner → ConversationStore (Issue #32)
@@ -2427,6 +2430,9 @@ func (c *capturingConversationStore) UpdateConversationMeta(_ context.Context, _
 	return nil
 }
 func (c *capturingConversationStore) GetConversationOwner(_ context.Context, _ string) (*Conversation, error) {
+	return nil, nil
+}
+func (c *capturingConversationStore) ForkConversation(_ context.Context, _, _ string) (*Conversation, error) {
 	return nil, nil
 }
 

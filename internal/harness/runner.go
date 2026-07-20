@@ -4095,6 +4095,10 @@ type CompactRunRequest struct {
 	// Mode must be one of "strip", "summarize", or "hybrid". Defaults to "strip".
 	Mode     string
 	KeepLast int
+	// Instruction is an optional free-text hint telling the summarizer what to
+	// preserve (e.g. "keep the SQL schema"). It only affects summarize/hybrid
+	// modes; strip mode ignores it. Empty means no instruction.
+	Instruction string
 }
 
 // CompactRunResult holds the result of a CompactRun call.
@@ -4156,6 +4160,11 @@ func (r *Runner) CompactRun(ctx context.Context, runID string, req CompactRunReq
 
 	beforeCount := len(snap)
 	summarizer := r.newMessageSummarizerWithModel(summarizerModel)
+	if inst := strings.TrimSpace(req.Instruction); inst != "" {
+		// A preserve-instruction steers the summarizer (summarize/hybrid only;
+		// strip never invokes the summarizer, so it ignores the instruction).
+		summarizer = r.newMessageSummarizerWithInstruction(summarizerModel, inst)
+	}
 	compacted, err := compactMessagesHTTP(ctx, snap, mode, keepLast, summarizer)
 	if err != nil {
 		return CompactRunResult{}, fmt.Errorf("compaction failed: %w", err)
@@ -4600,6 +4609,19 @@ func (r *Runner) SummarizeMessages(ctx context.Context, messages []Message) (str
 // This is used to honour per-request RoleModels.Summarizer overrides during
 // auto-compaction, where the resolved model is stored in runState.
 func (r *Runner) SummarizeMessagesWithModel(ctx context.Context, messages []Message, overrideModel string) (string, error) {
+	return r.summarizeMessagesWithModelAndInstruction(ctx, messages, overrideModel, "")
+}
+
+// summarizeMessagesPrompt is the fixed prompt sent as the final message of
+// every summarization request.
+const summarizeMessagesPrompt = "Please provide a concise summary of this conversation so far, suitable for use as context in a continuation. Include key facts, decisions, and outputs. Be concise."
+
+// summarizeMessagesWithModelAndInstruction is the internal workhorse behind
+// SummarizeMessagesWithModel. When instruction is non-empty (after trimming)
+// it is appended to the summarization prompt as a preserve-hint, so callers of
+// manual compaction can steer what the summary keeps. Auto-compaction passes
+// an empty instruction and gets the byte-identical legacy prompt.
+func (r *Runner) summarizeMessagesWithModelAndInstruction(ctx context.Context, messages []Message, overrideModel, instruction string) (string, error) {
 	if r.provider == nil {
 		return "", fmt.Errorf("provider not configured")
 	}
@@ -4615,11 +4637,15 @@ func (r *Runner) SummarizeMessagesWithModel(ctx context.Context, messages []Mess
 	if overrideModel != "" {
 		model = overrideModel
 	}
+	prompt := summarizeMessagesPrompt
+	if inst := strings.TrimSpace(instruction); inst != "" {
+		prompt += "\n\nPreserve especially: " + inst
+	}
 	req := CompletionRequest{
 		Model: model,
 		Messages: append(copyMessages(messages), Message{
 			Role:    "user",
-			Content: "Please provide a concise summary of this conversation so far, suitable for use as context in a continuation. Include key facts, decisions, and outputs. Be concise.",
+			Content: prompt,
 		}),
 	}
 	result, err := r.provider.Complete(ctx, req)
@@ -4635,9 +4661,12 @@ func (r *Runner) SummarizeMessagesWithModel(ctx context.Context, messages []Mess
 // runnerMessageSummarizer adapts *Runner to the tools.MessageSummarizer interface.
 // overrideModel, when non-empty, is passed to SummarizeMessagesWithModel so that
 // per-request Summarizer role model overrides are honoured during compaction.
+// instruction, when non-empty, is appended to the summarization prompt as a
+// preserve-hint (manual /compact only; auto-compaction leaves it empty).
 type runnerMessageSummarizer struct {
 	runner        *Runner
 	overrideModel string
+	instruction   string
 }
 
 func (s *runnerMessageSummarizer) SummarizeMessages(ctx context.Context, msgs []map[string]any) (string, error) {
@@ -4658,7 +4687,7 @@ func (s *runnerMessageSummarizer) SummarizeMessages(ctx context.Context, msgs []
 		}
 		converted = append(converted, msg)
 	}
-	return s.runner.SummarizeMessagesWithModel(ctx, converted, s.overrideModel)
+	return s.runner.summarizeMessagesWithModelAndInstruction(ctx, converted, s.overrideModel, s.instruction)
 }
 
 // NewMessageSummarizer returns a tools.MessageSummarizer backed by this runner.
@@ -4671,6 +4700,14 @@ func (r *Runner) NewMessageSummarizer() htools.MessageSummarizer {
 // runner-level config. Pass "" to use the default resolution order.
 func (r *Runner) newMessageSummarizerWithModel(overrideModel string) htools.MessageSummarizer {
 	return &runnerMessageSummarizer{runner: r, overrideModel: overrideModel}
+}
+
+// newMessageSummarizerWithInstruction is like newMessageSummarizerWithModel but
+// additionally appends instruction to the summarization prompt as a
+// preserve-hint. Used by manual CompactRun when the caller supplies a
+// preserve-instruction.
+func (r *Runner) newMessageSummarizerWithInstruction(overrideModel, instruction string) htools.MessageSummarizer {
+	return &runnerMessageSummarizer{runner: r, overrideModel: overrideModel, instruction: instruction}
 }
 
 // GetSummarizer returns a MessageSummarizer backed by this runner, or nil if no

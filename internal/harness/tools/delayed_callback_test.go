@@ -242,6 +242,87 @@ func TestCallbackManagerList(t *testing.T) {
 	})
 }
 
+func TestCallbackManagerListAll(t *testing.T) {
+	t.Run("empty manager returns empty", func(t *testing.T) {
+		starter := &mockRunStarter{}
+		mgr := NewCallbackManager(starter)
+		defer mgr.Shutdown()
+
+		callbacks := mgr.ListAll()
+		if len(callbacks) != 0 {
+			t.Errorf("expected empty list, got %d", len(callbacks))
+		}
+	})
+
+	t.Run("returns pending callbacks across conversations", func(t *testing.T) {
+		starter := &mockRunStarter{}
+		mgr := NewCallbackManager(starter)
+		defer mgr.Shutdown()
+
+		info1, err := mgr.Set(setReq("conv-1", 10*time.Second, "check 1"))
+		if err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		info2, err := mgr.Set(setReq("conv-2", 20*time.Second, "check 2"))
+		if err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		if _, err := mgr.Set(setReq("conv-2", 30*time.Second, "check 3")); err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+
+		callbacks := mgr.ListAll()
+		if len(callbacks) != 3 {
+			t.Fatalf("expected 3 callbacks across conversations, got %d", len(callbacks))
+		}
+		byID := make(map[string]CallbackInfo, len(callbacks))
+		for _, cb := range callbacks {
+			byID[cb.ID] = cb
+		}
+		for _, want := range []CallbackInfo{info1, info2} {
+			got, ok := byID[want.ID]
+			if !ok {
+				t.Fatalf("ListAll missing callback %s", want.ID)
+			}
+			if got.ConversationID != want.ConversationID || got.Prompt != want.Prompt || got.State != CallbackStatePending {
+				t.Errorf("callback %s = %+v, want conversation %q prompt %q state pending", want.ID, got, want.ConversationID, want.Prompt)
+			}
+		}
+	})
+
+	t.Run("excludes fired and canceled callbacks", func(t *testing.T) {
+		starter := &mockRunStarter{}
+		mgr := NewCallbackManager(starter)
+		defer mgr.Shutdown()
+
+		keep, err := mgr.Set(setReq("conv-1", time.Hour, "keep"))
+		if err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		canceled, err := mgr.Set(setReq("conv-1", time.Hour, "cancel me"))
+		if err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+		fired, err := mgr.Set(setReq("conv-2", 5*time.Second, "fire me"))
+		if err != nil {
+			t.Fatalf("Set: %v", err)
+		}
+
+		if _, err := mgr.Cancel(canceled.ID); err != nil {
+			t.Fatalf("Cancel: %v", err)
+		}
+		mgr.fire(fired.ID)
+
+		callbacks := mgr.ListAll()
+		if len(callbacks) != 1 {
+			t.Fatalf("expected only the pending callback, got %d: %+v", len(callbacks), callbacks)
+		}
+		if callbacks[0].ID != keep.ID {
+			t.Errorf("remaining callback = %s, want %s", callbacks[0].ID, keep.ID)
+		}
+	})
+}
+
 func TestCallbackManagerFire(t *testing.T) {
 	t.Run("fire calls StartRun", func(t *testing.T) {
 		starter := &mockRunStarter{}

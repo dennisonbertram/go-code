@@ -280,6 +280,25 @@ func (m *CallbackManager) List(conversationID string) []CallbackInfo {
 	return result
 }
 
+// ListAll returns all callbacks across every conversation. Like List, it only
+// returns callbacks still tracked in the per-conversation index — pending
+// callbacks. Fired and canceled callbacks are removed from that index when
+// they transition, so they are excluded here too.
+func (m *CallbackManager) ListAll() []CallbackInfo {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	result := make([]CallbackInfo, 0, len(m.callbacks))
+	for _, ids := range m.byConv {
+		for _, id := range ids {
+			if cb, ok := m.callbacks[id]; ok {
+				result = append(result, cb.info)
+			}
+		}
+	}
+	return result
+}
+
 // Shutdown stops all pending callbacks and prevents new ones.
 func (m *CallbackManager) Shutdown() {
 	m.mu.Lock()

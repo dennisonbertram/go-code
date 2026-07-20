@@ -9,6 +9,26 @@ import (
 	htools "go-agent-harness/internal/harness/tools"
 )
 
+// awaitPlanApproval presents the run's plan for explicit operator approval when
+// the run would otherwise complete. Pinned semantics (covered by
+// plan_mode_semantics_test.go — do not relax without changing those tests):
+//
+//   - Exit approval is mandatory in EVERY ToolApprovalMode, including
+//     ToolApprovalModeFullAuto. This gate must never be keyed on approval mode:
+//     full_auto auto-approves tool calls, never the plan-exit checkpoint.
+//   - Approval transitions the run to PlanModeInactive, emits
+//     plan.approval_granted, and the run completes.
+//   - Denial transitions the run back to PlanModeActive and emits
+//     plan.approval_denied; the caller appends the operator-feedback user
+//     message ("The operator requested changes to the plan...") and the run
+//     continues in plan mode until an exit is approved.
+//   - A nil ApprovalBroker fails the run explicitly
+//     ("plan mode requires an approval broker"). This fail-closed behavior is
+//     deliberate: silently auto-approving would defeat the checkpoint, and
+//     auto-denying would loop forever because the model would immediately
+//     re-present the same plan.
+//   - Broker timeout or context cancellation propagates as an error and fails
+//     the run — the defined outcome instead of waiting forever.
 func (r *Runner) awaitPlanApproval(ctx context.Context, runID, content string) (bool, error) {
 	r.mu.Lock()
 	st := r.runs[runID]
@@ -59,6 +79,11 @@ func (r *Runner) awaitPlanApproval(ctx context.Context, runID, content string) (
 }
 
 // PlanModeState is the per-run lifecycle for an enforced planning phase.
+// inactive → active when the run starts with PlanMode enabled; active →
+// exit_pending while awaitPlanApproval blocks on the operator; exit_pending →
+// inactive on approval or back to active on denial. Plan mode is only ever
+// deactivated by explicit operator approval — never by approval mode, timeout,
+// or retry.
 type PlanModeState string
 
 const (

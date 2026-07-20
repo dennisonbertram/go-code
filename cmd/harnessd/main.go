@@ -941,6 +941,7 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		triggers:             triggerRuntime,
 		callbackStarter:      callbackStarter,
 		callbackBridge:       callbackBridge,
+		callbackMgr:          callbackMgr,
 		msgSummarizer:        msgSummarizer,
 		skillManager:         skillManager,
 		hooksSummary:         hooksSummary,

@@ -54,6 +54,9 @@ func (s *spyConversationStore) CompactConversation(_ context.Context, _ string, 
 func (s *spyConversationStore) UndoPrompts(_ context.Context, _ string, _ int) (int, error) {
 	return 0, nil
 }
+func (s *spyConversationStore) ForkConversation(_ context.Context, _, _ string) (*Conversation, error) {
+	return nil, nil
+}
 
 // TestConversationStoreAdapter_SearchScoped verifies that SearchConversations
 // threads the run's TenantID (from context RunMetadata) into SearchMessages,

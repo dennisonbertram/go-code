@@ -5,6 +5,9 @@
 
 - `2026-07-20-kimi-subscription-auth-848-plan.md` — Epic #848 Kimi Code subscription auth, endpoint spike, token import, provider wiring, and CLI/TUI lifecycle (in implementation).
 - `2026-07-20-kimi-subscription-auth-848-impact-map.md` — Cross-surface impact map for Epic #848 Kimi subscription authentication.
+- `819-plan-mode.md` — Epic #819 slice 1: pin plan-mode exit semantics across approval modes (in implementation).
+- `814-tasks-panel.md` — Epic #814 slice 1: `GET /v1/tasks` union endpoint for subagents, cron jobs, and delayed callbacks (in implementation).
+- `817-compact-cmd.md` — Epic #817 slice 1: preserve-instruction in `CompactRun` and the run compact endpoint (in implementation).
 
 - `2026-07-20-codex-subscription-auth-847-plan.md` — Epic #847 ChatGPT-subscription authentication for the Codex provider (in implementation).
 - `2026-07-20-codex-subscription-auth-847-impact-map.md` — Cross-surface impact map for Epic #847 Codex subscription routing.
@@ -19,6 +22,7 @@
 - `2026-07-19-acp-epic-746-plan.md` — ACP server mode epic #746 (in implementation).
 - `2026-07-20-live-model-discovery-849-plan.md` — provider-agnostic cached live model discovery for Epic #849.
 
+- `816-session-fork.md` — Slice-1 plan for epic #816 (`/fork`): `ConversationStore.ForkConversation` store primitive with TDD fork-integrity, divergence-isolation, and metadata-inheritance tests (in implementation).
 - `PLAN_TEMPLATE.md`: Required template for pre-implementation planning with checklist.
 - `IMPACT_MAP_TEMPLATE.md`: One-page cross-surface impact map template for provider/model flow changes.
 - `active-plan.md`: Current active plan tracker.
