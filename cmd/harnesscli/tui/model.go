@@ -34,6 +34,7 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/spinner"
 	"go-agent-harness/cmd/harnesscli/tui/components/statspanel"
 	"go-agent-harness/cmd/harnesscli/tui/components/statusbar"
+	"go-agent-harness/cmd/harnesscli/tui/components/themepicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/thinkingbar"
 	"go-agent-harness/cmd/harnesscli/tui/components/tooluse"
 	"go-agent-harness/cmd/harnesscli/tui/components/transcriptexport"
@@ -93,6 +94,13 @@ type Model struct {
 	// constructing ephemeral components (bubbles, tool-card diffs).
 	bubbleStyles *messagebubble.Styles
 	diffStyles   *diffview.Styles
+
+	// themeName is the active theme's name (built-in name or theme-file
+	// basename). themesDir overrides the themes directory; empty means
+	// DefaultThemesDir() (tests set it to a temp dir).
+	themeName   string
+	themesDir   string
+	themePicker themepicker.Model
 
 	// RunID is the current run being displayed.
 	RunID string
@@ -382,6 +390,7 @@ func New(cfg TUIConfig) Model {
 		config:           cfg,
 		keys:             DefaultKeyMap(),
 		theme:            DefaultTheme(),
+		themeName:        "default-dark",
 		contextGrid:      contextgrid.New(),
 		statsPanel:       statspanel.New(nil),
 		costDisplay:      costdisplay.New(),
@@ -1725,6 +1734,37 @@ func executeSessionsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	return nil, false
 }
 
+// executeThemeCommand implements /theme: re-scan the themes directory on
+// every open (so files added while the TUI runs appear without a restart)
+// and open the picker with the current theme marked active.
+func executeThemeCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	dir := m.themesDir
+	if dir == "" {
+		var err error
+		dir, err = DefaultThemesDir()
+		if err != nil {
+			return []tea.Cmd{m.setStatusMsg("Theme: cannot locate themes directory")}, false
+		}
+	}
+	names, err := ListThemes(dir)
+	if err != nil {
+		return []tea.Cmd{m.setStatusMsg("Theme: " + err.Error())}, false
+	}
+	entries := make([]themepicker.ThemeEntry, len(names))
+	for i, name := range names {
+		entries[i] = themepicker.ThemeEntry{
+			Name:    name,
+			Builtin: name == "default-dark" || name == "default-light",
+			Active:  name == m.themeName,
+		}
+	}
+	m.themePicker = themepicker.New(entries).Open()
+	m.themePicker.Width = m.width
+	m.overlayActive = true
+	m.activeOverlay = "theme"
+	return nil, false
+}
+
 // sessionTitle returns the stored title for the current conversation, or ""
 // when the session has no title (or no session is active).
 func (m Model) sessionTitle() string {
@@ -2230,6 +2270,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeOverlay = ""
 				return m, tea.Batch(cmds...)
 			}
+			if m.activeOverlay == "theme" {
+				m.themePicker = m.themePicker.Close()
+				m.overlayActive = false
+				m.activeOverlay = ""
+				return m, tea.Batch(cmds...)
+			}
 			if m.activeOverlay == "permissions" {
 				m.permissionsPanel = m.permissionsPanel.Close()
 				m.overlayActive = false
@@ -2358,6 +2404,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.profilePicker, ppCmd = m.profilePicker.Update(msg)
 				if ppCmd != nil {
 					cmds = append(cmds, ppCmd)
+				}
+				return m, tea.Batch(cmds...)
+			}
+			// When the theme overlay is active, Enter confirms selection via the picker.
+			if m.overlayActive && m.activeOverlay == "theme" {
+				var tpCmd tea.Cmd
+				m.themePicker, tpCmd = m.themePicker.Update(msg)
+				if tpCmd != nil {
+					cmds = append(cmds, tpCmd)
 				}
 				return m, tea.Batch(cmds...)
 			}
@@ -2651,6 +2706,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.profilePicker, ppCmd = m.profilePicker.Update(msg)
 			if ppCmd != nil {
 				cmds = append(cmds, ppCmd)
+			}
+			return m, tea.Batch(cmds...)
+		case m.overlayActive && m.activeOverlay == "theme":
+			// Route all keys to the theme picker component.
+			var tpCmd tea.Cmd
+			m.themePicker, tpCmd = m.themePicker.Update(msg)
+			if tpCmd != nil {
+				cmds = append(cmds, tpCmd)
 			}
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "sessions":
@@ -3821,6 +3884,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activeOverlay = ""
 		cmds = append(cmds, m.setStatusMsg("Profile: "+msg.Entry.Name))
 
+	case themepicker.ThemeSelectedMsg:
+		// Apply the selected theme live (epic #810 slice 3): resolve through
+		// the slice-1 loader and redistribute via SetTheme. On loader failure
+		// keep the current theme and surface the error.
+		m.themePicker = m.themePicker.Close()
+		m.overlayActive = false
+		m.activeOverlay = ""
+		dir := m.themesDir
+		if dir == "" {
+			var derr error
+			dir, derr = DefaultThemesDir()
+			if derr != nil {
+				cmds = append(cmds, m.setStatusMsg("Theme: cannot locate themes directory — keeping "+m.themeName))
+				return m, tea.Batch(cmds...)
+			}
+		}
+		th, err := LoadTheme(dir, msg.Entry.Name)
+		if err != nil {
+			cmds = append(cmds, m.setStatusMsg("Theme load failed: "+err.Error()+" — keeping "+m.themeName))
+			return m, tea.Batch(cmds...)
+		}
+		m.themeName = msg.Entry.Name
+		m.SetTheme(th)
+		cmds = append(cmds, m.setStatusMsg("Theme: "+msg.Entry.Name))
+
 	case SessionPickerSelectedMsg:
 		m.conversationID = msg.SessionID
 		m.sessionPicker = m.sessionPicker.Close()
@@ -3982,6 +4070,12 @@ func (m Model) View() string {
 		case "profiles":
 			m.profilePicker.Width = m.width
 			mainContent = m.profilePicker.View()
+			if mainContent == "" {
+				mainContent = m.vp.View()
+			}
+		case "theme":
+			m.themePicker.Width = m.width
+			mainContent = m.themePicker.View()
 			if mainContent == "" {
 				mainContent = m.vp.View()
 			}

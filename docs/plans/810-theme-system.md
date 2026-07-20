@@ -3,9 +3,9 @@
 ## Slice status
 
 - Slice 1 (token schema + JSON loader): **implemented**, merged via PR #833.
-- Slice 2 (thread resolved theme through components): **implemented** (this branch) —
-  see below.
-- Slices 3–5 (picker, persistence, docs/example): planned, not started.
+- Slice 2 (thread resolved theme through components): **implemented**, merged via PR #871.
+- Slice 3 (/theme picker with live apply and re-scan): **implemented** (this branch).
+- Slices 4–5 (persistence, docs/example): planned, not started.
 
 ## Slice 1: token schema and JSON loader
 
@@ -169,3 +169,68 @@
 - Risk: ephemeral components (bubbles, tool cards) constructed in many
   places miss styles. Mitigation: inject at the two render funnels
   (`renderMessageBubble`, `appendToolUseView`) rather than every call site.
+
+---
+
+## Slice 3: /theme picker overlay with live apply and directory re-scan
+
+## Context
+
+- Problem: slices 1–2 can load and apply themes, but there is no in-TUI way
+  to pick one. `Model.SetTheme` exists (slice 2) but nothing calls it at
+  runtime; `m.themeName` does not exist, so the UI cannot show the active
+  theme name.
+- User impact: users must not restart the TUI to try a theme
+  (kimi-code `/theme` parity).
+- Constraints: persistence to config.json is slice 4 — selection is
+  in-memory only here. Directory scan must happen on every picker open.
+
+## Scope
+
+- In scope:
+  - New `cmd/harnesscli/tui/components/themepicker/` component modeled on
+    `profilepicker` (`New(entries).Open()` value-semantics pattern):
+    `ThemeEntry{Name, Builtin, Active}`, navigation, `ThemeSelectedMsg`,
+    view with built-in/file tags and an active marker.
+  - `/theme` registration in `cmd_parser.go` beside `/profiles`;
+    `executeThemeCommand` re-scans `ListThemes(dir)` on every open and
+    rebuilds the picker (sessions-picker pattern).
+  - Model: `themeName` field (default `"default-dark"`), `themesDir` test
+    seam (empty = `DefaultThemesDir()`), `themePicker` field, overlay kind
+    `"theme"` wired into escape/enter/catch-all key routing and the render
+    switch (mirrors `"profiles"` at every site).
+  - Select handler: `LoadTheme` + `SetTheme` (live apply, no restart) +
+    status message; on loader error keep the current theme and surface the
+    failure.
+- Out of scope: persistence (slice 4), docs/example (slice 5), theming the
+  picker overlay itself, config-panel `theme` row (slice 4 wires it to the
+  active theme).
+
+## Test Plan (TDD)
+
+- New failing tests to add first:
+  - themepicker package: navigation wraps; Enter emits `ThemeSelectedMsg`;
+    Esc closes; `SetEntries` resets; view lists names/tags/active marker.
+  - tui internal (`theme_picker_test.go`): `/theme` (executeThemeCommand)
+    opens the overlay listing built-ins + theme files from `themesDir`;
+    re-open after dropping a new file re-scans and lists it; Enter +
+    `ThemeSelectedMsg` applies the theme live (statusbar restyles,
+    `themeName` updates, overlay closes); malformed theme keeps the current
+    theme and sets an error status message; `/theme` is registered.
+- Existing tests to update: none expected.
+- Regression: `go test ./cmd/harnesscli/... -count=1` green.
+
+## Implementation Checklist
+
+- [x] Write failing tests first, confirm red.
+- [x] Implement themepicker + wiring.
+- [x] Run `go test ./cmd/harnesscli/... -count=1` green; gofmt/vet clean.
+- [ ] Update indexes/logs; commit, push `epic/810-theme-system-s3`, open PR.
+
+## Risks and Mitigations
+
+- Risk: tests touching the real `~/.config/harnesscli/themes`. Mitigation:
+  `themesDir` model field overrides the dir; production leaves it empty.
+- Risk: key-routing divergence between overlays. Mitigation: mirror the
+  profiles overlay at the same three sites + render switch; esc/enter/j/k
+  covered by tests.

@@ -184,6 +184,14 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeProfilesCommand,
 		},
 		{
+			Name:        "theme",
+			Description: "View and select a color theme",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeThemeCommand,
+		},
+		{
 			Name:        "sessions",
 			Description: "Browse and switch between past sessions",
 			Handler: func(cmd Command) CommandResult {
