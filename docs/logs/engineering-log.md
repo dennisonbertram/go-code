@@ -58,6 +58,14 @@
 - TDD: failing-first tests in `cmd/harnesscli/exitcodes_test.go` — mapping table (all terminal events + non-terminal/unknown/empty), contract-value pins, and `httptest` SSE end-to-end assertions that `run()`/`runContinue()` return 0/2/6 for completed/failed/cancelled streams while preserving the stdout lines; `-no-stream` proven to exit 0 without opening the event stream.
 - Validation: `go test ./cmd/harnesscli/... ./internal/harness/... ./test/e2e/... -count=1` green; gofmt/vet clean; no existing test relied on the old failed/cancelled-exits-0 behavior.
 
+## 2026-07-19 (Plugin Trust CLI + Install-Time Confirmation — Epic #821 Slice 2)
+
+- Split `internal/plugins.Installer.Install` into `Stage` (fetch, symlink reject, manifest validation into a private `.install-*` staging dir) and `StagedBundle.Promote`/`Discard`, so the CLI can review declared surfaces between validation and promotion. `Install` keeps its one-step contract as Stage+Promote.
+- Added `harnesscli plugin trust <name>` / `plugin untrust <name>` over `StateStore.SetTrusted`, making trust reachable for remote bundles for the first time; `plugin list` now appends an `untrusted — commands/hooks/MCP inactive` hint to untrusted entries.
+- Remote installs now print the manifest's declared executable surfaces and require confirmation before promotion: interactive y/N on a terminal, `--yes`/`-y` for scripts, refusal with a `--yes` hint otherwise (no stdin deadlock in pipelines). Declined installs leave no files and no state record.
+- `plugin update` re-stages from the recorded source, and for remote bundles re-prints surfaces and re-requires confirmation only when the declared surfaces changed; unchanged remote updates skip confirmation and preserve trust (pinned by tests).
+- TDD: failing-first tests cover Stage/Promote/Discard residue discipline, trust/untrust round-trip with `plugins.TrustedBundles` gating proof, declined/non-TTY/`--yes`/prompt-accept install paths, and update trust preservation on both unchanged and changed surfaces. Remote fixtures use local `file://` git remotes (no network).
+
 ## 2026-07-20 (Issue #854 TUI Subscription Credential Import)
 
 - Replaced the stale `/keys` startup hint based on nonexistent `KIMI_SUBSCRIPTION_AUTH` with synchronous, local-only reads of both harness-owned Codex and Kimi credential stores. The TUI stores only a non-secret availability marker.

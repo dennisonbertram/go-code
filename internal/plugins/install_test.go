@@ -78,3 +78,56 @@ func writeTestBundle(t *testing.T, name, version string) string {
 	}
 	return dir
 }
+
+func TestInstaller_StagePromoteAndDiscard(t *testing.T) {
+	source := writeTestBundle(t, "staged-tools", "2.0.0")
+	root := filepath.Join(t.TempDir(), "plugins")
+	installer := NewInstaller(root)
+
+	// Stage fetches and validates without promoting anything into the
+	// versioned layout.
+	staged, err := installer.Stage(source)
+	if err != nil {
+		t.Fatalf("Stage() error = %v", err)
+	}
+	if staged.Manifest.Name != "staged-tools" || staged.Manifest.Version != "2.0.0" {
+		t.Fatalf("staged manifest = %+v", staged.Manifest)
+	}
+	if staged.Remote {
+		t.Fatal("local stage was marked remote")
+	}
+	if _, err := os.Stat(filepath.Join(root, "staged-tools")); !os.IsNotExist(err) {
+		t.Fatalf("Stage promoted into the install layout: %v", err)
+	}
+
+	// Promote moves the staged tree into <name>/<version>; Discard afterwards
+	// is a no-op.
+	installed, err := staged.Promote()
+	if err != nil {
+		t.Fatalf("Promote() error = %v", err)
+	}
+	want := filepath.Join(root, "staged-tools", "2.0.0")
+	if installed.Root != want {
+		t.Fatalf("installed root = %q, want %q", installed.Root, want)
+	}
+	staged.Discard()
+	if _, err := os.Stat(filepath.Join(want, ManifestFilename)); err != nil {
+		t.Fatalf("Discard after Promote removed the installed bundle: %v", err)
+	}
+
+	// A discarded stage leaves nothing behind in the install root.
+	again, err := installer.Stage(source)
+	if err != nil {
+		t.Fatalf("Stage() error = %v", err)
+	}
+	again.Discard()
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "staged-tools" {
+			t.Fatalf("Discard left residue %q in the install root", entry.Name())
+		}
+	}
+}

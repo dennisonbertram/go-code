@@ -57,10 +57,24 @@ type Installer struct{ Dir string }
 
 func NewInstaller(dir string) *Installer { return &Installer{Dir: dir} }
 
-// Install copies or clones a source into a private temporary directory,
-// validates it without executing repository content, then atomically promotes
-// it into the versioned install directory.
-func (i *Installer) Install(rawSource string) (*InstalledBundle, error) {
+// StagedBundle is a fetched, validated bundle tree in a private staging
+// directory under the install root. Callers inspect the declared surfaces
+// (for example, to confirm a remote install) and then either Promote the
+// bundle into the versioned install layout or Discard it.
+type StagedBundle struct {
+	*Bundle
+	Source Source
+	Remote bool
+
+	installRoot string
+	stage       string
+}
+
+// Stage fetches rawSource into a private staging directory, rejects symlinks,
+// and validates the manifest — without promoting anything into the versioned
+// install layout and without executing repository content. The caller must
+// Promote or Discard the result.
+func (i *Installer) Stage(rawSource string) (*StagedBundle, error) {
 	source, err := NormalizeSource(rawSource)
 	if err != nil {
 		return nil, err
@@ -72,7 +86,12 @@ func (i *Installer) Install(rawSource string) (*InstalledBundle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create install staging directory: %w", err)
 	}
-	defer os.RemoveAll(stage)
+	keep := false
+	defer func() {
+		if !keep {
+			os.RemoveAll(stage)
+		}
+	}()
 	if source.Remote {
 		cmd := exec.Command("git", "clone", "--depth", "1", "--", source.URL, stage)
 		if output, err := cmd.CombinedOutput(); err != nil {
@@ -88,8 +107,15 @@ func (i *Installer) Install(rawSource string) (*InstalledBundle, error) {
 	if err != nil {
 		return nil, fmt.Errorf("validate plugin bundle: %w", err)
 	}
-	destination := filepath.Join(i.Dir, bundle.Manifest.Name, bundle.Manifest.Version)
-	if err := containedPath(i.Dir, destination); err != nil {
+	keep = true
+	return &StagedBundle{Bundle: bundle, Source: source, Remote: source.Remote, installRoot: i.Dir, stage: stage}, nil
+}
+
+// Promote atomically moves the staged tree into <root>/<name>/<version> and
+// re-validates the installed copy.
+func (s *StagedBundle) Promote() (*InstalledBundle, error) {
+	destination := filepath.Join(s.installRoot, s.Manifest.Name, s.Manifest.Version)
+	if err := containedPath(s.installRoot, destination); err != nil {
 		return nil, fmt.Errorf("plugin destination: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
@@ -98,14 +124,33 @@ func (i *Installer) Install(rawSource string) (*InstalledBundle, error) {
 	if err := os.RemoveAll(destination); err != nil {
 		return nil, fmt.Errorf("replace plugin version: %w", err)
 	}
-	if err := os.Rename(stage, destination); err != nil {
+	if err := os.Rename(s.stage, destination); err != nil {
 		return nil, fmt.Errorf("promote plugin bundle: %w", err)
 	}
 	installed, err := LoadBundle(destination)
 	if err != nil {
 		return nil, fmt.Errorf("re-read installed plugin: %w", err)
 	}
-	return &InstalledBundle{Bundle: installed, Source: source, Remote: source.Remote}, nil
+	return &InstalledBundle{Bundle: installed, Source: s.Source, Remote: s.Remote}, nil
+}
+
+// Discard removes the staged tree. It is a no-op after a successful Promote,
+// because the staging directory has been renamed into the install layout.
+func (s *StagedBundle) Discard() {
+	_ = os.RemoveAll(s.stage)
+}
+
+// Install copies or clones a source into a private temporary directory,
+// validates it without executing repository content, then atomically promotes
+// it into the versioned install directory. It is Stage followed by Promote;
+// callers that need to review declared surfaces before promotion use Stage.
+func (i *Installer) Install(rawSource string) (*InstalledBundle, error) {
+	staged, err := i.Stage(rawSource)
+	if err != nil {
+		return nil, err
+	}
+	defer staged.Discard()
+	return staged.Promote()
 }
 
 func containedPath(root, path string) error {

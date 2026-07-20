@@ -1,6 +1,6 @@
 # Installable Plugin Bundles
 
-Status: implemented (Epic #748). Manifest v1 authoring contract and plugin-home decision published under Epic #821 (slice 1). Items marked **planned** are later slices of Epic #821 and are not implemented yet.
+Status: implemented (Epic #748). Manifest v1 authoring contract and plugin-home decision published under Epic #821 (slice 1); trust grant/revoke CLI and install-time confirmation for remote sources implemented under Epic #821 (slice 2). Items marked **planned** are later slices of Epic #821 and are not implemented yet.
 
 An installable bundle is a directory with a `plugin.json` manifest declaring optional `skills`, `commands`, `agents`, `hooks`, and `mcp` components. Bundles are installed from a local directory, git URL, or GitHub shorthand, validated without executing their content, and atomically promoted into a versioned plugin home. This document is the stable v1 authoring contract for that manifest and the lifecycle around it.
 
@@ -87,9 +87,10 @@ release-helper/
 ```
 
 - **Sources** (`harnesscli plugin install <source>`): local directory path, git URL, or `owner/repo` shorthand (expands to `https://github.com/owner/repo.git`). Remote sources are cloned with `git clone --depth 1`; local directories are copied. Zip URLs and local zip files are **planned** (Epic #821, slice 3).
-- **Staging and promotion:** the source lands in a private `<root>/.install-*` staging directory, symlinks are rejected, the manifest is validated, and the tree is atomically renamed to `<name>/<version>`. A failed install leaves no partial bundle behind.
+- **Staging and promotion:** the source lands in a private `<root>/.install-*` staging directory, symlinks are rejected, the manifest is validated, and the tree is atomically renamed to `<name>/<version>` (`Installer.Stage` → `StagedBundle.Promote`; `StagedBundle.Discard` abandons a stage). A failed or declined install leaves no partial bundle and no state record behind.
 - **State:** `state.json` records `name`, `version`, `source`, `remote`, `enabled`, `trusted` per plugin (`plugins.StateStore`). Re-installing an existing name (e.g. `harnesscli plugin update`) replaces the version directory but preserves the user's `enabled`/`trusted` flags — an update can never silently broaden execution authority.
-- **CLI today:** `harnesscli plugin install|list|uninstall|update|marketplace`. `plugin list` prints `enabled=` and `trusted=` per bundle. `plugin trust`/`untrust` are **planned** (Epic #821, slice 2).
+- **Remote confirmation:** installing a remote bundle prints its declared executable surfaces (skills/commands/agents/hooks/mcp) and requires confirmation before promotion — an interactive y/N prompt on a terminal, `--yes`/`-y` for scripts, refusal otherwise. Local installs proceed without prompting. `plugin update` re-prints the surfaces and re-requires confirmation for a remote bundle only when they changed; an unchanged remote update needs no confirmation and preserves trust.
+- **CLI:** `harnesscli plugin install|list|uninstall|update|trust|untrust|marketplace`. `plugin list` prints `enabled=` and `trusted=` per bundle, with an `untrusted — commands/hooks/MCP inactive` hint on untrusted entries. `plugin trust <name>` / `plugin untrust <name>` grant and revoke executable authority.
 - **Activation:** bundle contents are discovered at process start. Skills, hooks, and MCP servers take effect at the next `harnessd` start; slash commands at the next TUI start. There is no hot-reload into a running daemon.
 
 ## 4. Trust model
@@ -99,7 +100,7 @@ release-helper/
 - **Enabled** controls visibility: whether the bundle contributes anything at all.
 - **Trusted** controls executable authority: whether the bundle may run code or configuration with side effects.
 
-Defaults at install: **local installs are trusted; remote installs are untrusted** — remote content crosses a trust boundary and stays inert until the user explicitly grants trust (grant/revoke UX lands with the `plugin trust` CLI in slice 2; the `StateStore.SetTrusted` mechanism already exists and is covered by tests).
+Defaults at install: **local installs are trusted; remote installs are untrusted** — remote content crosses a trust boundary and stays inert until the user explicitly grants trust with `harnesscli plugin trust <name>` (revoke with `plugin untrust <name>`). Trust changes apply at the next `harnessd`/TUI start; there is no daemon hot-reload.
 
 | Declared surface | Requires |
 | --- | --- |

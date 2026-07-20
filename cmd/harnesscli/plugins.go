@@ -1,17 +1,22 @@
 package main
 
 import (
+	"bufio"
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"golang.org/x/term"
 
 	"go-agent-harness/internal/plugins"
 )
 
 func runPlugin(args []string) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: harnesscli plugin <install|list|uninstall|update> [source|name]")
+		fmt.Fprintln(stderr, "usage: harnesscli plugin <install|list|uninstall|update|trust|untrust|marketplace> [source|name]")
 		return 1
 	}
 	switch args[0] {
@@ -23,10 +28,14 @@ func runPlugin(args []string) int {
 		return pluginUninstall(args[1:])
 	case "update":
 		return pluginUpdate(args[1:])
+	case "trust":
+		return pluginSetTrusted(args[1:], true)
+	case "untrust":
+		return pluginSetTrusted(args[1:], false)
 	case "marketplace":
 		return pluginMarketplace(args[1:])
 	default:
-		fmt.Fprintf(stderr, "harnesscli plugin: unknown subcommand %q (try: install, list, uninstall, update)\n", args[0])
+		fmt.Fprintf(stderr, "harnesscli plugin: unknown subcommand %q (try: install, list, uninstall, update, trust, untrust)\n", args[0])
 		return 1
 	}
 }
@@ -93,8 +102,107 @@ func pluginStore() (*plugins.StateStore, string, error) {
 	return plugins.NewStateStore(filepath.Join(dir, "state.json")), dir, nil
 }
 
+// stdinIsTerminal reports whether stdin is an interactive terminal. Swappable
+// in tests (mirrors the stdin/stdout/stderr pattern).
+var stdinIsTerminal = func() bool {
+	f, ok := stdin.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
+
+// confirmPluginAction decides whether a remote bundle operation proceeds.
+// assumeYes (--yes) accepts non-interactively; an interactive terminal
+// prompts y/N (default no); anything else refuses with a --yes hint so
+// scripts never deadlock waiting for input.
+func confirmPluginAction(action string, assumeYes bool) bool {
+	if assumeYes {
+		return true
+	}
+	if !stdinIsTerminal() {
+		fmt.Fprintf(stderr, "harnesscli plugin: %s requires confirmation; re-run with --yes to accept the declared surfaces\n", action)
+		return false
+	}
+	fmt.Fprintf(stdout, "%s? [y/N]: ", action)
+	line, err := bufio.NewReader(stdin).ReadString('\n')
+	if err != nil && line == "" {
+		fmt.Fprintln(stdout)
+		return false
+	}
+	answer := strings.ToLower(strings.TrimSpace(line))
+	return answer == "y" || answer == "yes"
+}
+
+// printPluginSurfaces lists the executable surfaces a manifest declares.
+func printPluginSurfaces(w io.Writer, m plugins.Manifest) {
+	surfaces := []struct{ name, path string }{
+		{"skills", m.Skills},
+		{"commands", m.Commands},
+		{"agents", m.Agents},
+		{"hooks", m.Hooks},
+		{"mcp", m.MCP},
+	}
+	printed := false
+	for _, s := range surfaces {
+		if s.path == "" {
+			continue
+		}
+		fmt.Fprintf(w, "  %s: %s\n", s.name, s.path)
+		printed = true
+	}
+	if !printed {
+		fmt.Fprintln(w, "  (no executable surfaces declared)")
+	}
+}
+
+// sameDeclaredSurfaces reports whether two manifests declare the same
+// executable surfaces.
+func sameDeclaredSurfaces(a, b plugins.Manifest) bool {
+	return a.Skills == b.Skills &&
+		a.Commands == b.Commands &&
+		a.Agents == b.Agents &&
+		a.Hooks == b.Hooks &&
+		a.MCP == b.MCP
+}
+
+// pluginSetTrusted implements `plugin trust` and `plugin untrust`, the only
+// user-facing way to grant or revoke a bundle's executable authority. The
+// change applies at the next harnessd/TUI start; there is no hot-reload.
+func pluginSetTrusted(args []string, trusted bool) int {
+	verb := "trust"
+	if !trusted {
+		verb = "untrust"
+	}
+	if len(args) != 1 || strings.TrimSpace(args[0]) == "" {
+		fmt.Fprintf(stderr, "harnesscli plugin %s: exactly one plugin name is required\n", verb)
+		return 1
+	}
+	store, _, err := pluginStore()
+	if err != nil {
+		fmt.Fprintf(stderr, "harnesscli plugin %s: %v\n", verb, err)
+		return 1
+	}
+	if err := store.SetTrusted(args[0], trusted); err != nil {
+		fmt.Fprintf(stderr, "harnesscli plugin %s: %v\n", verb, err)
+		return 1
+	}
+	state := "trusted"
+	if !trusted {
+		state = "untrusted"
+	}
+	fmt.Fprintf(stdout, "%s %s (applies at next harnessd/TUI start)\n", state, args[0])
+	return 0
+}
+
 func pluginInstall(args []string) int {
-	if len(args) != 1 {
+	fs := flag.NewFlagSet("plugin install", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var yes bool
+	fs.BoolVar(&yes, "yes", false, "confirm remote bundle surfaces without prompting")
+	fs.BoolVar(&yes, "y", false, "shorthand for --yes")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
 		fmt.Fprintln(stderr, "harnesscli plugin install: exactly one git URL, owner/repo, or local path is required")
 		return 1
 	}
@@ -103,7 +211,21 @@ func pluginInstall(args []string) int {
 		fmt.Fprintf(stderr, "harnesscli plugin install: %v\n", err)
 		return 1
 	}
-	installed, err := plugins.NewInstaller(dir).Install(args[0])
+	staged, err := plugins.NewInstaller(dir).Stage(rest[0])
+	if err != nil {
+		fmt.Fprintf(stderr, "harnesscli plugin install: %v\n", err)
+		return 1
+	}
+	defer staged.Discard()
+	if staged.Remote {
+		fmt.Fprintf(stdout, "remote plugin %s@%s declares executable surfaces:\n", staged.Manifest.Name, staged.Manifest.Version)
+		printPluginSurfaces(stdout, staged.Manifest)
+		if !confirmPluginAction(fmt.Sprintf("install remote plugin %s@%s", staged.Manifest.Name, staged.Manifest.Version), yes) {
+			fmt.Fprintln(stderr, "harnesscli plugin install: aborted; nothing installed")
+			return 1
+		}
+	}
+	installed, err := staged.Promote()
 	if err != nil {
 		fmt.Fprintf(stderr, "harnesscli plugin install: %v\n", err)
 		return 1
@@ -140,7 +262,11 @@ func pluginList(args []string) int {
 		return 0
 	}
 	for _, item := range items {
-		fmt.Fprintf(stdout, "%s@%s enabled=%t trusted=%t source=%s\n", item.Name, item.Version, item.Enabled, item.Trusted, item.Source)
+		line := fmt.Sprintf("%s@%s enabled=%t trusted=%t source=%s", item.Name, item.Version, item.Enabled, item.Trusted, item.Source)
+		if !item.Trusted {
+			line += " (untrusted — commands/hooks/MCP inactive)"
+		}
+		fmt.Fprintln(stdout, line)
 	}
 	return 0
 }
@@ -184,7 +310,16 @@ func pluginUninstall(args []string) int {
 }
 
 func pluginUpdate(args []string) int {
-	if len(args) != 1 {
+	fs := flag.NewFlagSet("plugin update", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var yes bool
+	fs.BoolVar(&yes, "yes", false, "confirm changed remote bundle surfaces without prompting")
+	fs.BoolVar(&yes, "y", false, "shorthand for --yes")
+	if err := fs.Parse(args); err != nil {
+		return 1
+	}
+	rest := fs.Args()
+	if len(rest) != 1 {
 		fmt.Fprintln(stderr, "harnesscli plugin update: exactly one plugin name is required")
 		return 1
 	}
@@ -199,10 +334,30 @@ func pluginUpdate(args []string) int {
 		return 1
 	}
 	for _, item := range items {
-		if item.Name != args[0] {
+		if item.Name != rest[0] {
 			continue
 		}
-		installed, err := plugins.NewInstaller(dir).Install(item.Source)
+		staged, err := plugins.NewInstaller(dir).Stage(item.Source)
+		if err != nil {
+			fmt.Fprintf(stderr, "harnesscli plugin update: %v\n", err)
+			return 1
+		}
+		defer staged.Discard()
+		// A remote bundle whose declared surfaces changed crosses the trust
+		// boundary again: show the new surfaces and re-require confirmation.
+		changed := true
+		if old, err := plugins.LoadBundle(filepath.Join(dir, item.Name, item.Version)); err == nil {
+			changed = !sameDeclaredSurfaces(old.Manifest, staged.Manifest)
+		}
+		if item.Remote && changed {
+			fmt.Fprintf(stdout, "remote plugin %s@%s declares new executable surfaces:\n", staged.Manifest.Name, staged.Manifest.Version)
+			printPluginSurfaces(stdout, staged.Manifest)
+			if !confirmPluginAction(fmt.Sprintf("update remote plugin %s to %s", item.Name, staged.Manifest.Version), yes) {
+				fmt.Fprintln(stderr, "harnesscli plugin update: aborted; installed version unchanged")
+				return 1
+			}
+		}
+		installed, err := staged.Promote()
 		if err != nil {
 			fmt.Fprintf(stderr, "harnesscli plugin update: %v\n", err)
 			return 1
@@ -214,6 +369,6 @@ func pluginUpdate(args []string) int {
 		fmt.Fprintf(stdout, "updated %s@%s\n", installed.Manifest.Name, installed.Manifest.Version)
 		return 0
 	}
-	fmt.Fprintf(stderr, "harnesscli plugin update: plugin %q is not installed\n", args[0])
+	fmt.Fprintf(stderr, "harnesscli plugin update: plugin %q is not installed\n", rest[0])
 	return 1
 }
