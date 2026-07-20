@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -807,5 +808,344 @@ func TestClientManager_HTTP_ConcurrentDiscoverAndExecute_Race(t *testing.T) {
 		if err != nil {
 			t.Errorf("concurrent operation error: %v", err)
 		}
+	}
+}
+
+// --- Slice 1 (epic #809): static headers and typed auth errors ---
+
+// headerRecordingServer is a mock MCP HTTP server that records the headers of
+// every request, keyed by JSON-RPC method, and optionally requires a specific
+// Authorization header value (responding 401 otherwise).
+type headerRecordingServer struct {
+	t *testing.T
+
+	mu          sync.Mutex
+	gotHeaders  map[string]http.Header // method -> headers of last request
+	requireAuth string                 // if non-empty, required Authorization header value
+}
+
+func newHeaderRecordingServer(t *testing.T, requireAuth string) (*httptest.Server, *headerRecordingServer) {
+	t.Helper()
+	rec := &headerRecordingServer{t: t, gotHeaders: make(map[string]http.Header), requireAuth: requireAuth}
+	srv := httptest.NewServer(http.HandlerFunc(rec.serve))
+	return srv, rec
+}
+
+func (rec *headerRecordingServer) serve(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Method string          `json:"method"`
+		ID     json.RawMessage `json:"id"`
+		Params json.RawMessage `json:"params"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	rec.mu.Lock()
+	rec.gotHeaders[req.Method] = r.Header.Clone()
+	rec.mu.Unlock()
+
+	if rec.requireAuth != "" && r.Header.Get("Authorization") != rec.requireAuth {
+		w.WriteHeader(http.StatusUnauthorized)
+		return
+	}
+
+	resp := map[string]any{
+		"jsonrpc": "2.0",
+		"id":      req.ID,
+	}
+	switch req.Method {
+	case "initialize":
+		resp["result"] = map[string]any{
+			"protocolVersion": "2025-11-25",
+			"capabilities":    map[string]any{},
+			"serverInfo":      map[string]any{"name": "rec", "version": "1.0"},
+		}
+	case "tools/list":
+		resp["result"] = map[string]any{"tools": []map[string]any{
+			{"name": "ping", "description": "Ping", "inputSchema": map[string]any{"type": "object"}},
+		}}
+	case "tools/call":
+		resp["result"] = map[string]any{
+			"content": []map[string]any{{"type": "text", "text": `{"ok":true}`}},
+		}
+	default:
+		resp["error"] = map[string]any{"code": -32601, "message": "method not found"}
+	}
+
+	data, _ := json.Marshal(resp)
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(data)
+}
+
+func (rec *headerRecordingServer) headerForMethod(method, key string) string {
+	rec.mu.Lock()
+	defer rec.mu.Unlock()
+	return rec.gotHeaders[method].Get(key)
+}
+
+// TestHTTPConn_HeadersAttachedToEveryRequest verifies that every configured
+// static header is sent on initialize, tools/list, and tools/call requests.
+func TestHTTPConn_HeadersAttachedToEveryRequest(t *testing.T) {
+	t.Parallel()
+
+	srv, rec := newHeaderRecordingServer(t, "")
+	defer srv.Close()
+
+	conn, err := mcp.DialHTTPForTest(mcp.ServerConfig{
+		Name:      "hdr-test",
+		Transport: "http",
+		URL:       srv.URL,
+		Headers: map[string]string{
+			"Authorization": "Bearer static-token",
+			"X-Tenant":      "acme",
+		},
+	})
+	if err != nil {
+		t.Fatalf("DialHTTPForTest: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := conn.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if _, err := conn.ListTools(ctx); err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	if _, err := conn.CallTool(ctx, "ping", json.RawMessage(`{}`)); err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+
+	for _, method := range []string{"initialize", "tools/list", "tools/call"} {
+		if got := rec.headerForMethod(method, "Authorization"); got != "Bearer static-token" {
+			t.Errorf("%s: Authorization header = %q, want %q", method, got, "Bearer static-token")
+		}
+		if got := rec.headerForMethod(method, "X-Tenant"); got != "acme" {
+			t.Errorf("%s: X-Tenant header = %q, want %q", method, got, "acme")
+		}
+		// Protocol headers must remain intact when custom headers are set.
+		if got := rec.headerForMethod(method, "Content-Type"); got != "application/json" {
+			t.Errorf("%s: Content-Type header = %q, want %q", method, got, "application/json")
+		}
+	}
+}
+
+// TestHTTPConn_NoHeadersConfigured_SendsNoAuthorization verifies the zero
+// value behavior: no Authorization header is sent when none is configured.
+func TestHTTPConn_NoHeadersConfigured_SendsNoAuthorization(t *testing.T) {
+	t.Parallel()
+
+	srv, rec := newHeaderRecordingServer(t, "")
+	defer srv.Close()
+
+	conn, err := mcp.DialHTTPForTest(mcp.ServerConfig{
+		Name:      "no-hdr",
+		Transport: "http",
+		URL:       srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("DialHTTPForTest: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := conn.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if got := rec.headerForMethod("initialize", "Authorization"); got != "" {
+		t.Errorf("Authorization header = %q, want empty", got)
+	}
+}
+
+// TestHTTPConn_TypedAuthErrors verifies that 401 and 403 responses map to the
+// exported sentinel errors (errors.Is-compatible) while other non-2xx
+// statuses keep the existing generic error behavior.
+func TestHTTPConn_TypedAuthErrors(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		status       int
+		sentinel     error // nil means no auth sentinel expected
+		wantContains string
+	}{
+		{"401 maps to ErrUnauthorized", http.StatusUnauthorized, mcp.ErrUnauthorized, "401"},
+		{"403 maps to ErrForbidden", http.StatusForbidden, mcp.ErrForbidden, "403"},
+		{"400 stays generic", http.StatusBadRequest, nil, "400"},
+		{"500 stays generic", http.StatusInternalServerError, nil, "500"},
+		{"503 stays generic", http.StatusServiceUnavailable, nil, "503"},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := newMockMCPHTTPServer(t, mockHTTPMCPServerOpts{non2xxStatus: tc.status})
+			defer srv.Close()
+
+			conn := mcp.NewHTTPConnForTest("typed-err", srv.URL)
+			defer conn.Close()
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			err := conn.Initialize(ctx)
+			if err == nil {
+				t.Fatalf("expected error from %d response, got nil", tc.status)
+			}
+
+			if tc.sentinel != nil {
+				if !errors.Is(err, tc.sentinel) {
+					t.Errorf("errors.Is(err, %v) = false for error %q", tc.sentinel, err.Error())
+				}
+			} else {
+				if errors.Is(err, mcp.ErrUnauthorized) {
+					t.Errorf("errors.Is(err, ErrUnauthorized) = true for %d, want false", tc.status)
+				}
+				if errors.Is(err, mcp.ErrForbidden) {
+					t.Errorf("errors.Is(err, ErrForbidden) = true for %d, want false", tc.status)
+				}
+			}
+
+			if !strings.Contains(err.Error(), tc.wantContains) {
+				t.Errorf("error %q does not contain status %q", err.Error(), tc.wantContains)
+			}
+		})
+	}
+}
+
+// TestHTTPConn_CallTool_TypedAuthError verifies the typed auth error also
+// surfaces from tools/call, not just initialize.
+func TestHTTPConn_CallTool_TypedAuthError(t *testing.T) {
+	t.Parallel()
+
+	srv := newMockMCPHTTPServer(t, mockHTTPMCPServerOpts{non2xxStatus: http.StatusUnauthorized})
+	defer srv.Close()
+
+	conn := mcp.NewHTTPConnForTest("call-typed", srv.URL)
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := conn.CallTool(ctx, "anything", json.RawMessage(`{}`))
+	if err == nil {
+		t.Fatal("expected error from 401 response, got nil")
+	}
+	if !errors.Is(err, mcp.ErrUnauthorized) {
+		t.Errorf("errors.Is(err, ErrUnauthorized) = false for error %q", err.Error())
+	}
+}
+
+// TestClientManager_HTTP_TypedAuthErrorSurfaced verifies that the typed 401
+// error survives the ClientManager's error wrapping so callers of
+// DiscoverTools/ExecuteTool can distinguish auth failures with errors.Is.
+func TestClientManager_HTTP_TypedAuthErrorSurfaced(t *testing.T) {
+	t.Parallel()
+
+	srv := newMockMCPHTTPServer(t, mockHTTPMCPServerOpts{non2xxStatus: http.StatusUnauthorized})
+	defer srv.Close()
+
+	cm := mcp.NewClientManager()
+	defer cm.Close()
+
+	if err := cm.AddServer(mcp.ServerConfig{
+		Name:      "authed",
+		Transport: "http",
+		URL:       srv.URL,
+	}); err != nil {
+		t.Fatalf("AddServer: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := cm.DiscoverTools(ctx, "authed")
+	if err == nil {
+		t.Fatal("expected error from 401 server, got nil")
+	}
+	if !errors.Is(err, mcp.ErrUnauthorized) {
+		t.Errorf("errors.Is(err, ErrUnauthorized) = false through ClientManager for error %q", err.Error())
+	}
+}
+
+// TestClientManager_HTTP_BearerGatedServer_ReachableViaConfig is the slice
+// acceptance test: a mock HTTP MCP server requiring "Authorization: Bearer x"
+// is reachable purely via ServerConfig headers — both DiscoverTools and
+// ExecuteTool succeed.
+func TestClientManager_HTTP_BearerGatedServer_ReachableViaConfig(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newHeaderRecordingServer(t, "Bearer x")
+	defer srv.Close()
+
+	cm := mcp.NewClientManager()
+	defer cm.Close()
+
+	if err := cm.AddServer(mcp.ServerConfig{
+		Name:      "gated",
+		Transport: "http",
+		URL:       srv.URL,
+		Headers:   map[string]string{"Authorization": "Bearer x"},
+	}); err != nil {
+		t.Fatalf("AddServer: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	tools, err := cm.DiscoverTools(ctx, "gated")
+	if err != nil {
+		t.Fatalf("DiscoverTools against bearer-gated server: %v", err)
+	}
+	if len(tools) != 1 || tools[0].Name != "ping" {
+		t.Fatalf("unexpected tools from gated server: %v", tools)
+	}
+
+	result, err := cm.ExecuteTool(ctx, "gated", "ping", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("ExecuteTool against bearer-gated server: %v", err)
+	}
+	if !strings.Contains(result, "ok") {
+		t.Errorf("expected 'ok' in tool result, got %q", result)
+	}
+}
+
+// TestClientManager_HTTP_BearerGatedServer_WithoutHeaders_Unauthorized is the
+// negative companion: the same gated server without configured headers fails
+// with the typed ErrUnauthorized.
+func TestClientManager_HTTP_BearerGatedServer_WithoutHeaders_Unauthorized(t *testing.T) {
+	t.Parallel()
+
+	srv, _ := newHeaderRecordingServer(t, "Bearer x")
+	defer srv.Close()
+
+	cm := mcp.NewClientManager()
+	defer cm.Close()
+
+	if err := cm.AddServer(mcp.ServerConfig{
+		Name:      "gated-no-auth",
+		Transport: "http",
+		URL:       srv.URL,
+	}); err != nil {
+		t.Fatalf("AddServer: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := cm.DiscoverTools(ctx, "gated-no-auth")
+	if err == nil {
+		t.Fatal("expected error against bearer-gated server without headers, got nil")
+	}
+	if !errors.Is(err, mcp.ErrUnauthorized) {
+		t.Errorf("errors.Is(err, ErrUnauthorized) = false for error %q", err.Error())
 	}
 }

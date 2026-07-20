@@ -104,6 +104,7 @@ func registerMCPServersFromConfig(
 			Command:   srv.Command,
 			Args:      srv.Args,
 			URL:       srv.URL,
+			Headers:   srv.Headers,
 		}
 		if addErr := manager.AddServer(sc); addErr != nil {
 			logf("warning: failed to register TOML MCP server %q: %v", name, addErr)

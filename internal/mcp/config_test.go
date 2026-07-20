@@ -624,3 +624,87 @@ func TestParseMCPServersEnv_HTTPTestServer(t *testing.T) {
 		t.Fatalf("expected 1 server registered, got %d", len(servers))
 	}
 }
+
+// TestParseMCPServersEnv_HeadersRoundTrip verifies that the "headers" key in
+// HARNESS_MCP_SERVERS JSON entries is parsed into ServerConfig.Headers.
+func TestParseMCPServersEnv_HeadersRoundTrip(t *testing.T) {
+	raw := `[
+		{
+			"name": "authed-http",
+			"transport": "http",
+			"url": "http://localhost:9999/mcp",
+			"headers": {"Authorization": "Bearer tok-123", "X-Tenant": "acme"}
+		},
+		{
+			"name": "plain-http",
+			"transport": "http",
+			"url": "http://localhost:9998/mcp"
+		}
+	]`
+	configs, err := ParseMCPServersEnvWith(func(key string) string {
+		if key == EnvVarMCPServers {
+			return raw
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(configs) != 2 {
+		t.Fatalf("expected 2 configs, got %d", len(configs))
+	}
+
+	authed := configs[0]
+	if authed.Name != "authed-http" {
+		t.Fatalf("unexpected first config: %+v", authed)
+	}
+	if len(authed.Headers) != 2 {
+		t.Fatalf("Headers: got %d entries, want 2 (%v)", len(authed.Headers), authed.Headers)
+	}
+	if got := authed.Headers["Authorization"]; got != "Bearer tok-123" {
+		t.Errorf("Headers[Authorization] = %q, want %q", got, "Bearer tok-123")
+	}
+	if got := authed.Headers["X-Tenant"]; got != "acme" {
+		t.Errorf("Headers[X-Tenant] = %q, want %q", got, "acme")
+	}
+
+	plain := configs[1]
+	if plain.Name != "plain-http" {
+		t.Fatalf("unexpected second config: %+v", plain)
+	}
+	if len(plain.Headers) != 0 {
+		t.Errorf("Headers: got %v, want empty for server without headers key", plain.Headers)
+	}
+}
+
+// TestParseMCPServersEnv_HeadersWrongType_Skipped verifies that an entry whose
+// "headers" value is not a JSON object of strings is skipped as invalid while
+// valid sibling entries still load.
+func TestParseMCPServersEnv_HeadersWrongType_Skipped(t *testing.T) {
+	cases := []struct {
+		name string
+		raw  string
+	}{
+		{"headers as string", `{"name":"bad","url":"http://x/mcp","headers":"Bearer tok"}`},
+		{"headers as array", `{"name":"bad","url":"http://x/mcp","headers":["Authorization: Bearer tok"]}`},
+		{"headers with non-string value", `{"name":"bad","url":"http://x/mcp","headers":{"Authorization":42}}`},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			raw := `[` + tc.raw + `,{"name":"good","url":"http://y/mcp"}]`
+			configs, err := ParseMCPServersEnvWith(func(key string) string {
+				if key == EnvVarMCPServers {
+					return raw
+				}
+				return ""
+			})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(configs) != 1 || configs[0].Name != "good" {
+				t.Fatalf("expected only the valid entry to load, got %+v", configs)
+			}
+		})
+	}
+}

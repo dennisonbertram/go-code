@@ -76,11 +76,12 @@ func parseMCPServersJSON(raw string) ([]ServerConfig, error) {
 // inferring the Transport field when it is not explicitly set.
 func parseSingleServerConfig(raw json.RawMessage) (ServerConfig, error) {
 	var obj struct {
-		Name      string   `json:"name"`
-		Transport string   `json:"transport"`
-		Command   string   `json:"command"`
-		Args      []string `json:"args"`
-		URL       string   `json:"url"`
+		Name      string            `json:"name"`
+		Transport string            `json:"transport"`
+		Command   string            `json:"command"`
+		Args      []string          `json:"args"`
+		URL       string            `json:"url"`
+		Headers   map[string]string `json:"headers"`
 	}
 	if err := json.Unmarshal(raw, &obj); err != nil {
 		return ServerConfig{}, fmt.Errorf("invalid JSON object: %w", err)
@@ -92,6 +93,7 @@ func parseSingleServerConfig(raw json.RawMessage) (ServerConfig, error) {
 		Command:   strings.TrimSpace(obj.Command),
 		Args:      obj.Args,
 		URL:       strings.TrimSpace(obj.URL),
+		Headers:   obj.Headers,
 	}
 
 	// Infer transport when not explicitly set.
