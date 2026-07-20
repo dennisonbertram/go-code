@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sync"
 )
 
 // Handler implements one JSON-RPC method. It returns either a result value
@@ -17,10 +18,16 @@ type Handler func(ctx context.Context, params json.RawMessage) (any, *rpcError)
 // Server is a JSON-RPC 2.0 server speaking newline-delimited JSON over a
 // Conn. It answers the ACP `initialize` handshake out of the box; later
 // slices register session methods on top.
+//
+// Handlers run concurrently: session/prompt holds its response open until the
+// run terminates, and a mid-turn session/cancel must still be read and
+// processed. Responses may therefore arrive in any order (JSON-RPC clients
+// correlate by id); writes stay serialized by the Conn's mutex.
 type Server struct {
 	conn     *Conn
 	diag     io.Writer
 	handlers map[string]Handler
+	wg       sync.WaitGroup // in-flight handler goroutines
 }
 
 // NewServer returns a Server reading requests from r, writing protocol
@@ -46,7 +53,9 @@ func (s *Server) Handle(method string, h Handler) {
 }
 
 // Serve reads and dispatches messages until the input reaches EOF (clean
-// shutdown, returns nil), the context is cancelled, or an I/O error occurs.
+// shutdown: it then waits for in-flight handlers to finish writing their
+// responses before returning nil), the context is cancelled, or an I/O error
+// occurs.
 func (s *Server) Serve(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -60,6 +69,7 @@ func (s *Server) Serve(ctx context.Context) error {
 			continue
 		}
 		if errors.Is(err, io.EOF) {
+			s.wg.Wait() // drain in-flight handlers so their responses land
 			return nil
 		}
 		if err != nil {
@@ -107,18 +117,31 @@ func (s *Server) dispatch(ctx context.Context, line []byte) error {
 		return s.writeError(requestID(req.ID), CodeMethodNotFound, fmt.Sprintf("Method not found: %s", req.Method))
 	}
 
-	result, rpcErr := h(ctx, req.Params)
-	if req.ID == nil {
-		// Notifications never receive responses, success or error.
-		if rpcErr != nil {
-			fmt.Fprintf(s.diag, "acp: notification %q failed: %s\n", req.Method, rpcErr.Message)
+	// Run the handler in its own goroutine so a long-lived method (notably
+	// session/prompt, which stays open until the run terminates) does not
+	// block reading and dispatching later messages (notably session/cancel).
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		result, rpcErr := h(ctx, req.Params)
+		if req.ID == nil {
+			// Notifications never receive responses, success or error.
+			if rpcErr != nil {
+				fmt.Fprintf(s.diag, "acp: notification %q failed: %s\n", req.Method, rpcErr.Message)
+			}
+			return
 		}
-		return nil
-	}
-	if rpcErr != nil {
-		return s.writeError(requestID(req.ID), rpcErr.Code, rpcErr.Message)
-	}
-	return s.writeResult(requestID(req.ID), result)
+		if rpcErr != nil {
+			if err := s.writeError(requestID(req.ID), rpcErr.Code, rpcErr.Message); err != nil {
+				fmt.Fprintf(s.diag, "acp: write error response for %q: %v\n", req.Method, err)
+			}
+			return
+		}
+		if err := s.writeResult(requestID(req.ID), result); err != nil {
+			fmt.Fprintf(s.diag, "acp: write result for %q: %v\n", req.Method, err)
+		}
+	}()
+	return nil
 }
 
 // writeResult sends a success response.

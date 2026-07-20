@@ -1,5 +1,14 @@
 # Engineering Log
 
+## 2026-07-20 (ACP Server Mode — Epic #806, Slice 2)
+
+- `internal/acp` sessions over the runs API: `session/new` (unique `sess_<hex>` ids, cwd/mcpServers accepted but not acted on), `session/prompt` (content-block text extraction — text blocks joined, `resource_link` contributes its URI, empty extraction -> `-32602`), `session/cancel` notification -> `POST /v1/runs/{id}/cancel`. One ACP session maps to one run; a second prompt on a used session errors `-32603` (multi-turn is a later epic).
+- New stdlib `RunsClient` (`client.go`): bounded client for `POST /v1/runs` and cancel, no-timeout client for the SSE subscription; `WaitTerminal` scans `GET /v1/runs/{id}/events` to a terminal event, tracking `run.cost_limit_reached` as a flag (it is non-terminal — the run then completes).
+- Stop reasons: `run.completed` -> `end_turn`, cost-limit + completed -> `max_turn_requests`, `run.failed` -> `refusal`, `run.cancelled` -> `cancelled`.
+- Dispatch is now concurrent: `session/prompt` holds its response open until the run terminates, so handlers run in goroutines or a mid-turn `session/cancel` could never be read. Writes stay mutex-serialized; `Serve` drains in-flight handlers at EOF. The slice-1 ordering test was updated to correlate pipelined responses by id (JSON-RPC clients never relied on order).
+- `harness acp -server` flag; resolution flag > `loadConfig().Server` > `http://localhost:8080`; Bearer key from `loadConfig()`.
+- Validation: strict TDD (failing tests first: `undefined: NewRunsClient`). `go test ./internal/acp/ -count=1` and `-race` green, incl. scripted-pipe flows — cancel mid-run issues the cancel POST and the prompt answers `cancelled`; concurrent sessions stay isolated; blocked-handler concurrency proof.
+
 ## 2026-07-20 (Issue #854 TUI Subscription Credential Import)
 
 - Replaced the stale `/keys` startup hint based on nonexistent `KIMI_SUBSCRIPTION_AUTH` with synchronous, local-only reads of both harness-owned Codex and Kimi credential stores. The TUI stores only a non-secret availability marker.
