@@ -88,6 +88,14 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeClearCommand,
 		},
 		{
+			Name:        "undo",
+			Description: "Remove the last n prompts from the conversation (/undo [n])",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeUndoCommand,
+		},
+		{
 			Name:        "context",
 			Description: "View context window usage",
 			Handler: func(cmd Command) CommandResult {

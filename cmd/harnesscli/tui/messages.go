@@ -340,3 +340,16 @@ type RewindPoint struct {
 	Step int    `json:"step"`
 	Tool string `json:"tool"`
 }
+
+// UndoResultMsg carries the outcome of a /undo request against
+// POST /v1/conversations/{id}/undo. On success Messages holds the refetched
+// conversation history so the viewport and transcript can be rebuilt from the
+// server's authoritative state. Conflict is true when the server refused the
+// undo with 409 (the target prompt sits at or below the compaction boundary).
+type UndoResultMsg struct {
+	RemovedFromStep   int
+	RemainingMessages int
+	Messages          []ConversationMessage
+	Err               string
+	Conflict          bool
+}

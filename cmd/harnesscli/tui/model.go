@@ -1525,7 +1525,38 @@ func (m *Model) renderActiveAssistantBubble() {
 	m.activeAssistantLineCount = len(lines)
 }
 
-func executeClearCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+// appendConversationMessages renders fetched history into the viewport and
+// transcript. Only user and non-empty assistant messages are shown — system
+// and is_meta rows (e.g. compact summaries, undo-boundary markers) are skipped,
+// matching how resumed sessions render. Used by ConversationHistoryMsg and by
+// the /undo success path.
+func (m *Model) appendConversationMessages(messages []ConversationMessage) {
+	for _, entry := range messages {
+		switch entry.Role {
+		case "user":
+			m.transcript = append(m.transcript, transcriptexport.TranscriptEntry{
+				Role:      "user",
+				Content:   entry.Content,
+				Timestamp: time.Now(),
+			})
+			m.appendMessageBubble(messagebubble.RoleUser, entry.Content)
+		case "assistant":
+			if entry.Content == "" {
+				continue
+			}
+			m.transcript = append(m.transcript, transcriptexport.TranscriptEntry{
+				Role:      "assistant",
+				Content:   entry.Content,
+				Timestamp: time.Now(),
+			})
+			m.appendMessageBubble(messagebubble.RoleAssistant, entry.Content)
+		}
+	}
+}
+
+// resetTranscriptView clears the viewport and transcript state so a fresh
+// history can be rendered. Used by /clear and by the /undo success path.
+func (m *Model) resetTranscriptView() {
 	m.vp = viewport.New(m.width, m.layout.ViewportHeight)
 	m.transcript = nil
 	m.slashComplete = m.slashComplete.Close()
@@ -1535,7 +1566,41 @@ func executeClearCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.toolLineStarts = make(map[string]int)
 	m.toolLineOrder = nil
 	m.clearThinkingBar()
+}
+
+func executeClearCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	m.resetTranscriptView()
 	return []tea.Cmd{m.setStatusMsg("Conversation cleared")}, false
+}
+
+// executeUndoCommand implements /undo [count] (Issue #805): it asks the server
+// to drop the last count user prompts (default 1) and everything after them,
+// then rebuilds the viewport from the refetched history (see UndoResultMsg).
+// Malformed counts are command errors — no request is ever sent. The command
+// refuses while a run is active because the run's terminal persistence would
+// rewrite the store and silently clobber the undo.
+func executeUndoCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
+	if len(cmd.Args) > 1 {
+		return []tea.Cmd{m.setStatusMsg("Usage: /undo [count]")}, false
+	}
+	count := 1
+	if len(cmd.Args) == 1 {
+		n, err := strconv.Atoi(cmd.Args[0])
+		if err != nil || n < 1 {
+			return []tea.Cmd{m.setStatusMsg("Usage: /undo [count] — count must be a positive integer")}, false
+		}
+		count = n
+	}
+	if m.runActive {
+		return []tea.Cmd{m.setStatusMsg("Undo unavailable while a run is active — let it finish or /cancel first")}, false
+	}
+	if m.conversationID == "" {
+		return []tea.Cmd{m.setStatusMsg("Nothing to undo yet — send a prompt first")}, false
+	}
+	return []tea.Cmd{
+		m.setStatusMsg(fmt.Sprintf("Undoing %d prompt(s)…", count)),
+		undoConversationCmd(m.config.BaseURL, m.conversationID, count, m.config.APIKey),
+	}, false
 }
 
 func executeHelpCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
@@ -3986,27 +4051,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 
 	case ConversationHistoryMsg:
-		for _, entry := range msg.Messages {
-			switch entry.Role {
-			case "user":
-				m.transcript = append(m.transcript, transcriptexport.TranscriptEntry{
-					Role:      "user",
-					Content:   entry.Content,
-					Timestamp: time.Now(),
-				})
-				m.appendMessageBubble(messagebubble.RoleUser, entry.Content)
-			case "assistant":
-				if entry.Content == "" {
-					continue
-				}
-				m.transcript = append(m.transcript, transcriptexport.TranscriptEntry{
-					Role:      "assistant",
-					Content:   entry.Content,
-					Timestamp: time.Now(),
-				})
-				m.appendMessageBubble(messagebubble.RoleAssistant, entry.Content)
-			}
-		}
+		m.appendConversationMessages(msg.Messages)
 		shortID := msg.ConversationID
 		if len(shortID) > 8 {
 			shortID = shortID[:8]
@@ -4015,6 +4060,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case ConversationHistoryErrorMsg:
 		cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Could not load conversation %s: %s", msg.ConversationID, msg.Err)))
+
+	case UndoResultMsg:
+		switch {
+		case msg.Conflict:
+			// 409 — the undo would cross the compaction boundary. Explain
+			// inline so the refusal is visible in the conversation flow.
+			m.vp.AppendLine("✗ Undo refused: " + msg.Err)
+			m.vp.AppendLine("  Prompts at or before the last compaction summary cannot be undone.")
+			cmds = append(cmds, m.setStatusMsg("Undo refused: compaction boundary"))
+		case msg.Err != "":
+			cmds = append(cmds, m.setStatusMsg("Undo failed: "+msg.Err))
+		default:
+			m.resetTranscriptView()
+			m.appendConversationMessages(msg.Messages)
+			cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Undid to before step %d (%d messages remain)", msg.RemovedFromStep, msg.RemainingMessages)))
+		}
 	}
 
 	return m, tea.Batch(cmds...)

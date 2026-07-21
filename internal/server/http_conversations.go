@@ -495,6 +495,10 @@ func (s *Server) handleUndoConversation(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	// Evict the in-memory mirror so GET {id}/messages (and the TUI's refetch)
+	// serves the truncated store history instead of the stale pre-undo view.
+	s.runner.DropConversationCache(convID)
+
 	msgs, err := store.LoadMessages(r.Context(), convID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())

@@ -30,3 +30,4 @@ Command Registry - 200x50
 /subagents — View active subagent processes
 /theme — View and select a color theme
 /title — Set or show the current session title (/title clear to remove)
+/undo — Remove the last n prompts from the conversation (/undo [n])

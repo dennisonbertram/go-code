@@ -828,6 +828,93 @@ func restoreRewindCmd(baseURL, conversationID, pointID, apiKey string) tea.Cmd {
 	}
 }
 
+// undoConversationCmd POSTs {"count": n} to /v1/conversations/{id}/undo
+// (Issue #805). On success it also refetches the trimmed history so the
+// caller can rebuild the viewport from the server's authoritative state; on
+// 409 it returns Conflict with the server's compaction-boundary explanation.
+func undoConversationCmd(baseURL, conversationID string, count int, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		b, _ := json.Marshal(map[string]int{"count": count})
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/conversations/" + url.PathEscape(conversationID) + "/undo"
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, endpoint, bytes.NewReader(b), apiKey)
+		if err != nil {
+			return UndoResultMsg{Err: err.Error()}
+		}
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return UndoResultMsg{Err: err.Error()}
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return UndoResultMsg{Err: "read response: " + err.Error()}
+		}
+		if resp.StatusCode == http.StatusConflict {
+			var errPayload struct {
+				ErrBody struct {
+					Message string `json:"message"`
+				} `json:"error"`
+			}
+			msg := strings.TrimSpace(string(body))
+			if json.Unmarshal(body, &errPayload) == nil && errPayload.ErrBody.Message != "" {
+				msg = errPayload.ErrBody.Message
+			}
+			return UndoResultMsg{Conflict: true, Err: msg}
+		}
+		if resp.StatusCode != http.StatusOK {
+			return UndoResultMsg{Err: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))}
+		}
+		var payload struct {
+			RemovedFromStep   int `json:"removed_from_step"`
+			RemainingMessages int `json:"remaining_messages"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return UndoResultMsg{Err: "decode response: " + err.Error()}
+		}
+		out := UndoResultMsg{RemovedFromStep: payload.RemovedFromStep, RemainingMessages: payload.RemainingMessages}
+
+		// Refetch the trimmed history for the viewport rebuild. A refetch
+		// failure is surfaced as Err so the user knows to refresh manually.
+		messagesEndpoint := strings.TrimRight(baseURL, "/") + "/v1/conversations/" + url.PathEscape(conversationID) + "/messages"
+		messagesReq, err := newHarnessRequest(context.Background(), http.MethodGet, messagesEndpoint, nil, apiKey)
+		if err != nil {
+			out.Err = err.Error()
+			return out
+		}
+		messagesResp, err := (&http.Client{Timeout: 10 * time.Second}).Do(messagesReq)
+		if err != nil {
+			out.Err = err.Error()
+			return out
+		}
+		defer messagesResp.Body.Close()
+		messagesBody, err := io.ReadAll(messagesResp.Body)
+		if err != nil {
+			out.Err = "read messages: " + err.Error()
+			return out
+		}
+		if messagesResp.StatusCode != http.StatusOK {
+			out.Err = fmt.Sprintf("refetch messages: HTTP %d", messagesResp.StatusCode)
+			return out
+		}
+		var messagesPayload struct {
+			Messages []struct {
+				Role    string `json:"role"`
+				Content string `json:"content"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(messagesBody, &messagesPayload); err != nil {
+			out.Err = "decode messages: " + err.Error()
+			return out
+		}
+		out.Messages = make([]ConversationMessage, len(messagesPayload.Messages))
+		for i, m := range messagesPayload.Messages {
+			out.Messages[i] = ConversationMessage{Role: m.Role, Content: m.Content}
+		}
+		return out
+	}
+}
+
 // sseEventsURL builds the SSE endpoint URL for a given run ID.
 func sseEventsURL(baseURL, runID string) string {
 	return strings.TrimRight(baseURL, "/") + "/v1/runs/" + runID + "/events"
