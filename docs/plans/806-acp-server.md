@@ -121,7 +121,7 @@ Epic: #806 (parent #803). Branches: `epic/806-acp-server` (slice 1, merged), `ep
 - [x] Slice 4: callClient pending registry + response routing, ApproveRun/DenyRun + 501 sentinel, permission bridge with deadline + turn-scoped contexts.
 - [x] Slice 4: gofmt + go vet clean; `go test ./internal/acp/... -count=1` (+ `-race`, repeat) green; `cmd/harnesscli` green.
 - [x] Slice 4: update engineering log.
-- [ ] Slice 4: push branch `epic/806-acp-server-s4` and open PR (no merge).
+- [x] Slice 4: push branch `epic/806-acp-server-s4` and open PR (no merge) — PR #916.
 
 ## Risks and Mitigations
 
