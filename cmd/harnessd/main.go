@@ -444,12 +444,13 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	modelCatalog := catalogBootstrap.modelCatalog
 
 	provider, err := resolveDefaultProvider(resolveDefaultProviderOptions{
-		getenv:          getenv,
-		newProvider:     newProvider,
-		registry:        providerRegistry,
-		pricingResolver: catalogBootstrap.pricingResolver,
-		model:           model,
-		lookupModelAPI:  catalogBootstrap.lookupModelAPI,
+		getenv:                getenv,
+		newProvider:           newProvider,
+		registry:              providerRegistry,
+		pricingResolver:       catalogBootstrap.pricingResolver,
+		model:                 model,
+		lookupModelAPI:        catalogBootstrap.lookupModelAPI,
+		lookupModelModalities: catalogBootstrap.lookupModelModalities,
 	})
 	if err != nil {
 		return fmt.Errorf("create provider: %w", err)
@@ -1002,12 +1003,13 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 // resolveDefaultProviderOptions holds all inputs needed to pick the default
 // LLM provider at startup.
 type resolveDefaultProviderOptions struct {
-	getenv          func(string) string
-	newProvider     providerFactory
-	registry        *catalog.ProviderRegistry
-	pricingResolver pricing.Resolver
-	model           string
-	lookupModelAPI  func(providerName, modelID string) string
+	getenv                func(string) string
+	newProvider           providerFactory
+	registry              *catalog.ProviderRegistry
+	pricingResolver       pricing.Resolver
+	model                 string
+	lookupModelAPI        func(providerName, modelID string) string
+	lookupModelModalities func(providerName, modelID string) []string
 }
 
 // resolveDefaultProvider picks the default harness.Provider at startup:
@@ -1136,11 +1138,12 @@ func resolveDefaultProvider(opts resolveDefaultProviderOptions) (harness.Provide
 	// Path 2: OPENAI_API_KEY present — keep the legacy OpenAI bootstrap path.
 	if apiKey := strings.TrimSpace(opts.getenv("OPENAI_API_KEY")); apiKey != "" {
 		p, err := opts.newProvider(openai.Config{
-			APIKey:          apiKey,
-			BaseURL:         opts.getenv("OPENAI_BASE_URL"),
-			Model:           model,
-			PricingResolver: opts.pricingResolver,
-			ModelAPILookup:  opts.lookupModelAPI,
+			APIKey:              apiKey,
+			BaseURL:             opts.getenv("OPENAI_BASE_URL"),
+			Model:               model,
+			PricingResolver:     opts.pricingResolver,
+			ModelAPILookup:      opts.lookupModelAPI,
+			ModelModalityLookup: opts.lookupModelModalities,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("create openai provider: %w", err)

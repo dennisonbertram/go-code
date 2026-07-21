@@ -4,7 +4,8 @@
 
 - Slice 1 (clipboard reader): **merged** via PR #837 (`feat(tui): read images from the system clipboard into a temp file`).
 - Slice 2 (Ctrl-V paste + chips): **merged** via PR #872.
-- Slice 3 (run plumbing + modality gating): **in implementation** on branch `epic/818-image-input-s3` — see "Slice 3" below.
+- Slice 3 (run plumbing + modality gating): **merged** via PR #897.
+- Slice 4 (provider encoding): **in implementation** on branch `epic/818-image-input-s4` — see "Slice 4" below.
 
 ## Context
 
@@ -161,4 +162,44 @@
 - [x] gofmt + go vet clean; touched-package tests green; regression run.
 - [x] Docs/indexes/engineering log updated.
 - [x] tmux harnessd curl acceptance (202 image model / 400 text-only / 400 malformed).
-- [ ] Commit, push `epic/818-image-input-s3`, open PR (no merge).
+- [x] Commit, push `epic/818-image-input-s3`, open PR (no merge). → PR #897, merged.
+
+---
+
+# Slice 4: encode base64 image blocks for anthropic and openai
+
+## Context
+
+- Problem: slice 3 flows `Message.Blocks` into `CompletionRequest`, but the anthropic/openai clients drop them — the model never sees the image.
+- User impact: an attached image actually reaches the model in each provider's native wire shape; a misconfigured text-only model gets a clear refusal instead of a provider API error.
+- Constraints: text-only messages must serialize byte-identically to today; no new dependencies; defense-in-depth refusal under the slice-3 gate.
+
+## Scope
+
+- In scope:
+  - Shared sentinel `provider.ErrImageModalityUnsupported` (`internal/provider`), wrapped by both clients so `errors.Is` works uniformly.
+  - Anthropic (`internal/provider/anthropic/client.go`): `contentBlock.Source{type:"base64", media_type, data}`; `mapMessages` emits text+image block arrays for user messages with Blocks (no empty text block); refusal via the client's existing catalog when the model is known text-only (nil catalog → skip).
+  - OpenAI (`internal/provider/openai/client.go`): both wire shapes — chat completions (`content: [{type:"text"},{type:"image_url",{image_url:{url:"data:…"}}}]`, needed by gpt-4.1) and responses API (`content: [{type:"input_text"},{type:"input_image",image_url:"data:…"}]`, needed by computer-use-preview); new optional `Config.ModelModalityLookup` (mirrors `ModelAPILookup`) for the refusal, wired in `cmd/harnessd` alongside `lookupModelAPI` (nil → skip).
+  - Data URLs: `data:<media_type>;base64,<data>`.
+- Out of scope: ReadMediaFile/downscale (slice 5), anthropic image blocks in assistant/tool_result messages (user-role only, matching the clipboard use case), URL-referenced (non-base64) images, video.
+
+## Test Plan (TDD)
+
+- New failing tests first:
+  - anthropic: mapMessages text+image array shape, image-only (no empty text), text-only regression (string content); Complete refusal for catalog text-only model (typed error, zero HTTP calls), allow for image model + nil catalog; runner→wire proof: StartRun with attachment → captured /v1/messages body carries the image block.
+  - openai: chat `mapMessages` content parts shape + text-only regression; `mapToResponsesRequest` input_text/input_image parts; refusal via `ModelModalityLookup` (typed error, zero HTTP calls), allow when lookup returns image or is nil.
+- Regression tests required: `go test ./internal/provider/...` green; slice-3 tests unchanged and green.
+
+## Cross-Surface Impact Map
+
+- Updated in `docs/plans/2026-07-19-issue-818-clipboard-image-impact-map.md` — provider wire shapes + new optional lookup; no server/TUI surface change.
+
+## Implementation Checklist
+
+- [x] Slice-4 failing tests first, watch them fail (compile errors on the new API surface).
+- [x] Anthropic blocks + refusal.
+- [x] OpenAI chat + responses blocks + refusal.
+- [x] harnessd wiring for ModelModalityLookup (+ alias/unknown coverage test).
+- [x] gofmt + go vet clean; touched-package tests green; regression run.
+- [x] Docs/indexes/engineering log updated.
+- [ ] Commit, push `epic/818-image-input-s4`, open PR (no merge).

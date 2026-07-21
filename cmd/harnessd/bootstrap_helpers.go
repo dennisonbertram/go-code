@@ -46,10 +46,11 @@ type catalogBootstrapOptions struct {
 }
 
 type catalogBootstrap struct {
-	modelCatalog     *catalog.Catalog
-	providerRegistry *catalog.ProviderRegistry
-	pricingResolver  pricing.Resolver
-	lookupModelAPI   func(providerName, modelID string) string
+	modelCatalog          *catalog.Catalog
+	providerRegistry      *catalog.ProviderRegistry
+	pricingResolver       pricing.Resolver
+	lookupModelAPI        func(providerName, modelID string) string
+	lookupModelModalities func(providerName, modelID string) []string
 }
 
 func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, error) {
@@ -108,6 +109,31 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 		return model.API
 	}
 
+	// lookupModelModalities mirrors lookupModelAPI for the modalities list so
+	// provider clients can refuse image input for catalog-known text-only
+	// models (epic #818 slice 4). Nil catalog / unknown model → nil (the
+	// client's refusal check is skipped).
+	bootstrap.lookupModelModalities = func(providerName, modelID string) []string {
+		if bootstrap.modelCatalog == nil {
+			return nil
+		}
+		entry, ok := bootstrap.modelCatalog.Providers[providerName]
+		if !ok {
+			return nil
+		}
+		resolved := modelID
+		if target, ok := entry.Aliases[modelID]; ok {
+			if _, exists := entry.Models[target]; exists {
+				resolved = target
+			}
+		}
+		model, ok := entry.Models[resolved]
+		if !ok {
+			return nil
+		}
+		return model.Modalities
+	}
+
 	if pricingCatalogPath != "" {
 		resolver, err := pricing.NewFileResolver(pricingCatalogPath)
 		if err != nil {
@@ -164,13 +190,14 @@ func buildCatalogBootstrap(opts catalogBootstrapOptions) (catalogBootstrap, erro
 				providerQuirks = entry.Quirks
 			}
 			cfg := openai.Config{
-				APIKey:          apiKey,
-				TokenSource:     tokenSource,
-				BaseURL:         baseURL,
-				ProviderName:    providerName,
-				PricingResolver: bootstrap.pricingResolver,
-				ModelAPILookup:  bootstrap.lookupModelAPI,
-				NoParallelTools: providerName == "gemini",
+				APIKey:              apiKey,
+				TokenSource:         tokenSource,
+				BaseURL:             baseURL,
+				ProviderName:        providerName,
+				PricingResolver:     bootstrap.pricingResolver,
+				ModelAPILookup:      bootstrap.lookupModelAPI,
+				ModelModalityLookup: bootstrap.lookupModelModalities,
+				NoParallelTools:     providerName == "gemini",
 				ModelIDPrefix: func() string {
 					if providerName == "gemini" {
 						return "models/"
