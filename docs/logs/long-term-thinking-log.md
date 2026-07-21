@@ -1,5 +1,12 @@
 # Long-Term Thinking Log
 
+## 2026-07-19 (Theme System Slice 4 — Epic #810)
+
+- Command intent: Implement only slice 4 of epic #810 — persist the /theme selection to ~/.config/harnesscli/config.json and apply it at startup — on branch `epic/810-theme-system-s4`, strict TDD, push and open a PR without merging.
+- User intent: select a theme once and keep it across restarts; deleting or breaking the theme file must never prevent the TUI from starting.
+- Success definition: `Config` round-trips a `theme,omitempty` field; picker select persists after successful apply; `newTUIConfig` fills `TUIConfig.Theme` from the saved config; `tui.New` resolves it via the slice-1 loader with silent default fallback (missing/malformed file); config-panel `theme` row reflects the active theme; `go test ./cmd/harnesscli/... -count=1` green; no test touches the real HOME.
+- Guardrails/constraints: slice 4 only — docs site and example theme are slice 5; reuse the existing load-mutate-save config pattern (errors ignored, consistent with gateway/starring); no changes to slice-1 loader semantics.
+
 ## 2026-07-19 (Theme System Slice 3 — Epic #810)
 
 - Command intent: Implement only slice 3 of epic #810 — a `/theme` picker overlay that re-scans the themes directory on every open and applies a selection live — on branch `epic/810-theme-system-s3`, strict TDD, push and open a PR without merging.

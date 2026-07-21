@@ -4,8 +4,9 @@
 
 - Slice 1 (token schema + JSON loader): **implemented**, merged via PR #833.
 - Slice 2 (thread resolved theme through components): **implemented**, merged via PR #871.
-- Slice 3 (/theme picker with live apply and re-scan): **implemented** (this branch).
-- Slices 4–5 (persistence, docs/example): planned, not started.
+- Slice 3 (/theme picker with live apply and re-scan): **implemented**, merged via PR #881.
+- Slice 4 (persist theme selection, apply at startup): **implemented** (this branch).
+- Slice 5 (docs + example theme): planned, not started.
 
 ## Slice 1: token schema and JSON loader
 
@@ -234,3 +235,58 @@
 - Risk: key-routing divergence between overlays. Mitigation: mirror the
   profiles overlay at the same three sites + render switch; esc/enter/j/k
   covered by tests.
+
+---
+
+## Slice 4: persist theme selection and apply at startup
+
+## Context
+
+- Problem: slice 3's `/theme` selection is in-memory only; restart loses it.
+  `TUIConfig.Theme` is still display-only (`newTUIConfig` never sets it), and
+  the config panel's `theme` row shows the (always-empty) startup value.
+- User impact: theme choice must survive `quit` → relaunch; a deleted or
+  broken theme file must not break startup.
+- Constraints: reuse `cmd/harnesscli/config` `Load()`/`Save()`; silent
+  fallback to default on any resolution error.
+
+## Scope
+
+- In scope:
+  - `cmd/harnesscli/config/config.go`: `Theme string` (`json:"theme,omitempty"`).
+  - `model.go`: persist the picker selection after successful apply (same
+    load-mutate-save pattern as gateway/starring); resolve `cfg.Theme` at
+    `New()` via the slice-1 loader with silent default fallback
+    (`applyStartupTheme`); config-panel `theme` row shows `m.themeName`
+    (active theme); `themesDirOrDefault()` helper dedupes dir resolution.
+  - `main.go` `newTUIConfig`: load the saved theme name into `TUIConfig.Theme`.
+- Out of scope: docs website + example theme (slice 5).
+
+## Test Plan (TDD)
+
+- New failing tests to add first:
+  - config: `Theme` save/load round-trip; omitted field loads as `""`.
+  - tui internal (`theme_persistence_test.go`, HOME redirected to temp dir):
+    startup with saved valid theme resolves + restyles; startup with missing
+    theme file renders default without failing; startup with malformed theme
+    keeps `default-dark` entirely; picker selection writes config.json and a
+    fresh model on the same "home" starts in that theme (relaunch
+    simulation); config-panel `theme` row reflects `themeName`.
+  - main: `newTUIConfig` fills `TUIConfig.Theme` from the saved config;
+    empty when none saved.
+- Regression: `go test ./cmd/harnesscli/... -count=1` green.
+
+## Implementation Checklist
+
+- [x] Write failing tests first, confirm red.
+- [x] Implement Config field, save-on-select, startup resolution, panel row.
+- [x] Run `go test ./cmd/harnesscli/... -count=1` green; gofmt/vet clean.
+- [ ] Update indexes/logs; commit, push `epic/810-theme-system-s4`, open PR.
+
+## Risks and Mitigations
+
+- Risk: tests touching the real home directory. Mitigation: every new test
+  redirects `HOME` via `t.Setenv`; no test writes outside temp dirs.
+- Risk: startup failure from a broken saved theme. Mitigation: resolution
+  error path keeps `DefaultTheme()` and `default-dark` silently, covered by
+  the malformed/missing-file tests.

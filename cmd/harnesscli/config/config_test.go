@@ -178,3 +178,32 @@ func TestConfig_EmptyStarredModelsRoundTrip(t *testing.T) {
 		t.Errorf("StarredModels = %v, want empty slice", loaded.StarredModels)
 	}
 }
+
+// TestConfig_ThemeRoundTrip verifies the Theme field persists through
+// Save+Load and that an omitted theme loads back empty (epic #810 slice 4).
+func TestConfig_ThemeRoundTrip(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if err := config.Save(&config.Config{Theme: "ocean"}); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+	loaded, err := config.Load()
+	if err != nil {
+		t.Fatalf("Load() after Save() failed: %v", err)
+	}
+	if loaded.Theme != "ocean" {
+		t.Errorf("Theme = %q, want %q", loaded.Theme, "ocean")
+	}
+
+	// A config written without a theme must load with Theme == "".
+	if err := config.Save(&config.Config{StarredModels: []string{"gpt-5"}}); err != nil {
+		t.Fatalf("Save() failed: %v", err)
+	}
+	loaded, err = config.Load()
+	if err != nil {
+		t.Fatalf("Load() after Save() failed: %v", err)
+	}
+	if loaded.Theme != "" {
+		t.Errorf("Theme = %q, want empty when omitted", loaded.Theme)
+	}
+}
