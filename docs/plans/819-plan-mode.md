@@ -48,7 +48,7 @@ Slice 1 shipped (PR #827), slice 2 shipped (PR #858). Slice 2 and 3 plans are ap
   - [x] Write failing tests first.
   - [x] Implement options end-to-end.
   - [x] Targeted tests green on fresh `origin/main` base.
-  - [ ] Plan file, full package tests, gofmt/vet, regression, commit, push, PR.
+  - [x] Plan file, full package tests, gofmt/vet, regression (`[regression] PASS`, coverage 84.2%), commit, push, PR #890.
 
 ## Slice 2: tell the model it is in plan mode (branch `epic/819-plan-mode-s2`)
 
