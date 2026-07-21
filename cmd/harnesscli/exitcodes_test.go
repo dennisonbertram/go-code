@@ -2,6 +2,8 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -98,6 +100,33 @@ func TestBlockedEventReason(t *testing.T) {
 		if got := blockedEventReason(tc.event); got != tc.want {
 			t.Errorf("blockedEventReason(%q) = %q, want %q", tc.event, got, tc.want)
 		}
+	}
+}
+
+// TestRunBlockedErrorMessage pins the sentinel's two contracts: Error() names
+// the blocked event type (it surfaces verbatim if the error ever escapes the
+// run()/runContinue() handlers), and errors.As detection — the mechanism
+// run()/runContinue() use to map it to exitBlocked — keeps working through
+// wrapping.
+func TestRunBlockedErrorMessage(t *testing.T) {
+	for _, tc := range blockedSignals {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &runBlockedError{eventType: harness.EventType(tc.event)}
+			msg := err.Error()
+			for _, want := range []string{"run blocked", tc.event} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("Error() = %q, want it to contain %q", msg, want)
+				}
+			}
+
+			var detected *runBlockedError
+			if !errors.As(fmt.Errorf("stream: %w", err), &detected) {
+				t.Fatal("errors.As must detect runBlockedError through wrapping")
+			}
+			if detected.eventType != harness.EventType(tc.event) {
+				t.Errorf("detected.eventType = %q, want %q", detected.eventType, tc.event)
+			}
+		})
 	}
 }
 
