@@ -19,7 +19,7 @@ func TestCheckpointApprovalBrokerPersistsPendingApproval(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		approved, err := broker.Ask(context.Background(), ApprovalRequest{
+		approved, _, err := broker.Ask(context.Background(), ApprovalRequest{
 			RunID:   "run-1",
 			CallID:  "call-1",
 			Tool:    "write",
@@ -83,7 +83,7 @@ func TestCheckpointApprovalBrokerDenyRejectsPendingApproval(t *testing.T) {
 	resultCh := make(chan bool, 1)
 	errCh := make(chan error, 1)
 	go func() {
-		approved, err := broker.Ask(context.Background(), ApprovalRequest{
+		approved, _, err := broker.Ask(context.Background(), ApprovalRequest{
 			RunID:   "run-denied",
 			CallID:  "call-denied",
 			Tool:    "write",
@@ -207,3 +207,60 @@ func TestCheckpointAskUserBrokerPersistsQuestionsAndAnswers(t *testing.T) {
 }
 
 type ApprovalPendingView PendingApproval
+
+// TestCheckpointApprovalBrokerOptionsRoundTrip proves plan approach options
+// survive the checkpoint-backed broker: they are persisted on the pending
+// record, and the operator's selected option comes back to the blocked Ask.
+func TestCheckpointApprovalBrokerOptionsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	checkpointSvc := checkpoints.NewService(checkpoints.NewMemoryStore(), time.Now)
+	broker := NewCheckpointApprovalBroker(checkpointSvc)
+	options := []PlanApproachOption{{ID: "a", Label: "One"}, {ID: "b", Label: "Two"}}
+
+	type askResult struct {
+		approved bool
+		option   string
+		err      error
+	}
+	resultCh := make(chan askResult, 1)
+	go func() {
+		approved, option, err := broker.Ask(context.Background(), ApprovalRequest{
+			RunID:   "run-opts",
+			CallID:  "plan_exit",
+			Tool:    "plan_exit",
+			Options: options,
+			Timeout: time.Minute,
+		})
+		resultCh <- askResult{approved: approved, option: option, err: err}
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if _, ok := broker.Pending("run-opts"); ok {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for pending approval")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	pending, ok := broker.Pending("run-opts")
+	if !ok {
+		t.Fatal("no pending approval")
+	}
+	if len(pending.Options) != 2 || pending.Options[0].ID != "a" || pending.Options[1].Label != "Two" {
+		t.Fatalf("pending options = %#v", pending.Options)
+	}
+
+	if err := broker.ApproveWithOption("run-opts", "b"); err != nil {
+		t.Fatalf("ApproveWithOption: %v", err)
+	}
+	res := <-resultCh
+	if res.err != nil {
+		t.Fatalf("Ask error: %v", res.err)
+	}
+	if !res.approved || res.option != "b" {
+		t.Fatalf("Ask returned approved=%v option=%q, want approved=true option=%q", res.approved, res.option, "b")
+	}
+}

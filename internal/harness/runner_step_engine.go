@@ -596,7 +596,7 @@ func (se *stepEngine) run() {
 				"duration_ms": time.Since(stepStartTime).Milliseconds(),
 			})
 			emitCausalGraph(step)
-			approved, approvalErr := r.awaitPlanApproval(ctx, runID, result.Content)
+			approved, selectedOption, approvalErr := r.awaitPlanApproval(ctx, runID, result.Content)
 			if approvalErr != nil {
 				r.failRun(runID, approvalErr)
 				return
@@ -605,6 +605,10 @@ func (se *stepEngine) run() {
 				messages = append(messages, Message{Role: "user", Content: r.planModeDenialFeedback(runID)})
 				r.stepSetMessages(runID, messages)
 				continue
+			}
+			if selectedOption.ID != "" {
+				messages = append(messages, Message{Role: "user", Content: fmt.Sprintf("The operator approved the plan and selected approach %q (%s). Follow that approach.", selectedOption.Label, selectedOption.ID)})
+				r.stepSetMessages(runID, messages)
 			}
 			r.completeRun(runID, result.Content)
 			return
@@ -677,7 +681,7 @@ func (se *stepEngine) run() {
 				"duration_ms": time.Since(stepStartTime).Milliseconds(),
 			})
 			emitCausalGraph(step)
-			approved, approvalErr := r.awaitPlanApproval(ctx, runID, result.Content)
+			approved, selectedOption, approvalErr := r.awaitPlanApproval(ctx, runID, result.Content)
 			if approvalErr != nil {
 				r.failRun(runID, approvalErr)
 				return
@@ -686,6 +690,10 @@ func (se *stepEngine) run() {
 				messages = append(messages, Message{Role: "user", Content: r.planModeDenialFeedback(runID)})
 				r.stepSetMessages(runID, messages)
 				continue
+			}
+			if selectedOption.ID != "" {
+				messages = append(messages, Message{Role: "user", Content: fmt.Sprintf("The operator approved the plan and selected approach %q (%s). Follow that approach.", selectedOption.Label, selectedOption.ID)})
+				r.stepSetMessages(runID, messages)
 			}
 			r.completeRun(runID, result.Content)
 			return
@@ -894,7 +902,7 @@ func (se *stepEngine) run() {
 						"arguments":   call.Arguments,
 						"deadline_at": deadlineAt.Format(time.RFC3339),
 					})
-					approved, approvalErr := rc.ApprovalBroker.Ask(ctx, ApprovalRequest{
+					approved, _, approvalErr := rc.ApprovalBroker.Ask(ctx, ApprovalRequest{
 						RunID:   runID,
 						CallID:  call.ID,
 						Tool:    call.Name,
