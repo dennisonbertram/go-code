@@ -577,6 +577,124 @@ func loadTasksCmd(baseURL, apiKey string) tea.Cmd {
 	}
 }
 
+// fetchTaskOutputCmd fetches one task's captured output for the /tasks panel
+// detail view (epic #814 slice 4): bash_job via GET /v1/jobs/{id}/output,
+// subagent via GET /v1/subagents/{id}. Success yields TaskOutputLoadedMsg;
+// failures yield TaskActionResultMsg with Action="output".
+func fetchTaskOutputCmd(baseURL, apiKey string, task RemoteTask) tea.Cmd {
+	return func() tea.Msg {
+		fail := func(err error) tea.Msg {
+			return TaskActionResultMsg{TaskID: task.ID, Action: "output", Err: err.Error()}
+		}
+		var path string
+		switch task.Type {
+		case "bash_job":
+			path = "/v1/jobs/" + task.ID + "/output"
+		case "subagent":
+			path = "/v1/subagents/" + task.ID
+		default:
+			return fail(fmt.Errorf("no output available for %s tasks", task.Type))
+		}
+
+		url := strings.TrimRight(baseURL, "/") + path
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, url, nil, apiKey)
+		if err != nil {
+			return fail(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fail(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return fail(fmt.Errorf("server returned %d", resp.StatusCode))
+		}
+
+		switch task.Type {
+		case "bash_job":
+			var payload struct {
+				Output   string `json:"output"`
+				Running  bool   `json:"running"`
+				ExitCode int    `json:"exit_code"`
+				TimedOut bool   `json:"timed_out"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+				return fail(err)
+			}
+			status := fmt.Sprintf("exit_code %d", payload.ExitCode)
+			if payload.Running {
+				status = "running"
+			} else if payload.TimedOut {
+				status = "timed_out"
+			}
+			out := strings.TrimSpace(payload.Output)
+			if out == "" {
+				out = "(no output)"
+			}
+			return TaskOutputLoadedMsg{
+				TaskID: task.ID,
+				Title:  task.Label,
+				Output: fmt.Sprintf("%s\n\n[%s]", out, status),
+			}
+		default: // subagent
+			var payload RemoteSubagent
+			if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+				return fail(err)
+			}
+			out := strings.TrimSpace(payload.Output)
+			if out == "" {
+				out = "(no output yet)"
+			}
+			return TaskOutputLoadedMsg{
+				TaskID: task.ID,
+				Title:  task.Label,
+				Output: fmt.Sprintf("%s\n\n[status: %s]", out, payload.Status),
+			}
+		}
+	}
+}
+
+// cancelTaskCmd stops a task via its type-appropriate endpoint (epic #814
+// slice 4): bash_job → POST /v1/jobs/{id}/kill, subagent →
+// POST /v1/subagents/{id}/cancel, cron → DELETE /v1/cron/jobs/{id},
+// callback → POST /v1/callbacks/{id}/cancel. The result arrives as
+// TaskActionResultMsg with Action="stop".
+func cancelTaskCmd(baseURL, apiKey string, task RemoteTask) tea.Cmd {
+	return func() tea.Msg {
+		fail := func(err error) tea.Msg {
+			return TaskActionResultMsg{TaskID: task.ID, Action: "stop", Err: err.Error()}
+		}
+		var method, path string
+		switch task.Type {
+		case "bash_job":
+			method, path = http.MethodPost, "/v1/jobs/"+task.ID+"/kill"
+		case "subagent":
+			method, path = http.MethodPost, "/v1/subagents/"+task.ID+"/cancel"
+		case "cron":
+			method, path = http.MethodDelete, "/v1/cron/jobs/"+task.ID
+		case "callback":
+			method, path = http.MethodPost, "/v1/callbacks/"+task.ID+"/cancel"
+		default:
+			return fail(fmt.Errorf("cannot stop %s tasks", task.Type))
+		}
+
+		url := strings.TrimRight(baseURL, "/") + path
+		req, err := newHarnessRequest(context.Background(), method, url, nil, apiKey)
+		if err != nil {
+			return fail(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fail(err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return fail(fmt.Errorf("server returned %d", resp.StatusCode))
+		}
+		return TaskActionResultMsg{TaskID: task.ID, Action: "stop"}
+	}
+}
+
 // loadHooksCmd fetches GET /v1/hooks for the /hooks command. The TUI renders
 // server truth only — it never reads hook files from disk.
 func loadHooksCmd(baseURL, apiKey string) tea.Cmd {

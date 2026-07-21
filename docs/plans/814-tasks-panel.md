@@ -10,7 +10,58 @@
 - `JobManager.List()` snapshot + tenant capture; daemon-level `harness.JobTracker` (`jm<N>:job_<n>` namespacing) registered via `DefaultRegistryOptions.JobTracker`.
 - `GET /v1/tasks` unions `bash_job` entries; `POST /v1/jobs/{id}/kill` terminates them (runs:write, tenant-scoped).
 
-## Slice 3 (this branch, epic/814-tasks-panel-s3): /tasks overlay listing unified background tasks
+## Slice 3 (merged, PR #893): /tasks overlay listing unified background tasks
+
+- `components/taskspanel` (value-semantics Model): TYPE/STATUS/AGE/COMMAND columns, cursor navigation with scroll-into-view windowing, empty/loading/error states.
+- `RemoteTask` + `loadTasksCmd`; `/tasks` registered in `cmd_parser.go` (auto-feeds `/help`, slash-complete, tab completion).
+
+## Slice 4 (this branch, epic/814-tasks-panel-s4): task actions — view output and stop from the /tasks panel
+
+### Context
+
+- Problem: the `/tasks` overlay (slice 3) is read-only; stopping work or reading output still requires agent cooperation or per-surface commands.
+- User impact: from a selected row the user can view recent output and stop/kill the task through the existing per-type mechanisms.
+- Constraints: slice 4 only — actions on the existing panel. Cron deletion requires a confirmation prompt. Strict TDD.
+
+### Scope
+
+- In scope:
+  - Server (TUI has no other path): `GET /v1/jobs/{id}/output` (bash job output via new `JobTracker.Output`, runs:read, tenant-checked) and `POST /v1/callbacks/{id}/cancel` (new `CallbackCanceler` option, runs:write, tenant-checked). Subagent cancel and cron delete endpoints already exist.
+  - `components/taskspanel`: confirm mode (`AskConfirm`/`PendingConfirm`/`ResolveConfirm` + prompt rendering), detail mode (`ShowOutput`/`CloseDetail`/scroll + rendering), transient notice line (`SetNotice`), `HandleEscape` backing out of sub-modes.
+  - TUI api: `fetchTaskOutputCmd` (bash_job → `/v1/jobs/{id}/output`, subagent → `/v1/subagents/{id}`), `cancelTaskCmd` (per-type dispatch: kill/cancel/DELETE/cancel), `TaskOutputLoadedMsg`/`TaskActionResultMsg`.
+  - `model.go`: mode-aware key routing (`o`/Enter output, `x`/Ctrl+K stop, cron delete confirms first, detail scroll/back, confirm y/n), Esc consumed by panel sub-modes before the overlay close, list refresh after a successful stop, action errors surfaced via the panel notice + status message.
+- Out of scope: streaming live output (SSE tail), periodic auto-refresh, per-type confirm prompts beyond cron delete, killing whole runs (only background tasks).
+
+### Test Plan (TDD)
+
+- Failing tests first:
+  - `internal/harness/job_tracker_test.go`: `Output` routes to the owning manager, unknown IDs → `ErrJobNotFound`.
+  - `internal/server/http_tasks_test.go`: job output endpoint (200 + payload, 404, 501, cross-tenant); callback cancel (200 + pending removed, 404, 501, cross-tenant).
+  - `components/taskspanel`: confirm prompt render + resolve, detail render/scroll/indicators, notice line, Esc handling, Open resets modes.
+  - `cmd/harnesscli/tui/api_tasks_test.go`: output fetch (bash_job, subagent, failure) and per-type cancel dispatch + server error.
+  - `cmd/harnesscli/tui/tasks_overlay_814_test.go`: `o` bash job → detail with fetched output; `o` cron → static detail without fetch; Enter alias; `x` bash job → kill + refresh; `x` cron → confirm prompt, no DELETE until `y`, `n`/Esc cancel; `x` subagent/callback → cancel endpoints; action error in panel; Esc in detail/confirm returns to list.
+- Existing tests to update: none expected.
+
+### Cross-Surface Impact Map
+
+- Not required (no provider/model flow surface). Config: None. Server API: two new routes (`/v1/jobs/{id}/output`, `/v1/callbacks/{id}/cancel`). TUI state: panel sub-modes (confirm/detail) + action messages. Regression tests: listed above.
+
+### Implementation Checklist
+
+- [x] Failing tests first (tracker, server, component, api, model).
+- [x] `JobTracker.Output` + `GET /v1/jobs/{id}/output`.
+- [x] `POST /v1/callbacks/{id}/cancel` + `CallbackCanceler` wiring.
+- [x] taskspanel confirm/detail/notice modes.
+- [x] TUI api commands + model wiring + Esc handling + refresh.
+- [x] gofmt/vet clean; `go test ./cmd/harnesscli/... -count=1` green (+ internal/server, internal/harness, cmd/harnessd).
+- [x] Docs (this plan, engineering log, indexes); commit, push, open PR (no merge).
+
+### Risks and Mitigations
+
+- Risk: Enter is captured by the global Enter-key block before overlay routing. Mitigation: explicit tasks guard in that block delegating to the shared `openSelectedTaskOutput` helper (covered by `TestTasks_EnterAlsoOpensOutput`).
+- Risk: Esc closes the whole overlay instead of backing out of a sub-mode. Mitigation: the Esc chain consults `tasksPanel.Mode()` first; regression tests cover both sub-modes.
+
+## Slice 3 detail (kept for reference)
 
 ### Context
 

@@ -170,3 +170,77 @@ func TestViewZeroSizeDoesNotPanic(t *testing.T) {
 		t.Error("View(0,0) should render with default dimensions, got empty string")
 	}
 }
+
+// --- slice 4: confirm + detail rendering ---
+
+// TestViewConfirmPrompt verifies the destructive-action confirmation prompt
+// (cron delete) names the action and the task.
+func TestViewConfirmPrompt(t *testing.T) {
+	t.Parallel()
+
+	cronTask := taskspanel.TaskEntry{ID: "job-1", Type: "cron", Status: "active", Label: "nightly-sync"}
+	m := taskspanel.New().Open().SetTasks([]taskspanel.TaskEntry{cronTask}).AskConfirm(cronTask)
+	view := m.View(100, 30)
+
+	for _, want := range []string{"Delete cron job", "nightly-sync", "cannot be undone", "y confirm", "n"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("confirm view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+// TestViewDetailMode verifies output detail rendering with title, content,
+// and a back hint.
+func TestViewDetailMode(t *testing.T) {
+	t.Parallel()
+
+	m := taskspanel.New().Open().SetTasks(sampleTasks())
+	m = m.ShowOutput("sleep 30", "first line\nsecond line")
+	view := m.View(100, 30)
+
+	for _, want := range []string{"sleep 30", "first line", "second line", "back"} {
+		if !strings.Contains(view, want) {
+			t.Errorf("detail view missing %q:\n%s", want, view)
+		}
+	}
+}
+
+// TestViewDetailScrollIndicators verifies long output scrolls with overflow
+// indicators.
+func TestViewDetailScrollIndicators(t *testing.T) {
+	t.Parallel()
+
+	var b strings.Builder
+	for i := 1; i <= 40; i++ {
+		if i > 1 {
+			b.WriteString("\n")
+		}
+		b.WriteString(fmt.Sprintf("output line %d", i))
+	}
+
+	m := taskspanel.New().Open().ShowOutput("big job", b.String())
+	view := m.View(80, 16)
+	if !strings.Contains(view, "more below") {
+		t.Errorf("long output should show 'more below':\n%s", view)
+	}
+
+	m = m.ScrollDetail(35)
+	view = m.View(80, 16)
+	if !strings.Contains(view, "more above") {
+		t.Errorf("scrolled output should show 'more above':\n%s", view)
+	}
+	if !strings.Contains(view, "output line 40") {
+		t.Errorf("last output line should be visible after scrolling to the end:\n%s", view)
+	}
+}
+
+// TestViewNoticeLine verifies action errors surface inside the panel.
+func TestViewNoticeLine(t *testing.T) {
+	t.Parallel()
+
+	m := taskspanel.New().Open().SetTasks(sampleTasks()).SetNotice("kill failed: boom")
+	view := m.View(100, 30)
+	if !strings.Contains(view, "kill failed: boom") {
+		t.Errorf("panel should render the notice line:\n%s", view)
+	}
+}

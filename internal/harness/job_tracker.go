@@ -129,6 +129,22 @@ func (t *JobTracker) Kill(taskID string) error {
 	return nil
 }
 
+// Output returns the captured output snapshot for the job identified by a
+// namespaced task ID, reusing the owning manager's Output (same payload as
+// the agent-facing job_output tool: output, running, exit_code, timed_out,
+// started_at). Unknown task IDs return ErrJobNotFound.
+func (t *JobTracker) Output(taskID string) (map[string]any, error) {
+	mgr, shellID, ok := t.resolve(taskID)
+	if !ok {
+		return nil, ErrJobNotFound
+	}
+	out, err := mgr.Output(shellID, false)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrJobNotFound, err)
+	}
+	return out, nil
+}
+
 // resolve splits a namespaced task ID and returns the owning manager.
 func (t *JobTracker) resolve(taskID string) (*htools.JobManager, string, bool) {
 	ref, shellID, found := strings.Cut(taskID, ":")

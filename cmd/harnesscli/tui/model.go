@@ -2717,6 +2717,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(cmds...)
 			}
 			if m.overlayActive {
+				// The tasks panel consumes Escape first while a sub-mode
+				// (confirm prompt or output detail) is showing: Esc backs out
+				// to the task list rather than closing the overlay (epic #814
+				// slice 4).
+				if m.activeOverlay == "tasks" && m.tasksPanel.Mode() != taskspanel.ModeList {
+					m.tasksPanel = m.tasksPanel.HandleEscape()
+					return m, tea.Batch(cmds...)
+				}
 				m.overlayActive = false
 				m.activeOverlay = ""
 				m.helpDialog = m.helpDialog.Close()
@@ -2927,6 +2935,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.modelConfigReasoningCursor = reasoningLevelIndex(m.selectedReasoningEffort)
 				return m, tea.Batch(cmds...)
 			}
+			// When the tasks overlay is active, Enter opens the selected row's
+			// output detail (same action as 'o'; epic #814 slice 4).
+			if m.overlayActive && m.activeOverlay == "tasks" {
+				cmds = m.openSelectedTaskOutput(cmds)
+				return m, tea.Batch(cmds...)
+			}
 			// When the dropdown is active, Enter accepts the selected suggestion
 			// instead of submitting the input as a message.
 			if m.slashComplete.IsActive() {
@@ -2995,17 +3009,60 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "tasks":
 			// Route keyboard input to the tasks panel when it is open (epic
-			// #814 slice 3): arrows/j/k move the selection, r re-fetches.
+			// #814). List mode (slice 3): arrows/j/k move the selection,
+			// r re-fetches. Slice 4 adds the sub-modes and row actions:
+			// confirm mode answers the cron-delete prompt; detail mode
+			// scrolls output; o/Enter views output; x/ctrl+k stops a task.
 			switch {
-			case msg.Type == tea.KeyDown || msg.String() == "j":
-				m.tasksPanel = m.tasksPanel.MoveDown(1)
-			case msg.Type == tea.KeyUp || msg.String() == "k":
-				m.tasksPanel = m.tasksPanel.MoveUp(1)
-			case msg.String() == "r":
-				m.tasksPanel = m.tasksPanel.Open()
-				cmds = append(cmds, loadTasksCmd(m.config.BaseURL, m.config.APIKey))
+			case m.tasksPanel.InConfirm():
+				switch msg.String() {
+				case "y", "Y":
+					task, ok := m.tasksPanel.PendingConfirm()
+					m.tasksPanel = m.tasksPanel.ResolveConfirm()
+					if ok {
+						cmds = append(cmds, cancelTaskCmd(m.config.BaseURL, m.config.APIKey, remoteTaskFromEntry(task)))
+					}
+				case "n", "N":
+					m.tasksPanel = m.tasksPanel.ResolveConfirm()
+				}
+				return m, tea.Batch(cmds...)
+			case m.tasksPanel.InDetail():
+				switch {
+				case msg.Type == tea.KeyDown || msg.String() == "j":
+					m.tasksPanel = m.tasksPanel.ScrollDetail(1)
+				case msg.Type == tea.KeyUp || msg.String() == "k":
+					m.tasksPanel = m.tasksPanel.ScrollDetail(-1)
+				case msg.String() == "h" || msg.Type == tea.KeyLeft:
+					m.tasksPanel = m.tasksPanel.CloseDetail()
+				}
+				return m, tea.Batch(cmds...)
+			default:
+				switch {
+				case msg.Type == tea.KeyDown || msg.String() == "j":
+					m.tasksPanel = m.tasksPanel.MoveDown(1)
+				case msg.Type == tea.KeyUp || msg.String() == "k":
+					m.tasksPanel = m.tasksPanel.MoveUp(1)
+				case msg.String() == "r":
+					m.tasksPanel = m.tasksPanel.Open()
+					cmds = append(cmds, loadTasksCmd(m.config.BaseURL, m.config.APIKey))
+				case msg.String() == "o" || msg.Type == tea.KeyEnter:
+					cmds = m.openSelectedTaskOutput(cmds)
+				case msg.String() == "x" || msg.Type == tea.KeyCtrlK:
+					if sel, ok := m.tasksPanel.Selected(); ok {
+						switch {
+						case !stoppableEntry(sel):
+							m.tasksPanel = m.tasksPanel.SetNotice("task has no stop action")
+						case sel.Type == "cron":
+							// Deleting a cron schedule is destructive —
+							// confirm before firing (epic #814 slice 4).
+							m.tasksPanel = m.tasksPanel.AskConfirm(sel)
+						default:
+							cmds = append(cmds, cancelTaskCmd(m.config.BaseURL, m.config.APIKey, remoteTaskFromEntry(sel)))
+						}
+					}
+				}
+				return m, tea.Batch(cmds...)
 			}
-			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "model" && m.modelConfigMode && m.modelConfigKeyInputMode:
 			// Character input in config panel key input mode.
 			switch {
@@ -3908,6 +3965,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case TasksLoadFailedMsg:
 		m.tasksPanel = m.tasksPanel.SetError(msg.Err)
 		cmds = append(cmds, m.setStatusMsg("Load tasks failed: "+msg.Err))
+
+	case TaskOutputLoadedMsg:
+		m.tasksPanel = m.tasksPanel.ShowOutput(msg.Title, msg.Output)
+
+	case TaskActionResultMsg:
+		if msg.Err != "" {
+			// Surface action errors in the panel itself (epic #814 slice 4).
+			m.tasksPanel = m.tasksPanel.SetNotice(msg.Action + " failed: " + msg.Err)
+			cmds = append(cmds, m.setStatusMsg("Task "+msg.Action+" failed: "+msg.Err))
+		} else if msg.Action == "stop" {
+			// Refresh the list after a stop so the row reflects the outcome.
+			cmds = append(cmds, m.setStatusMsg("Task stopped"), loadTasksCmd(m.config.BaseURL, m.config.APIKey))
+		}
 
 	case HooksLoadedMsg:
 		for _, line := range formatHooksLines(msg) {
@@ -5278,6 +5348,55 @@ func (m Model) HelpDialogScrollOffset() int { return m.helpDialog.ScrollOffset()
 // TasksPanelCursor returns the selected row index in the /tasks overlay
 // (for testing, epic #814).
 func (m Model) TasksPanelCursor() int { return m.tasksPanel.CursorIndex() }
+
+// remoteTaskFromEntry converts a taskspanel row back to the wire DTO the
+// /v1 api commands expect (epic #814 slice 4).
+func remoteTaskFromEntry(e taskspanel.TaskEntry) RemoteTask {
+	return RemoteTask{
+		ID:         e.ID,
+		Type:       e.Type,
+		Status:     e.Status,
+		Label:      e.Label,
+		AgeSeconds: e.AgeSeconds,
+		Actions:    e.Actions,
+	}
+}
+
+// openSelectedTaskOutput performs the view-output action for the selected
+// /tasks row ('o' or Enter; epic #814 slice 4): bash jobs and subagents fetch
+// live output; cron and callback rows (no output endpoint) show their own
+// fields as a static detail view.
+func (m *Model) openSelectedTaskOutput(cmds []tea.Cmd) []tea.Cmd {
+	sel, ok := m.tasksPanel.Selected()
+	if !ok {
+		return cmds
+	}
+	switch sel.Type {
+	case "bash_job", "subagent":
+		cmds = append(cmds, fetchTaskOutputCmd(m.config.BaseURL, m.config.APIKey, remoteTaskFromEntry(sel)))
+	default:
+		m.tasksPanel = m.tasksPanel.ShowOutput(sel.Label, staticTaskDetail(sel))
+	}
+	return cmds
+}
+
+// stoppableEntry reports whether a task row advertises a stop action
+// (cancel for running work, delete for cron jobs).
+func stoppableEntry(e taskspanel.TaskEntry) bool {
+	for _, a := range e.Actions {
+		if a == "cancel" || a == "delete" {
+			return true
+		}
+	}
+	return false
+}
+
+// staticTaskDetail renders the detail view for task types with no output
+// endpoint (cron, callback) from the row's own fields.
+func staticTaskDetail(e taskspanel.TaskEntry) string {
+	return fmt.Sprintf("id: %s\ntype: %s\nstatus: %s\nage: %s\nactions: %s",
+		e.ID, e.Type, e.Status, taskspanel.FormatAge(e.AgeSeconds), strings.Join(e.Actions, ", "))
+}
 
 // boxOverlay wraps overlay content in a RoundedBorder lipgloss box so that
 // /stats and /context get consistent chrome matching /help, /model etc.

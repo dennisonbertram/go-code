@@ -245,3 +245,51 @@ func TestDefaultRegistryJobManagerRegistersWithTracker(t *testing.T) {
 		t.Fatalf("tracker has %d jobs after registry shutdown, want 0: %+v", len(got), got)
 	}
 }
+
+// TestJobTrackerOutput verifies Output routes to the owning manager and
+// returns the job's captured output (epic #814 slice 4: view output from the
+// /tasks panel).
+func TestJobTrackerOutput(t *testing.T) {
+	t.Parallel()
+
+	tracker := NewJobTracker()
+	mgr := htools.NewJobManager(t.TempDir(), nil)
+	defer func() { _ = mgr.Shutdown(context.Background()) }()
+
+	ref := tracker.Register(mgr)
+	shellID := startTrackedJob(t, mgr, "echo hello-from-job")
+
+	// Wait for the job to finish so output is present.
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		out, err := mgr.Output(shellID, false)
+		if err != nil {
+			t.Fatalf("Output(%s): %v", shellID, err)
+		}
+		if running, _ := out["running"].(bool); !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("echo job did not finish in time")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	out, err := tracker.Output(ref + ":" + shellID)
+	if err != nil {
+		t.Fatalf("tracker.Output: %v", err)
+	}
+	text, _ := out["output"].(string)
+	if !strings.Contains(text, "hello-from-job") {
+		t.Errorf("tracker.Output output = %q, want it to contain 'hello-from-job'", text)
+	}
+	if running, _ := out["running"].(bool); running {
+		t.Error("finished job should report running=false")
+	}
+
+	for _, bad := range []string{"jm999:job_1", ref + ":job_999", "no-separator"} {
+		if _, err := tracker.Output(bad); !errors.Is(err, ErrJobNotFound) {
+			t.Errorf("Output(%q) error = %v, want ErrJobNotFound", bad, err)
+		}
+	}
+}

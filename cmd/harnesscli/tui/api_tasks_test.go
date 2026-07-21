@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -113,5 +114,153 @@ func TestLoadTasksCmdUnreachable(t *testing.T) {
 	msg := loadTasksCmd(ts.URL, "")()
 	if _, ok := msg.(TasksLoadFailedMsg); !ok {
 		t.Fatalf("expected TasksLoadFailedMsg, got %T: %+v", msg, msg)
+	}
+}
+
+// --- slice 4: task output fetch + stop actions ---
+
+// TestFetchTaskOutputCmdBashJob verifies the bash_job output path calls
+// GET /v1/jobs/{id}/output and maps the payload into TaskOutputLoadedMsg.
+func TestFetchTaskOutputCmdBashJob(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/jobs/jm1:job_1/output" || r.Method != http.MethodGet {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"shell_id": "job_1", "running": false, "exit_code": 0, "timed_out": false, "output": "hello-from-job",
+		})
+	}))
+	defer ts.Close()
+
+	task := RemoteTask{ID: "jm1:job_1", Type: "bash_job", Label: "echo hello-from-job"}
+	msg := fetchTaskOutputCmd(ts.URL, "", task)()
+	loaded, ok := msg.(TaskOutputLoadedMsg)
+	if !ok {
+		t.Fatalf("expected TaskOutputLoadedMsg, got %T: %+v", msg, msg)
+	}
+	if loaded.TaskID != "jm1:job_1" {
+		t.Errorf("TaskID = %q, want jm1:job_1", loaded.TaskID)
+	}
+	if !strings.Contains(loaded.Output, "hello-from-job") {
+		t.Errorf("Output = %q, want it to contain 'hello-from-job'", loaded.Output)
+	}
+}
+
+// TestFetchTaskOutputCmdSubagent verifies the subagent output path calls
+// GET /v1/subagents/{id} and uses the subagent's Output field.
+func TestFetchTaskOutputCmdSubagent(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/subagents/sub-1" || r.Method != http.MethodGet {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": "sub-1", "run_id": "run-1", "status": "completed", "output": "subagent did the thing",
+		})
+	}))
+	defer ts.Close()
+
+	task := RemoteTask{ID: "sub-1", Type: "subagent", Label: "workspace-sub-1"}
+	msg := fetchTaskOutputCmd(ts.URL, "", task)()
+	loaded, ok := msg.(TaskOutputLoadedMsg)
+	if !ok {
+		t.Fatalf("expected TaskOutputLoadedMsg, got %T: %+v", msg, msg)
+	}
+	if !strings.Contains(loaded.Output, "subagent did the thing") {
+		t.Errorf("Output = %q, want subagent output", loaded.Output)
+	}
+}
+
+// TestFetchTaskOutputCmdError verifies fetch failures surface as
+// TaskActionResultMsg with the output action.
+func TestFetchTaskOutputCmdError(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	task := RemoteTask{ID: "jm1:job_9", Type: "bash_job", Label: "x"}
+	msg := fetchTaskOutputCmd(ts.URL, "", task)()
+	result, ok := msg.(TaskActionResultMsg)
+	if !ok {
+		t.Fatalf("expected TaskActionResultMsg, got %T: %+v", msg, msg)
+	}
+	if result.Action != "output" || result.Err == "" {
+		t.Errorf("result = %+v, want Action=output with non-empty Err", result)
+	}
+}
+
+// TestCancelTaskCmdDispatch verifies each task type maps to its
+// type-appropriate stop endpoint and method.
+func TestCancelTaskCmdDispatch(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name       string
+		task       RemoteTask
+		wantMethod string
+		wantPath   string
+	}{
+		{"bash job kill", RemoteTask{ID: "jm1:job_1", Type: "bash_job"}, http.MethodPost, "/v1/jobs/jm1:job_1/kill"},
+		{"subagent cancel", RemoteTask{ID: "sub-1", Type: "subagent"}, http.MethodPost, "/v1/subagents/sub-1/cancel"},
+		{"cron delete", RemoteTask{ID: "job-1", Type: "cron"}, http.MethodDelete, "/v1/cron/jobs/job-1"},
+		{"callback cancel", RemoteTask{ID: "cb-1", Type: "callback"}, http.MethodPost, "/v1/callbacks/cb-1/cancel"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			called := false
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called = true
+				if r.Method != tc.wantMethod || r.URL.Path != tc.wantPath {
+					t.Errorf("request = %s %s, want %s %s", r.Method, r.URL.Path, tc.wantMethod, tc.wantPath)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"ok":true}`))
+			}))
+			defer ts.Close()
+
+			msg := cancelTaskCmd(ts.URL, "", tc.task)()
+			result, ok := msg.(TaskActionResultMsg)
+			if !ok {
+				t.Fatalf("expected TaskActionResultMsg, got %T: %+v", msg, msg)
+			}
+			if !called {
+				t.Error("no request was made")
+			}
+			if result.Err != "" {
+				t.Errorf("result.Err = %q, want empty on success", result.Err)
+			}
+			if result.TaskID != tc.task.ID {
+				t.Errorf("result.TaskID = %q, want %q", result.TaskID, tc.task.ID)
+			}
+		})
+	}
+}
+
+// TestCancelTaskCmdServerError verifies non-2xx responses surface as errors.
+func TestCancelTaskCmdServerError(t *testing.T) {
+	t.Parallel()
+
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer ts.Close()
+
+	task := RemoteTask{ID: "job-x", Type: "cron"}
+	msg := cancelTaskCmd(ts.URL, "", task)()
+	result, ok := msg.(TaskActionResultMsg)
+	if !ok {
+		t.Fatalf("expected TaskActionResultMsg, got %T: %+v", msg, msg)
+	}
+	if result.Err == "" {
+		t.Error("result.Err should describe the failure")
 	}
 }

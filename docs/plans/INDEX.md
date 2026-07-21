@@ -10,7 +10,7 @@
 - `2026-07-20-kimi-subscription-auth-848-plan.md` — Epic #848 Kimi Code subscription auth, endpoint spike, token import, provider wiring, and CLI/TUI lifecycle (in implementation).
 - `2026-07-20-kimi-subscription-auth-848-impact-map.md` — Cross-surface impact map for Epic #848 Kimi subscription authentication.
 - `819-plan-mode.md` — Epic #819 slice 1: pin plan-mode exit semantics across approval modes (in implementation).
-- `814-tasks-panel.md` — Epic #814 unified /tasks background panel: slice 1 `GET /v1/tasks` union, slice 2 bash-job exposure + kill, slice 3 TUI `/tasks` overlay (slices 1–3 in implementation/merged).
+- `814-tasks-panel.md` — Epic #814 unified /tasks background panel: slice 1 `GET /v1/tasks` union, slice 2 bash-job exposure + kill, slice 3 TUI `/tasks` overlay, slice 4 panel actions (all four slices implemented).
 - `817-compact-cmd.md` — Epic #817 slice 1: preserve-instruction in `CompactRun` and the run compact endpoint (in implementation).
 - `815-config-reload.md` — Epic #815 Slice 1: hot-swappable vs restart-only config field classification with `ReloadDiff` (in implementation).
 - `808-agent-swarm.md` — Agent swarm epic #808: Slices 1–3 (orchestrator, resume, agent_swarm tool; merged), Slice 4 TUI live swarm progress panel (in implementation).
