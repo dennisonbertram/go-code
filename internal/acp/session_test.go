@@ -615,6 +615,42 @@ func (c *scriptedClient) readAny() map[string]any {
 	}
 }
 
+// readRequest reads one server-initiated request line (e.g.
+// session/request_permission) and returns its id (wire bytes, for echoing),
+// method, and raw params.
+func (c *scriptedClient) readRequest() (json.RawMessage, string, json.RawMessage) {
+	c.t.Helper()
+	msg := c.readAny()
+	if msg["method"] == nil {
+		c.t.Fatalf("expected a server-initiated request, got response: %v", msg)
+	}
+	rawID, _ := json.Marshal(msg["id"])
+	params, _ := json.Marshal(msg["params"])
+	method, _ := msg["method"].(string)
+	return json.RawMessage(rawID), method, params
+}
+
+// respond answers a server-initiated request with a result object.
+func (c *scriptedClient) respond(id json.RawMessage, result any) {
+	c.t.Helper()
+	b, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "result": result})
+	if _, err := c.inW.Write(append(b, '\n')); err != nil {
+		c.t.Fatalf("write response: %v", err)
+	}
+}
+
+// respondError answers a server-initiated request with a JSON-RPC error.
+func (c *scriptedClient) respondError(id json.RawMessage, code int, message string) {
+	c.t.Helper()
+	b, _ := json.Marshal(map[string]any{
+		"jsonrpc": "2.0", "id": id,
+		"error": map[string]any{"code": code, "message": message},
+	})
+	if _, err := c.inW.Write(append(b, '\n')); err != nil {
+		c.t.Fatalf("write error response: %v", err)
+	}
+}
+
 // TestSessionPromptStreamsUpdatesInOrder is the slice-3 acceptance test: a
 // scripted client performing session/prompt observes the exact ordered
 // session/update notification stream — agent_message_chunk deltas, a thought

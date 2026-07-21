@@ -26,7 +26,7 @@
 - `821-plugin-system.md` — Epic #821 slice 1: plugin home decision and `plugin.json` manifest v1 contract docs, plus legacy-dir startup warning (in implementation).
 - `813-skill-args.md` — Epic #813 slice 1: quote-aware argument tokenizer (`SplitArgs`) for skill argument paths (in implementation).
 - `807-service-install.md` — Epic #807 slice 1: `harnesscli service install/uninstall` with launchd + systemd generators (in implementation).
-- `806-acp-server.md` — ACP server mode epic #806: slice 1 (stdio JSON-RPC framing + initialize, merged), slice 2 (session/new + session/prompt over the runs API, merged), slice 3 (session/update notifications from the SSE stream, in implementation) in the stdlib-only `internal/acp` package plus the `harness acp` subcommand.
+- `806-acp-server.md` — ACP server mode epic #806: slice 1 (stdio JSON-RPC framing + initialize, merged), slice 2 (session/new + session/prompt over the runs API, merged), slice 3 (session/update notifications, merged), slice 4 (session/request_permission bridge, in implementation) in the stdlib-only `internal/acp` package plus the `harness acp` subcommand.
 - `805-undo-prompts.md` — Epic #805 plan: Slice 1 `ConversationStore.UndoPrompts` (merged, PR #838); Slice 2 `POST /v1/conversations/{id}/undo` route (merged, PR #868); Slice 3 TUI `/undo [n]` command (in implementation).
 - `2026-07-19-acp-epic-746-plan.md` — ACP server mode epic #746 (in implementation).
 - `2026-07-20-live-model-discovery-849-plan.md` — provider-agnostic cached live model discovery for Epic #849.

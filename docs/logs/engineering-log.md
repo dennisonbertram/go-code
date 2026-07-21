@@ -21,6 +21,14 @@
   `TestRunnerImageBlockReachesOpenAIWire`) capture the real HTTP body of a
   `StartRun` with an attachment.
 
+## 2026-07-21 (ACP Server Mode — Epic #806, Slice 4)
+
+- Permission bridge: `tool.approval_required` SSE events now issue `session/request_permission` to the editor (options `allow-once`/`allow_once`, `reject-once`/`reject_once`; `toolCall` carries `toolCallId`, `title`, parsed `rawInput`). Selected allow -> `POST /v1/runs/{id}/approve`; reject / `cancelled` outcome / client JSON-RPC error -> `/deny` (fail closed).
+- Server grew editor-bound calls: `callClient` registers a pending call by id, and `dispatch` routes response-shaped messages (result/error, no method) to the waiter; unknown or already-completed ids stay logged-and-ignored.
+- Deadline discipline: the permission call runs on a `deadline_at`-bounded context; when it passes, the pending call is deregistered and nothing is POSTed (harnessd auto-denies at the deadline). Bridge goroutines ride a turn-scoped context and are awaited before the prompt response, so no bridge outlives its turn.
+- 501 no-broker: `ApproveRun`/`DenyRun` map harnessd's 501 to `ErrApprovalNotConfigured`, surfaced as an `agent_message_chunk` note instead of a hang until the deadline.
+- Validation: strict TDD (red: `undefined: permissionParams`, `srv.callClient`). Flows via scripted io.Pipe client + fake harnessd (new `/approve`/`/deny` routes with 501 mode): grant -> approve + `end_turn`; reject -> deny; `cancelled` -> deny; client error -> deny; deadline expiry -> no POST and a late answer ignored; 501 -> note, no hang.
+
 ## 2026-07-21 (ACP Server Mode — Epic #806, Slice 3)
 
 - Prompt turns now stream live output to the editor: `assistant.message.delta` -> `agent_message_chunk`, `assistant.thinking.delta` -> `agent_thought_chunk` (payload field `content`), `tool.call.started` -> `tool_call` (`status: in_progress`, `title` = tool name, `kind` via a tool-name table), `tool.call.completed` -> `tool_call_update` (`completed`, or `failed` when the payload carries `error`; output included as content). `toolCallId` is the harness `call_id`, stable across start/complete.

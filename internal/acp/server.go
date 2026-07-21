@@ -28,6 +28,16 @@ type Server struct {
 	diag     io.Writer
 	handlers map[string]Handler
 	wg       sync.WaitGroup // in-flight handler goroutines
+
+	pendingMu sync.Mutex
+	pending   map[string]chan clientResponse // in-flight editor-bound calls, by id
+	nextCall  int
+}
+
+// clientResponse is the editor's answer to a server-initiated request.
+type clientResponse struct {
+	result json.RawMessage
+	rpcErr *rpcError
 }
 
 // NewServer returns a Server reading requests from r, writing protocol
@@ -42,6 +52,7 @@ func NewServer(r io.Reader, w io.Writer, diag io.Writer) *Server {
 		conn:     NewConn(r, w),
 		diag:     diag,
 		handlers: make(map[string]Handler),
+		pending:  make(map[string]chan clientResponse),
 	}
 	s.Handle("initialize", handleInitialize)
 	return s
@@ -97,10 +108,35 @@ func (s *Server) dispatch(ctx context.Context, line []byte) error {
 	}
 
 	// A message carrying result/error but no method is a JSON-RPC response
-	// from the client (e.g. an answer to a future session/request_permission
-	// call). There is nothing to route it to yet; drop it quietly.
+	// from the client — an answer to a server-initiated call (e.g.
+	// session/request_permission). Route it to the pending waiter by id;
+	// responses for unknown or already-completed ids are dropped quietly.
 	if req.Method == "" && (bytes.Contains(line, []byte(`"result"`)) || bytes.Contains(line, []byte(`"error"`))) {
-		fmt.Fprintf(s.diag, "acp: ignoring client response with no pending request (id %s)\n", idForLog(req.ID))
+		var r struct {
+			Result json.RawMessage `json:"result"`
+			Error  *rpcError       `json:"error"`
+		}
+		_ = json.Unmarshal(line, &r)
+		idKey := ""
+		if req.ID != nil {
+			// The pending map is keyed by the bare id value; the wire form
+			// is JSON-encoded, so unquote it (falling back to raw bytes for
+			// non-string ids).
+			if err := json.Unmarshal(*req.ID, &idKey); err != nil {
+				idKey = string(*req.ID)
+			}
+		}
+		s.pendingMu.Lock()
+		ch, ok := s.pending[idKey]
+		if ok {
+			delete(s.pending, idKey)
+		}
+		s.pendingMu.Unlock()
+		if !ok {
+			fmt.Fprintf(s.diag, "acp: ignoring client response with no pending request (id %s)\n", idForLog(req.ID))
+			return nil
+		}
+		ch <- clientResponse{result: r.Result, rpcErr: r.Error}
 		return nil
 	}
 
@@ -174,4 +210,35 @@ func idForLog(id *json.RawMessage) string {
 		return "<absent>"
 	}
 	return string(*id)
+}
+
+// callClient sends a JSON-RPC request to the editor (e.g.
+// session/request_permission) and waits for its response. The wait ends when
+// the editor answers, ctx is cancelled (turn over or approval deadline
+// passed — the pending call is deregistered so a late answer is ignored), or
+// the write fails. A JSON-RPC error object from the editor is returned as
+// rpcErr.
+func (s *Server) callClient(ctx context.Context, method string, params any) (json.RawMessage, *rpcError) {
+	s.pendingMu.Lock()
+	s.nextCall++
+	id := fmt.Sprintf("acp-%d", s.nextCall)
+	ch := make(chan clientResponse, 1)
+	s.pending[id] = ch
+	s.pendingMu.Unlock()
+	defer func() {
+		s.pendingMu.Lock()
+		delete(s.pending, id)
+		s.pendingMu.Unlock()
+	}()
+
+	if err := s.conn.WriteJSON(clientRequest{JSONRPC: "2.0", ID: id, Method: method, Params: params}); err != nil {
+		return nil, &rpcError{Code: CodeInternalError, Message: "write client request: " + err.Error()}
+	}
+
+	select {
+	case resp := <-ch:
+		return resp.result, resp.rpcErr
+	case <-ctx.Done():
+		return nil, &rpcError{Code: CodeInternalError, Message: "client call cancelled: " + ctx.Err().Error()}
+	}
 }

@@ -127,6 +127,42 @@ func (c *RunsClient) CancelRun(ctx context.Context, runID string) error {
 	return nil
 }
 
+// ErrApprovalNotConfigured is returned by ApproveRun/DenyRun when harnessd
+// answers 501 — it has no approval broker configured (see
+// internal/server/http.go), so the pending approval can never be decided
+// over HTTP and will instead time out at its deadline.
+var ErrApprovalNotConfigured = errors.New("acp: harnessd has no approval broker configured")
+
+// ApproveRun POSTs /v1/runs/{id}/approve, resuming the pending tool call.
+func (c *RunsClient) ApproveRun(ctx context.Context, runID string) error {
+	return c.postApprovalDecision(ctx, runID, "approve")
+}
+
+// DenyRun POSTs /v1/runs/{id}/deny, rejecting the pending tool call.
+func (c *RunsClient) DenyRun(ctx context.Context, runID string) error {
+	return c.postApprovalDecision(ctx, runID, "deny")
+}
+
+func (c *RunsClient) postApprovalDecision(ctx context.Context, runID, action string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/v1/runs/"+runID+"/"+action, nil)
+	if err != nil {
+		return fmt.Errorf("build %s request: %w", action, err)
+	}
+	resp, err := c.do(req)
+	if err != nil {
+		return fmt.Errorf("send %s request: %w", action, err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
+	if resp.StatusCode == http.StatusNotImplemented {
+		return ErrApprovalNotConfigured
+	}
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("%s run %s: harnessd returned %s: %s", action, runID, resp.Status, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
 // terminalOutcome describes how a run ended, from the ACP adapter's view.
 type terminalOutcome struct {
 	eventType string // run.completed | run.failed | run.cancelled
