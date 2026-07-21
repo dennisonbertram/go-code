@@ -118,6 +118,9 @@ type RemoteSubagent struct {
 	BaseRef          string `json:"base_ref,omitempty"`
 	Output           string `json:"output,omitempty"`
 	Error            string `json:"error,omitempty"`
+	// CreatedAt is the subagent creation time reported by the server; used by
+	// the swarm panel to match members to a swarm's creation window.
+	CreatedAt time.Time `json:"created_at,omitempty"`
 }
 
 // RemoteTask is one entry of the GET /v1/tasks union (epic #814): a single
@@ -527,6 +530,21 @@ func loadSubagentsCmd(baseURL, apiKey string) tea.Cmd {
 			return SubagentsLoadFailedMsg{Err: err.Error()}
 		}
 		return SubagentsLoadedMsg{Subagents: payload.Subagents}
+	}
+}
+
+// pollSwarmSubagentsCmd fetches /v1/subagents for the swarm panel's poll
+// loop and marks the resulting message so the update handler refreshes the
+// live panel in place (see SubagentsLoadedMsg.SwarmPoll).
+func pollSwarmSubagentsCmd(baseURL, apiKey string) tea.Cmd {
+	fetch := loadSubagentsCmd(baseURL, apiKey)
+	return func() tea.Msg {
+		msg := fetch()
+		if loaded, ok := msg.(SubagentsLoadedMsg); ok {
+			loaded.SwarmPoll = true
+			return loaded
+		}
+		return msg
 	}
 }
 

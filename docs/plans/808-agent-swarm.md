@@ -1,4 +1,4 @@
-# Plan: agent_swarm epic #808 — Slices 1–3
+# Plan: agent_swarm epic #808 — Slices 1–4
 
 ## Context
 
@@ -8,65 +8,52 @@
 - User impact: the model must loop `start_subagent`/`wait_subagent` by hand,
   which is slow, error-prone, and burns turns.
 - Constraints: reuse `internal/subagents` Manager + `tools.SubagentManager`
-  (`InlineManager`); strict TDD. Slice 1 (core `Swarm`) merged via PR #839,
-  Slice 2 (resume) via PR #867. This PR covers ONLY Slice 3 (the deferred
-  tool, policy integration, and sole-call rule).
+  (`InlineManager`); strict TDD. Slices 1–3 merged via PRs #839, #867, #899.
+  This PR covers ONLY Slice 4 (TUI live swarm progress panel).
 
 ## Scope
 
-- In scope (Slice 3):
-  - Mirror types + `SwarmRunner` interface + `AgentSwarmToolName` const in
-    `internal/harness/tools` (import-cycle-safe, same pattern as
-    `SubagentManager`); adapter `NewToolSwarmRunner` in `internal/subagents`.
-  - New `internal/harness/tools/deferred/agent_swarm.go`: `TierDeferred`,
-    `ActionExecute`, `Mutating: true`; params `prompt_template`, `items`,
-    `resume_agent_ids` + profile/model overrides; returns the report via
-    `MarshalToolResult`.
-  - Description `internal/harness/tools/descriptions/agent_swarm.md`
-    (sole-call rule, 128 cap, 5→+1/700ms ramp, env cap, resume semantics).
-  - Registration in `internal/harness/tools_default.go` via new
-    `AgentSwarmRunner` option; wired in `cmd/harnessd/runtime_container.go`.
-  - Member exclusion: per-run `DeniedTools` plumbed `tools.SubagentRequest` →
-    `subagents.Request` → `harness.RunRequest` → runState; enforced in
-    `filteredToolsForRun` (never offered) and in the step-engine call gate
-    (call blocked). The swarm sets it on every member.
-  - Runner sole-call rule in `runner_step_engine.go`: a response containing
-    `agent_swarm` plus any other call executes the (first) swarm call and
-    rejects the extras with a corrective error naming the rule.
-- Out of scope: TUI panel (Slice 4), new server endpoints.
+- In scope (Slice 4):
+  - Track the current run's `agent_swarm` tool call from SSE events
+    (`tool.call.started` → items from arguments; `tool.call.completed` →
+    exact member report) in a `swarmTracker` on the TUI model.
+  - Live grouped panel in the viewport: summary line (launched/completed
+    counts + cap 128) and per-member pending/running/completed/failed rows
+    with the item label, refreshed in place on each poll.
+  - Poll loop: while a swarm is active, re-fetch `/v1/subagents` every 1s
+    (`swarmPollTickMsg`); stop on completion or when all members terminal.
+    `RemoteSubagent` gains `created_at` (already sent by the server) for
+    creation-window member matching; NO server changes.
+  - `formatSubagentsLines` groups swarm members in the `/subagents` listing
+    (swarm section first, then the regular entries); no-swarm output
+    unchanged.
+- Out of scope: server endpoint changes, multi-run swarm tracking,
+  historical swarm persistence.
 
 ## Documentation Contract
 
 - Feature status: `in implementation`
-- Public docs affected: `internal/harness/tools/descriptions/agent_swarm.md`
-  (tool contract, model-facing)
+- Public docs affected: none (TUI behavior only)
 - Spec docs to update before code: none
 - Implementation notes to add after code: engineering-log entry per slice.
 
 ## Test Plan (TDD)
 
 - New failing tests to add first:
-  - `internal/harness/tools/deferred/agent_swarm_test.go`: definition shape
-    (ActionExecute/Mutating/TierDeferred/required params), arg parsing and
-    validation errors, profile resolution + override mapping, resume mapping,
-    report marshaling, runner-error propagation, nil-runner error.
-  - `internal/subagents/swarm_tool_runner_test.go`: adapter maps
-    tools.SwarmRequest ↔ subagents types both directions.
-  - `internal/harness/runner_swarm_test.go`: sole-call rule (swarm+extra →
-    corrective error, swarm alone → ok); DeniedTools gate (call blocked,
-    definitions filtered even when activated); approval flow surfaces
-    agent_swarm as mutating ActionExecute under destructive policy.
-  - `internal/subagents/swarm_e2e_test.go`: fakeprovider full-stack session —
-    find_tool activation, one `agent_swarm` call, 4 member runs with expanded
-    prompts, one aggregated tool result, run completes.
+  - internal (`package tui`): `formatSwarmPanelLines` multi-status rendering
+    (summary + per-member rows + cap), creation-window matching (old
+    subagents excluded, unmatched items pending), exact members after report,
+    `/subagents` grouping in `formatSubagentsLines`, no-swarm regression,
+    report parsing on completion, poll tick start/stop.
+  - external (`package tui_test`): SSE flow — agent_swarm started renders
+    the live panel, poll updates per-member status, completion renders exact
+    statuses and stops updating.
 - Existing tests to update: none.
-- Regression tests required: existing harness/deferred/subagents suites stay
-  green.
+- Regression tests required: existing TUI suites stay green unmodified.
 
 ## Cross-Surface Impact Map
 
-- None — additive tool + in-process enforcement; no provider/model flow,
-  config, or server API changes (TUI panel is Slice 4).
+- None — TUI-only; no provider/model flow, config, or server API changes.
 
 ## Implementation Checklist
 
@@ -80,9 +67,12 @@
 
 ## Risks and Mitigations
 
-- Risk: import cycle between harness/deferred and subagents.
-- Mitigation: mirror types in `tools` + adapter in `subagents`, exactly the
-  existing `SubagentManager`/`InlineManager` pattern.
-- Risk: sole-call gate breaking parallel tool execution for normal calls.
-- Mitigation: gate only engages when a response contains `agent_swarm`;
-  all other responses flow unchanged; regression suite validates.
+- Risk: mid-swarm member↔item matching is heuristic (creation window +
+  schedule order); concurrent unrelated subagent creation could misattribute.
+- Mitigation: single-run tracking only (agent_swarm is sole-call and blocks
+  the parent run, so at most one swarm is active per run); the aggregated
+  report at completion replaces heuristics with exact member IDs.
+- Risk: live panel line offsets going stale as other viewport content moves.
+- Mitigation: panel renders only while the parent run is blocked inside the
+  tool call (no interleaved tool cards); replacement is clamped; block
+  freezes at completion.
