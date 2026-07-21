@@ -1,6 +1,42 @@
 # Plan: pin plan-mode exit semantics across approval modes (epic #819, slice 1)
 
-Slice 1 shipped (PR #827), slice 2 shipped (PR #858). Slice 2 and 3 plans are appended below.
+Slice 1 shipped (PR #827), slice 2 shipped (PR #858), slice 3 shipped (PR #890). Slice 2-4 plans
+are appended below.
+
+## Slice 4: approach-option selection in the plan-approval overlay (branch `epic/819-plan-mode-s4`)
+
+- Problem: the TUI plan-approval overlay ignores the `options` slice 3 put in
+  `plan.approval_required`; the operator cannot pick an approach.
+- Design decisions:
+  - `planApprovalState` gains `options []planApproachOption` + `selectedIdx`;
+    `planApproachOption{id,label,description}` mirrors the wire shape.
+  - With options present, ↑/↓/j/k moves the selection cursor (askuser `▶ ` idiom) instead of
+    scrolling; without options the overlay scrolls and renders exactly as before (regression
+    guard test).
+  - `enter`/`a` approves with the highlighted option ID; `d` requests changes (never posts an
+    option). `approveToolCmd` takes a variadic option ID (`{"option": id}` body) so the two
+    existing tool-approval call sites compile unchanged; `toolApprovalDecisionCmd` builds the
+    JSON body only when an option is present.
+  - `model.go` parses `options` from the `plan.approval_required` payload; a fresh no-option
+    payload clears any stale options.
+- In scope: `cmd/harnesscli/tui/plan_approval.go`, `approval.go`, `model.go`;
+  `plan_approval_options_test.go`.
+- Out of scope: website docs (slice 5).
+- TDD (written first, watched fail to compile — unknown `options`/`selectedIdx`/
+  `planApproachOption`):
+  - `TestPlanApprovalOverlayRendersOptionsAndMovesCursor` — options render, cursor moves/clamps,
+    scroll untouched in options mode.
+  - `TestPlanApprovalApprovePostsSelectedOption` — enter and a post `{"option":"b"}` to
+    `/v1/runs/{id}/approve`.
+  - `TestPlanApprovalDenyIgnoresOptions` — d posts to `/deny` with no option.
+  - `TestPlanApprovalNoOptionsKeepsScrollAndPlainApprove` — regression: render/scroll/plain
+    approve unchanged.
+  - `TestPlanApprovalRequiredEventParsesOptions` — SSE payload parsing, stale-option clearing.
+- Checklist:
+  - [x] Write failing tests first.
+  - [x] Implement option selection in plan overlay.
+  - [x] `go test ./cmd/harnesscli/tui/ -run Plan -count=1` green.
+  - [ ] Full `go test ./cmd/harnesscli/... -count=1`, gofmt/vet, commit, push, PR.
 
 ## Slice 3: approach options in plan-exit approval (branch `epic/819-plan-mode-s3`)
 
