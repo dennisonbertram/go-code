@@ -1,5 +1,11 @@
 # Engineering Log
 
+## 2026-07-21 (Issue #886 runBlockedError.Error Coverage Fix)
+
+- Symptom: post-merge regression gate (`scripts/test-regression.sh`) failed after PR #882 landed: `coveragegate` flagged `(*runBlockedError).Error` (cmd/harnesscli/main.go) at 0.0% — `functions with zero coverage detected`.
+- Cause: PR #882 added `runBlockedError` as a sentinel detected via `errors.As` in `run()`/`runContinue()`; its blocked-path tests assert exit code and stderr content but never invoke `Error()`, and the PR's validation ran package tests, not the full gate. Same failure shape as #875.
+- Fix (test-only): added `TestRunBlockedErrorMessage` in `cmd/harnesscli/exitcodes_test.go` — pins both sentinel contracts across all three blocked signals: `Error()` names the blocked event type, and `errors.As` detection survives wrapping. Function now reports 100%; no production code changed.
+
 ## 2026-07-20 (OS-Service Install for harnessd — Epic #807)
 
 - Shipped `harnesscli service install|uninstall|start|stop|status` for end users: user-level launchd agent on macOS (`~/Library/LaunchAgents/com.gocode.harnessd.plist`, `RunAtLoad`+`KeepAlive`) and `systemd --user` unit on Linux (`~/.config/systemd/user/harnessd.service`, `Restart=on-failure`, `WantedBy=default.target`). Slice 1 (PR #826): install/uninstall + pure unit generators with `--binary`/`--addr`/`--log-dir`/`--dry-run`; addr resolution reuses the daemon's own stack (`HARNESS_ADDR` env or `~/.harness/config.toml`, default `:8080`) exported into the unit environment. Slice 2 (PR #866): lifecycle commands over launchctl/systemctl behind an injectable runner; `status` distinguishes not-installed / installed-not-running / running-healthy / running-unreachable via a `GET /healthz` probe.
