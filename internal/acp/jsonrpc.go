@@ -63,3 +63,11 @@ func (e *rpcError) Error() string { return e.Message }
 
 // nullID is the response id used when the request id is unknown.
 var nullID = json.RawMessage("null")
+
+// notification is the wire shape of a JSON-RPC 2.0 notification the server
+// sends (e.g. session/update): no id, no response expected.
+type notification struct {
+	JSONRPC string `json:"jsonrpc"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}

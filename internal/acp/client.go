@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -28,8 +29,13 @@ const (
 const maxResponseBodyBytes = 8 * 1024 * 1024
 
 // maxSSELineSize bounds a single SSE line; longer lines are drained and the
-// event they belong to is skipped, mirroring the harnesscli SSE client.
-const maxSSELineSize = 16 * 1024 * 1024
+// event they belong to is skipped with a logged warning, mirroring the
+// harnesscli SSE client. It is a var so tests can shrink it.
+var maxSSELineSize = 16 * 1024 * 1024
+
+// errSSELineTruncated is returned by readSSELine when a line exceeds
+// maxSSELineSize; the caller skips the event the line belongs to.
+var errSSELineTruncated = errors.New("acp: sse line exceeded max size")
 
 // RunsClient is a minimal stdlib HTTP/SSE client for the harnessd runs API.
 // It exists so the ACP server can map one ACP session onto one go-code run
@@ -42,6 +48,9 @@ type RunsClient struct {
 	// stream is for the SSE event subscription and must have no client-level
 	// timeout: runs can legitimately stream for a long time.
 	stream *http.Client
+	// Logf receives skip/degradation warnings (e.g. oversized SSE events).
+	// Nil means quiet.
+	Logf func(format string, args ...any)
 }
 
 // NewRunsClient returns a client for the given harnessd base URL. apiKey is
@@ -125,9 +134,24 @@ type terminalOutcome struct {
 	errText   string // run.failed payload error, when present
 }
 
+// runEvent is one parsed SSE event from a run's stream: its harness event
+// type and the raw JSON of the full event object (the data: payload).
+type runEvent struct {
+	Type string
+	Data string
+}
+
 // WaitTerminal subscribes to GET /v1/runs/{id}/events and blocks until a
 // terminal run event arrives, the stream breaks, or ctx is cancelled.
 func (c *RunsClient) WaitTerminal(ctx context.Context, runID string) (terminalOutcome, error) {
+	return c.WatchRun(ctx, runID, nil)
+}
+
+// WatchRun is WaitTerminal with a callback: onEvent fires for every parsed
+// event (including the terminal one) in stream order, letting callers
+// translate the stream (e.g. into session/update notifications) while the
+// wait proceeds.
+func (c *RunsClient) WatchRun(ctx context.Context, runID string, onEvent func(runEvent)) (terminalOutcome, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/v1/runs/"+runID+"/events", nil)
 	if err != nil {
 		return terminalOutcome{}, fmt.Errorf("build events request: %w", err)
@@ -152,6 +176,15 @@ func (c *RunsClient) WaitTerminal(ctx context.Context, runID string) (terminalOu
 	var block []string
 	for {
 		line, err := readSSELine(reader)
+		if errors.Is(err, errSSELineTruncated) {
+			// The whole event containing the oversized line is skipped; the
+			// block boundary is still respected because the line was drained.
+			if c.Logf != nil {
+				c.Logf("run %s: SSE event exceeded %d bytes; event skipped", runID, maxSSELineSize)
+			}
+			block = block[:0]
+			continue
+		}
 		if err != nil {
 			if err == io.EOF {
 				return terminalOutcome{}, fmt.Errorf("event stream ended before a terminal event")
@@ -166,6 +199,9 @@ func (c *RunsClient) WaitTerminal(ctx context.Context, runID string) (terminalOu
 			if typ == "" {
 				continue
 			}
+			if onEvent != nil {
+				onEvent(runEvent{Type: typ, Data: payload})
+			}
 			if typ == eventTypeRunCostLimitReached {
 				out.costLimit = true
 				continue
@@ -175,27 +211,41 @@ func (c *RunsClient) WaitTerminal(ctx context.Context, runID string) (terminalOu
 				out.errText = payloadError(payload)
 				return out, nil
 			}
-			continue // non-terminal event; slice 3 translates these into session/update
+		} else {
+			block = append(block, line)
 		}
-		block = append(block, line)
 	}
 }
 
-// readSSELine reads one '\n'-terminated line (without the delimiter),
-// tolerating arbitrarily long lines by draining them.
+// readSSELine reads one '\n'-terminated line (without the delimiter). A line
+// longer than maxSSELineSize is fully drained (keeping the stream aligned)
+// but reported with errSSELineTruncated so the caller can skip the event it
+// belongs to instead of processing corrupt partial data.
 func readSSELine(r *bufio.Reader) (string, error) {
 	var buf []byte
+	truncated := false
 	for {
 		frag, err := r.ReadSlice('\n')
-		if len(buf)+len(frag) <= maxSSELineSize {
-			buf = append(buf, frag...)
+		if !truncated {
+			if len(buf)+len(frag) > maxSSELineSize {
+				truncated = true
+				buf = buf[:0]
+			} else {
+				buf = append(buf, frag...)
+			}
 		}
 		switch {
 		case err == nil:
+			if truncated {
+				return "", errSSELineTruncated
+			}
 			return string(buf[:len(buf)-1]), nil
 		case err == bufio.ErrBufferFull:
 			continue
-		case err == io.EOF && len(buf) > 0:
+		case err == io.EOF && (len(buf) > 0 || truncated):
+			if truncated {
+				return "", errSSELineTruncated
+			}
 			return string(buf), nil
 		default:
 			return "", err

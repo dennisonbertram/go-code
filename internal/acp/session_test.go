@@ -585,3 +585,119 @@ func TestConcurrentSessionsStayIsolated(t *testing.T) {
 		t.Fatalf("session B stopReason = %q, want end_turn", got[fmt.Sprintf("%d", idB)])
 	}
 }
+
+// readAny reads one protocol line and decodes it generically, so tests can
+// observe session/update notifications as well as responses.
+func (c *scriptedClient) readAny() map[string]any {
+	c.t.Helper()
+	type lineRes struct {
+		line string
+		err  error
+	}
+	ch := make(chan lineRes, 1)
+	go func() {
+		line, err := c.out.ReadString('\n')
+		ch <- lineRes{line, err}
+	}()
+	select {
+	case lr := <-ch:
+		if lr.err != nil {
+			c.t.Fatalf("read: %v", lr.err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal([]byte(strings.TrimRight(lr.line, "\n")), &m); err != nil {
+			c.t.Fatalf("line is not JSON: %q: %v", lr.line, err)
+		}
+		return m
+	case <-time.After(15 * time.Second):
+		c.t.Fatal("timed out waiting for server output")
+		return nil
+	}
+}
+
+// TestSessionPromptStreamsUpdatesInOrder is the slice-3 acceptance test: a
+// scripted client performing session/prompt observes the exact ordered
+// session/update notification stream — agent_message_chunk deltas, a thought
+// chunk, tool_call, tool_call_update with a stable toolCallId — before the
+// session/prompt result arrives.
+func TestSessionPromptStreamsUpdatesInOrder(t *testing.T) {
+	fh := newFakeHarness(t)
+	c := newSessionServer(t, fh, "")
+	defer c.close()
+	initialize(t, c)
+	sid := sessionNew(t, c)
+
+	promptID := c.send("session/prompt", map[string]any{
+		"sessionId": sid,
+		"prompt":    []map[string]any{{"type": "text", "text": "go"}},
+	})
+	waitFor(t, "run to be created", func() bool {
+		fh.mu.Lock()
+		defer fh.mu.Unlock()
+		return len(fh.runs) == 1
+	})
+	run := fh.run("")
+	go func() {
+		run.emit("run.started", "{}")
+		run.emit("assistant.message.delta", `{"step":1,"content":"Hello"}`)
+		run.emit("assistant.message.delta", `{"step":1,"content":", world"}`)
+		run.emit("assistant.thinking.delta", `{"step":1,"content":"hmm"}`)
+		run.emit("tool.call.started", `{"call_id":"call-1","tool":"bash","arguments":"ls"}`)
+		run.emit("tool.call.completed", `{"call_id":"call-1","tool":"bash","output":"file.txt","duration_ms":5}`)
+		run.finish("run.completed", `{"output":"done"}`)
+	}()
+
+	type wantUpdate struct {
+		sessionUpdate string
+		toolCallID    string
+		status        string
+		text          string
+	}
+	want := []wantUpdate{
+		{sessionUpdate: "agent_message_chunk", text: "Hello"},
+		{sessionUpdate: "agent_message_chunk", text: ", world"},
+		{sessionUpdate: "agent_thought_chunk", text: "hmm"},
+		{sessionUpdate: "tool_call", toolCallID: "call-1", status: "in_progress"},
+		{sessionUpdate: "tool_call_update", toolCallID: "call-1", status: "completed"},
+	}
+
+	for i, w := range want {
+		msg := c.readAny()
+		if msg["method"] != "session/update" {
+			t.Fatalf("message %d: method = %v, want session/update (msg: %v)", i, msg["method"], msg)
+		}
+		params, _ := msg["params"].(map[string]any)
+		if params["sessionId"] != sid {
+			t.Fatalf("message %d: sessionId = %v, want %s", i, params["sessionId"], sid)
+		}
+		update, _ := params["update"].(map[string]any)
+		if update["sessionUpdate"] != w.sessionUpdate {
+			t.Fatalf("message %d: sessionUpdate = %v, want %v (update: %v)", i, update["sessionUpdate"], w.sessionUpdate, update)
+		}
+		if w.toolCallID != "" && update["toolCallId"] != w.toolCallID {
+			t.Fatalf("message %d: toolCallId = %v, want %v", i, update["toolCallId"], w.toolCallID)
+		}
+		if w.status != "" && update["status"] != w.status {
+			t.Fatalf("message %d: status = %v, want %v", i, update["status"], w.status)
+		}
+		if w.text != "" {
+			content, _ := update["content"].(map[string]any)
+			if content["text"] != w.text {
+				t.Fatalf("message %d: text = %v, want %q", i, content["text"], w.text)
+			}
+		}
+	}
+
+	// Only after every update has streamed may the prompt result arrive.
+	msg := c.readAny()
+	if msg["method"] != nil {
+		t.Fatalf("expected the prompt response after the updates, got notification: %v", msg)
+	}
+	if fmt.Sprintf("%v", msg["id"]) != fmt.Sprintf("%d", promptID) {
+		t.Fatalf("response id = %v, want %d", msg["id"], promptID)
+	}
+	result, _ := msg["result"].(map[string]any)
+	if result["stopReason"] != "end_turn" {
+		t.Fatalf("stopReason = %v, want end_turn (full msg: %v)", result["stopReason"], msg)
+	}
+}
