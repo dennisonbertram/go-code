@@ -9,7 +9,7 @@ import { Callout } from '@site/src/components/ui';
 This page is the **exit-code contract for headless `harnesscli` usage** — the one-shot streaming mode (`harnesscli -prompt ...`) and the streaming `continue` subcommand. It exists so shell scripts and CI pipelines can branch on a run's outcome via `$?` instead of parsing stdout.
 
 <Callout type="info">
-**Contract status.** Tracking issue: epic #823 (part of the kimi-code parity program #803). The run terminal-event mapping (`0`/`1`/`2`/`6`/`130`) is **implemented and in effect**; the blocked exit `3` is ratified here and lands with slice 3 of the epic — until then a blocked headless run keeps streaming. See the [current vs. contracted behavior](#current-vs-contracted-behavior) table below for the per-outcome status. The single source of truth in code is `cmd/harnesscli/exitcodes.go`.
+**Contract status.** Tracking issue: epic #823 (part of the kimi-code parity program #803). The full run contract (`0`/`1`/`2`/`3`/`6`/`130`) is **implemented and in effect** — terminal-event mapping in slice 2, blocked detection in slice 3. The goal-status mapping below remains reserved for a future goal-scoped headless surface. The single source of truth in code is `cmd/harnesscli/exitcodes.go`.
 </Callout>
 
 The contract adopts [kimi-code](https://github.com/MoonshotAI/kimi-code)'s headless codes where semantics align: kimi's `kimi -p` exits `0` when a goal completes, `3` when it blocks, `6` when it pauses, and non-zero on turn failure. Aligning on the same numbers means scripts written against one CLI keep working against the other.
@@ -72,12 +72,12 @@ A run is **blocked** when it cannot make progress without input a headless calle
 
 There is no dedicated "waiting-for-approval" run event — the approval-required events are the signal, and the run status transitions to `waiting_for_approval`.
 
-Contracted behavior when a blocked signal is observed in one-shot or streaming `continue` mode:
+Behavior when a blocked signal is observed in one-shot or streaming `continue` mode (implemented in epic #823 slice 3):
 
-- **stdin is not a terminal** (piped/redirected, the CI case): the CLI prints the blocked reason and run ID to **stderr**, stops streaming, and exits `3`. The server-side run is left intact — no auto-cancel — so an operator can resume it later with `harnesscli continue <run-id> <prompt>` or by answering via `POST /v1/runs/{id}/input` (questions) or `/approve` / `/deny` (approvals).
+- **stdin is not a terminal** (piped/redirected, the CI case): the CLI prints the blocked reason and run ID to **stderr**, stops streaming, and exits `3`. The server-side run is left intact — no auto-cancel — so an operator can resume it later with `harnesscli continue <run-id> <prompt>` (the resume command is named in the stderr message) or by answering via `POST /v1/runs/{id}/input` (questions) or `/approve` / `/deny` (approvals).
 - **stdin is a terminal**: behavior is unchanged — the stream stays open and no exit-3 shortcut is taken. Interactive answer wiring in the streaming loop is a separate epic's scope; that epic must preserve exit `3` for non-interactive stdin.
 
-The terminal check uses the same `term.IsTerminal` test the `--tui` path already uses (`cmd/harnesscli/main.go:517`).
+The terminal check uses the package's shared injectable `term.IsTerminal`-based stdin double (`stdinIsTerminal`, `cmd/harnesscli/plugins.go:107`), the same style of terminal detection the `--tui` path uses for stdout.
 
 ---
 
@@ -113,7 +113,7 @@ This goal mapping is **documentation-only in this epic**. There is no goal-scope
 
 ## Current vs. contracted behavior
 
-This table is the reviewer-facing diff of process outcomes. Rows marked **implemented** are in effect today; rows marked **changes** land with the remaining implementation slices of epic #823.
+This table records how process outcomes changed over epic #823. All rows are implemented and in effect today.
 
 | Outcome | Pre-epic exit code | Contracted exit code | Status |
 |---|---|---|---|
@@ -122,7 +122,7 @@ This table is the reviewer-facing diff of process outcomes. Rows marked **implem
 | SIGINT/SIGTERM interrupt | `130` | `130` | Implemented (unchanged) |
 | `run.failed` | `0` | `2` | **Implemented** (epic #823 slice 2) — was an unconditional `0` at the old `cmd/harnesscli/main.go:219-220` and `cmd/harnesscli/runctl.go:324-330` paths |
 | `run.cancelled` | `0` | `6` | **Implemented** (epic #823 slice 2) — same former unconditional-`0` paths |
-| Blocked, stdin non-interactive | (streams forever) | `3` | **Changes** (epic #823 slice 3) — today the CLI waits on the SSE stream indefinitely |
+| Blocked, stdin non-interactive | (streams forever) | `3` | **Implemented** (epic #823 slice 3) — was an indefinite wait on the SSE stream |
 
 ### stdout contract is unchanged
 

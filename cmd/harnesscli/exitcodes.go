@@ -43,3 +43,31 @@ func exitCodeForTerminalEvent(et harness.EventType) int {
 		return exitClientError
 	}
 }
+
+// isBlockedEvent reports whether an event signals that the run cannot proceed
+// without input a headless caller will never provide: a question
+// (run.waiting_for_user) or an approval (tool.approval_required /
+// plan.approval_required — there is no dedicated waiting-for-approval run
+// event; these are the signal, with the run status transitioning to
+// waiting_for_approval).
+func isBlockedEvent(et harness.EventType) bool {
+	switch et {
+	case harness.EventRunWaitingForUser, harness.EventToolApprovalRequired, harness.EventPlanApprovalRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+// blockedEventReason describes why a blocked signal stopped a headless run,
+// for the stderr message printed on the exitBlocked path.
+func blockedEventReason(et harness.EventType) string {
+	switch et {
+	case harness.EventRunWaitingForUser:
+		return "waiting for user input"
+	case harness.EventToolApprovalRequired, harness.EventPlanApprovalRequired:
+		return "waiting for approval"
+	default:
+		return "blocked"
+	}
+}

@@ -1,6 +1,5 @@
 # Engineering Log
 
-<<<<<<< HEAD
 ## 2026-07-20 (OS-Service Install for harnessd — Epic #807)
 
 - Shipped `harnesscli service install|uninstall|start|stop|status` for end users: user-level launchd agent on macOS (`~/Library/LaunchAgents/com.gocode.harnessd.plist`, `RunAtLoad`+`KeepAlive`) and `systemd --user` unit on Linux (`~/.config/systemd/user/harnessd.service`, `Restart=on-failure`, `WantedBy=default.target`). Slice 1 (PR #826): install/uninstall + pure unit generators with `--binary`/`--addr`/`--log-dir`/`--dry-run`; addr resolution reuses the daemon's own stack (`HARNESS_ADDR` env or `~/.harness/config.toml`, default `:8080`) exported into the unit environment. Slice 2 (PR #866): lifecycle commands over launchctl/systemctl behind an injectable runner; `status` distinguishes not-installed / installed-not-running / running-healthy / running-unreachable via a `GET /healthz` probe.
@@ -28,6 +27,14 @@
   deliberately, so partial output is not context-worthy.
 - Validation: `go test ./cmd/harnesscli/... -count=1` green (27 packages);
   gofmt/vet clean on touched files.
+
+## 2026-07-20 (Headless Exit Codes — Epic #823, Slice 3)
+
+- A headless run that blocks on input it will never receive no longer streams forever: `processSSEBlock` (`cmd/harnesscli/main.go`) now classifies `run.waiting_for_user`, `tool.approval_required`, and `plan.approval_required` via `isBlockedEvent` (`cmd/harnesscli/exitcodes.go`), and when stdin is non-interactive the stream loop returns a `runBlockedError`. `run()` and streaming `runContinue()` map it to exit 3 (`exitBlocked`) with a stderr message naming the run ID, the reason, and the `harnesscli continue <run-id>` resume command.
+- The server-side run is never auto-cancelled on the blocked path (resumable by design); the blocked event line is still printed to stdout before exit, preserving the every-event-is-printed contract.
+- Terminal detection reuses the package's existing injectable `stdinIsTerminal` double (`cmd/harnesscli/plugins.go:107`) — no new TTY dependency, tests stub it. Interactive stdin behavior is unchanged: blocked signals do not abort the stream (interactive answer wiring remains the ask-user epic's scope, per the epic's cross-epic constraint).
+- TDD: failing-first tests cover all three blocked signals × (non-interactive → exit 3 + stderr content + no cancel POST; simulated TTY → stream continues to the terminal event's code), plus `runContinue()` blocked → 3 and unit tables for `isBlockedEvent`/`blockedEventReason`.
+- Validation: `go test ./cmd/harnesscli/... ./internal/harness/... ./test/e2e/... -count=1` green; gofmt/vet clean.
 
 ## 2026-07-20 (Issue #875 Shell-Mode Test-Seam Coverage Fix)
 

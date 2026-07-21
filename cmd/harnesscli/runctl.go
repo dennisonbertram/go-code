@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -401,6 +402,11 @@ func runContinue(args []string) int {
 	}
 	terminalEvent, err := streamRunEvents(context.Background(), streamHTTPClient, *baseURL, created.RunID, stdout)
 	if err != nil {
+		var blocked *runBlockedError
+		if errors.As(err, &blocked) {
+			reportRunBlocked(created.RunID, blocked.eventType)
+			return exitBlocked
+		}
 		fmt.Fprintf(stderr, "harnesscli continue: stream events: %v\n", err)
 		return exitClientError
 	}
