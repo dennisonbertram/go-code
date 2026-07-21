@@ -367,7 +367,7 @@ func TestSearch_RegressionClearStillWorks(t *testing.T) {
 // and /history does not remove existing commands from the registry.
 func TestSearch_RegressionSearchRegisteredAlongsideBuiltins(t *testing.T) {
 	r := tui.NewCommandRegistry()
-	required := []string{"clear", "context", "export", "help", "keys", "model", "quit", "stats", "subagents", "profiles", "search", "history"}
+	required := []string{"clear", "context", "export", "help", "keys", "model", "quit", "stats", "subagents", "tasks", "profiles", "search", "history"}
 	for _, name := range required {
 		if !r.IsRegistered(name) {
 			t.Errorf("command %q must be registered", name)

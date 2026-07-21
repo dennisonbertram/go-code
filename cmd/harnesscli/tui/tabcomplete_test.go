@@ -97,6 +97,7 @@ func TestRegression_TabCompletionWired(t *testing.T) {
 		{"/cl", "/clear "},
 		{"/mod", "/model "},
 		{"/suba", "/subagents "},
+		{"/tas", "/tasks "},
 		{"/qu", "/quit "},
 		{"/ex", "/export "},
 		{"/st", "/stats "},

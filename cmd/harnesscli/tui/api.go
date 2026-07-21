@@ -116,6 +116,19 @@ type RemoteSubagent struct {
 	Error            string `json:"error,omitempty"`
 }
 
+// RemoteTask is one entry of the GET /v1/tasks union (epic #814): a single
+// piece of background work — bash job, subagent, cron job, or delayed
+// callback — as rendered by the /tasks overlay.
+type RemoteTask struct {
+	ID         string    `json:"id"`
+	Type       string    `json:"type"`
+	Status     string    `json:"status"`
+	Label      string    `json:"label"`
+	StartedAt  time.Time `json:"started_at"`
+	AgeSeconds int64     `json:"age_seconds"`
+	Actions    []string  `json:"actions"`
+}
+
 // startRunCmd returns a tea.Cmd that POSTs a run to the harness and emits
 // RunStartedMsg on success or RunFailedMsg on error.
 // conversationID may be empty for the first message in a new conversation;
@@ -507,6 +520,34 @@ func loadSubagentsCmd(baseURL, apiKey string) tea.Cmd {
 			return SubagentsLoadFailedMsg{Err: err.Error()}
 		}
 		return SubagentsLoadedMsg{Subagents: payload.Subagents}
+	}
+}
+
+// loadTasksCmd fetches GET /v1/tasks for the /tasks overlay (epic #814),
+// returning the unified background-work union as TasksLoadedMsg or a
+// TasksLoadFailedMsg describing the failure.
+func loadTasksCmd(baseURL, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		url := strings.TrimRight(baseURL, "/") + "/v1/tasks"
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, url, nil, apiKey)
+		if err != nil {
+			return TasksLoadFailedMsg{Err: err.Error()}
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return TasksLoadFailedMsg{Err: err.Error()}
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return TasksLoadFailedMsg{Err: fmt.Sprintf("server returned %d", resp.StatusCode)}
+		}
+		var payload struct {
+			Tasks []RemoteTask `json:"tasks"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+			return TasksLoadFailedMsg{Err: err.Error()}
+		}
+		return TasksLoadedMsg{Tasks: payload.Tasks}
 	}
 }
 
