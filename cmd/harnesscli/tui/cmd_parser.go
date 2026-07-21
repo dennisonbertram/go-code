@@ -230,6 +230,12 @@ func builtinCommandEntries() []CommandEntry {
 			Execute:     executeRewindCommand,
 		},
 		{
+			Name:        "fork",
+			Description: "Fork the current session into a new conversation and switch to it",
+			Handler:     func(cmd Command) CommandResult { return CommandResult{Status: CmdOK} },
+			Execute:     executeForkCommand,
+		},
+		{
 			Name:        "new",
 			Description: "Start a new session (resets conversation)",
 			Handler: func(cmd Command) CommandResult {

@@ -353,3 +353,14 @@ type UndoResultMsg struct {
 	Err               string
 	Conflict          bool
 }
+
+// ForkResultMsg carries the outcome of POST /v1/conversations/{id}/fork
+// (epic #816). On success NewID holds the server-minted fork conversation ID
+// and MessageCount the number of copied messages; on failure Err is set and
+// NewID is empty. SrcID always names the conversation that was forked.
+type ForkResultMsg struct {
+	SrcID        string
+	NewID        string
+	MessageCount int
+	Err          string
+}
