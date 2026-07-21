@@ -153,6 +153,7 @@ Type `/` to open the autocomplete dropdown. `Tab` completes to the common prefix
 | `/title [text]` | Set or show the current session's title (`/title clear` removes it). Shown in the status bar and the `/sessions` picker, persisted across restarts |
 | `/init [confirm]` | Generate an `AGENTS.md` for the current workspace via a harness run. If `AGENTS.md` already exists, run `/init confirm` to overwrite it |
 | `/add-dir [path]` | Attach an extra directory to the session so runs can read/work in it. Bare `/add-dir` lists attached directories; `/add-dir remove <path>` detaches one. See [Extra directories](#extra-directories-add-dir) |
+| `/feedback` | Bundle local diagnostics into a zip for bug reports and print its path. See [Feedback bundles](#feedback-bundles-feedback) |
 | `/new` | Start a fresh conversation (resets conversation ID) |
 | `/fork` | Fork the current session into a new conversation with the full history, and switch into the copy (see [Forking a session](#forking-a-session-fork)) |
 | `/search <query>` | Search the current session transcript |
@@ -183,6 +184,16 @@ Type `/` to open the autocomplete dropdown. `Tab` completes to the common prefix
 - Bare `/add-dir` lists the attached directories; `/add-dir remove <path>` detaches one. (`remove` is a subcommand only when followed by a path, so a directory literally named `remove` can still be added.)
 - The list is session-scoped — it is not persisted across restarts.
 - Current limits: the `bash` tool's command sandbox and `glob` still confine to the primary workspace root only; the server validates every entry (absolute path to an existing directory) and rejects the run with HTTP 400 otherwise.
+
+---
+
+## Feedback bundles (`/feedback`)
+
+`/feedback` writes `~/.config/harnesscli/feedback/go-code-feedback-<timestamp>.zip` and prints the path. The bundle is local-only — nothing is uploaded; attach it to a bug report manually. It contains:
+
+- `version.json` — harnesscli version (`unstamped` until version stamping lands), Go version, GOOS/GOARCH, server URL, model, and caveats (e.g. rollouts not configured).
+- `config.json` — the CLI config with secrets scrubbed: every stored `api_keys` value is replaced exactly, then the forensics redaction patterns run over the whole file (also covering keys pasted into command history).
+- `rollouts/<date>/<run>.jsonl` — the newest five rollout files, redacted, when `HARNESS_ROLLOUT_DIR` is set (the same env var `harnessd` uses); otherwise a `rollouts/NOT_PRESENT.txt` marker explains the absence.
 
 ---
 

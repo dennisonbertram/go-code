@@ -347,6 +347,9 @@ Registry (`cmd_parser.go:79-194`): clear, context, export, help, keys, model, qu
 | `/add-dir` (no args) | list attached directories | OK | add_dir_test.go |
 | `/add-dir remove <path>` | detach a directory | OK | add_dir_test.go |
 | `extra_dirs` validation | non-absolute/nonexistent/not-a-dir → HTTP 400 | OK | `validateExtraDirs` (runner.go); `TestStartRunExtraDirsValidation`; http_extra_dirs_test.go |
+| `/feedback` | zip rollouts + redacted config + runtime info; print path | OK | `feedback.go` (`executeFeedbackCommand`); feedback_test.go |
+| `/feedback` redaction | canary secret never survives into the bundle | OK | feedback_internal_test.go (table: sk-, JWT, AWS, conn-string, pasted keys) |
+| `/feedback` (no rollout dir) | bundle notes absence (`rollouts/NOT_PRESENT.txt`) | OK | feedback_internal_test.go |
 | `/search <q>` | search transcript | OK | `model.go:1055-1068`; search_test.go (12+) |
 | `/search` (no args) | usage hint | OK | `model.go:1056-1058`; `TestSearch_BT002_EmptyQueryStatusMessage` |
 | `/history <q>` | search session meta | OK | `model.go:1070-1083`; `TestSearch_BT006_HistorySearchOpensOverlay` |

@@ -240,6 +240,14 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeAddDirCommand,
 		},
 		{
+			Name:        "feedback",
+			Description: "Bundle local diagnostics (rollouts, redacted config, runtime info) into a zip",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeFeedbackCommand,
+		},
+		{
 			Name:        "rewind",
 			Description: "Choose and confirm a destructive session rewind",
 			Handler:     func(cmd Command) CommandResult { return CommandResult{Status: CmdOK} },
