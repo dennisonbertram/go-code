@@ -15,8 +15,10 @@ package main
 import (
 	"context"
 	"log"
+	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 
 	"go-agent-harness/internal/config"
 	"go-agent-harness/internal/harness"
@@ -156,4 +158,35 @@ func (r *configReloader) reload(_ context.Context) (config.ReloadReport, error) 
 	r.runner.ApplyConfig(runnerCfg)
 	r.current = next
 	return report, nil
+}
+
+// awaitServer is the harnessd signal loop (epic #815 slice 4). It blocks
+// until the HTTP server fails (returning that error) or a shutdown signal
+// arrives (SIGINT/SIGTERM, returning nil so the caller proceeds to graceful
+// shutdown). SIGHUP instead invokes reloadFn — the same config reload path
+// as POST /v1/config/reload — and the loop keeps waiting, so repeated
+// SIGHUPs reload again. Reload errors are logged, never fatal. A nil
+// reloadFn means reload is unavailable: SIGHUP is logged and ignored.
+func awaitServer(sig <-chan os.Signal, serverErr <-chan error, reloadFn func(context.Context) (config.ReloadReport, error)) error {
+	for {
+		select {
+		case err := <-serverErr:
+			return err
+		case s := <-sig:
+			if s == syscall.SIGHUP {
+				if reloadFn == nil {
+					log.Printf("SIGHUP received: config reload not available")
+					continue
+				}
+				report, err := reloadFn(context.Background())
+				if err != nil {
+					log.Printf("config reload (SIGHUP) failed: %v", err)
+					continue
+				}
+				log.Printf("config reloaded (SIGHUP): applied=%v restart_required=%v", report.Applied, report.RestartRequired)
+				continue
+			}
+			return nil
+		}
+	}
 }
