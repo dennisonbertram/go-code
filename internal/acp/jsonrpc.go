@@ -71,3 +71,12 @@ type notification struct {
 	Method  string `json:"method"`
 	Params  any    `json:"params,omitempty"`
 }
+
+// clientRequest is the wire shape of a JSON-RPC 2.0 request the server sends
+// to the editor (e.g. session/request_permission): an answer is expected.
+type clientRequest struct {
+	JSONRPC string `json:"jsonrpc"`
+	ID      string `json:"id"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}

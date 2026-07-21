@@ -48,6 +48,8 @@ type fakeHarness struct {
 	runAuths    map[string]string // run id -> Authorization header on POST /v1/runs
 	cancels     []string          // run ids that received POST cancel
 	cancelAuths map[string]string
+	decisions   []string // "runID:approve" / "runID:deny" in arrival order
+	noBroker    bool     // when true, approve/deny answer 501 (no approval broker)
 	nextID      int
 }
 
@@ -123,6 +125,21 @@ func (fh *fakeHarness) handleRunByID(w http.ResponseWriter, r *http.Request) {
 		go run.finish("run.cancelled", `{}`)
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"status":"cancelling"}`)
+	case "approve", "deny":
+		fh.mu.Lock()
+		noBroker := fh.noBroker
+		if !noBroker {
+			fh.decisions = append(fh.decisions, runID+":"+sub)
+		}
+		fh.mu.Unlock()
+		if noBroker {
+			// Mirror internal/server: approve/deny return 501 when no
+			// approval broker is configured.
+			http.Error(w, `{"error":{"code":"not_implemented","message":"approval broker is not configured"}}`, http.StatusNotImplemented)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprintf(w, `{"status":%q}`, sub+"d")
 	default:
 		http.NotFound(w, r)
 	}
@@ -196,4 +213,17 @@ func (fh *fakeHarness) cancelled(id string) bool {
 		}
 	}
 	return false
+}
+
+// decision returns "approve", "deny", or "" depending on what was POSTed for
+// the given run.
+func (fh *fakeHarness) decision(id string) string {
+	fh.mu.Lock()
+	defer fh.mu.Unlock()
+	for _, d := range fh.decisions {
+		if strings.HasPrefix(d, id+":") {
+			return strings.TrimPrefix(d, id+":")
+		}
+	}
+	return ""
 }

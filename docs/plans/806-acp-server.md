@@ -68,6 +68,31 @@ Epic: #806 (parent #803). Branches: `epic/806-acp-server` (slice 1, merged), `ep
 - Scripted client performing `session/prompt` against the fake server observes `agent_message_chunk` notifications in order before the `session/prompt` result arrives.
 - `go test ./internal/acp/... -count=1` green (plus `-race`).
 
+## Slice 4 — permission bridge via session/request_permission (IN IMPLEMENTATION)
+
+### Scope (slice 4)
+
+- In scope:
+  - Client-bound calls: `Server.callClient(ctx, method, params)` — writes a JSON-RPC request to the editor, registers a pending call by id, and routes the client's response (result or error object) back to the waiter; `dispatch` now routes response-shaped messages to pending calls (unknown ids stay logged-and-ignored).
+  - `RunsClient.ApproveRun`/`DenyRun` (POST `/v1/runs/{id}/approve|deny`); `ErrApprovalNotConfigured` sentinel for the server's 501 no-broker response.
+  - `internal/acp/permission.go`: on `tool.approval_required` (payload `call_id`, `tool`, `arguments`, `deadline_at`), issue `session/request_permission` with options `allow-once`/`allow_once` and `reject-once`/`reject_once`; selected allow -> approve POST, selected reject / `cancelled` outcome / client error -> deny POST.
+  - Deadline discipline: the client call carries a `deadline_at`-bounded context; when it passes, the pending call is deregistered and nothing is POSTed (harnessd auto-denies at the deadline). Bridge goroutines are tied to a turn-scoped context so a finished turn can't leave stragglers.
+  - 501 no-broker: surface a `session/update` (`agent_message_chunk`) note instead of hanging until the deadline.
+- Out of scope: plan-approach option bridging (`ApproveWithOption`), `allow_always`/`reject_always` persistence, permission for mid-run user-input requests, docs/e2e (slice 5).
+
+### Test Plan (TDD, slice 4)
+
+- New failing tests:
+  - Units: permission-params shape (option ids/kinds, toolCall fields); outcome parsing table (selected allow/reject, cancelled, garbage).
+  - Server: `callClient` routes a client response to the waiter by id.
+  - Flows over scripted stdio + fake harnessd (new `/approve`/`/deny` routes with a 501 no-broker mode): grant -> approve POST + run completes; reject -> deny POST; `cancelled` outcome -> deny; client error -> deny; deadline expiry -> no POST, prompt still completes, late response ignored; 501 -> `session/update` note, no hang.
+- Existing tests: none modified; slices 1–3 tests must stay green.
+
+### Acceptance (slice 4)
+
+- Scripted run: fake server emits `tool.approval_required` and blocks until `/approve` arrives; the scripted client grants via `session/request_permission`; the run completes (`end_turn`).
+- `go test ./internal/acp/... -count=1` green (plus `-race`).
+
 ## Documentation Contract
 
 - Feature status: slice 1 `implemented` (PR #835); slice 2 `in implementation`.
@@ -91,7 +116,12 @@ Epic: #806 (parent #803). Branches: `epic/806-acp-server` (slice 1, merged), `ep
 - [x] Slice 3: translator + bounded coalescing queue + `WatchRun` + `writeNotification` + prompt wiring.
 - [x] Slice 3: gofmt + go vet clean; `go test ./internal/acp/ -count=1` (+ `-race`, `-count=3`) green; `cmd/harnesscli` green.
 - [x] Slice 3: update engineering log.
-- [ ] Slice 3: push branch `epic/806-acp-server-s3` and open PR (no merge).
+- [x] Slice 3: push branch `epic/806-acp-server-s3` and open PR (no merge) — PR #891.
+- [x] Slice 4: failing tests first (red: `undefined: permissionParams`, `srv.callClient`); id-unquote bug found by `TestCallClientRoutesResponses` hang and fixed with the test as regression.
+- [x] Slice 4: callClient pending registry + response routing, ApproveRun/DenyRun + 501 sentinel, permission bridge with deadline + turn-scoped contexts.
+- [x] Slice 4: gofmt + go vet clean; `go test ./internal/acp/... -count=1` (+ `-race`, repeat) green; `cmd/harnesscli` green.
+- [x] Slice 4: update engineering log.
+- [ ] Slice 4: push branch `epic/806-acp-server-s4` and open PR (no merge).
 
 ## Risks and Mitigations
 

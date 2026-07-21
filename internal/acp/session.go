@@ -184,14 +184,31 @@ func (h *sessionHandlers) handleSessionPrompt(ctx context.Context, params json.R
 	// slow editor can force (deltas coalesce or drop; lifecycle updates win).
 	queue := newUpdateQueue(updateQueueCapacity)
 	writer := startUpdateWriter(queue, h.srv, req.SessionID, h.diag)
-	outcome, err := h.client.WatchRun(ctx, runID, func(ev runEvent) {
+
+	// tool.approval_required events spawn permission bridges that call the
+	// editor and post the decision back. They run on a turn-scoped context
+	// and are awaited before the turn's response so no bridge outlives it.
+	turnCtx, cancelTurn := context.WithCancel(ctx)
+	var bridges sync.WaitGroup
+	outcome, err := h.client.WatchRun(turnCtx, runID, func(ev runEvent) {
+		if ev.Type == "tool.approval_required" {
+			bridges.Add(1)
+			go func() {
+				defer bridges.Done()
+				h.bridgeApproval(turnCtx, req.SessionID, runID, ev, queue)
+			}()
+			return
+		}
 		if update, kind, ok := translateRunEvent(ev); ok {
 			queue.push(update, kind)
 		}
 	})
 	// The terminal event has been seen: no more updates will be produced.
-	// Drain the queue fully before responding — the spec requires all
+	// Unblock any bridges still waiting on the editor, wait for them to exit,
+	// then drain the queue fully before responding — the spec requires all
 	// session/update notifications to arrive before the session/prompt result.
+	cancelTurn()
+	bridges.Wait()
 	queue.close()
 	writer.wait()
 	if dropped := queue.droppedCount(); dropped > 0 {
