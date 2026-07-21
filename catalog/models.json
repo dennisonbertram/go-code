@@ -541,6 +541,7 @@
       "display_name": "Kimi Code Subscription",
       "base_url": "https://api.kimi.com/coding/v1",
       "api_key_optional": true,
+      "token_source_required": true,
       "protocol": "openai_compat",
       "models_from": "kimi"
     },
