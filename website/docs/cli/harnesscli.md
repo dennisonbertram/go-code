@@ -42,7 +42,20 @@ When you invoke `harnesscli` with no recognized subcommand — typically just `-
 
 Terminal events are `run.completed`, `run.failed`, and `run.cancelled`. Every non-terminal event is printed as a single line: `<event_type> <full_event_json>`.
 
-The process exit code reports the run's outcome for scripts and CI — see [Exit Codes](/docs/reference/exit-codes) for the headless exit-code contract (which terminal event maps to which code, plus blocked and interrupted runs).
+### Exit codes
+
+The process exit code reports the run's outcome, so scripts and CI can branch on `$?`:
+
+| Code | Meaning |
+|---|---|
+| `0` | `run.completed` — the run finished successfully |
+| `1` | Client-side error: bad flags, missing prompt, connection/HTTP/stream failure |
+| `2` | `run.failed` — a turn failed server-side |
+| `3` | Blocked — the run needs input it will never get headlessly (`run.waiting_for_user`, `tool.approval_required`, or `plan.approval_required` observed while stdin is non-interactive) |
+| `6` | `run.cancelled` — interrupted but resumable via `harnesscli continue <run-id> <prompt>` |
+| `130` | SIGINT/SIGTERM while streaming |
+
+The `run_id=` / `terminal_event=` stdout lines are unchanged by this mapping. See [Exit Codes](/docs/reference/exit-codes) for the full contract — blocked-signal details, goal-status reservations, and per-command coverage.
 
 ### Flags
 
@@ -106,6 +119,8 @@ The CLI maintains two separate `http.Client` instances:
 ---
 
 ## Run-management subcommands
+
+The non-streaming subcommands below (`list`, `cancel`, `status`, `replay`, `search`) exit `0` on success and `1` on error — the terminal-event exit-code mapping does not apply to them since they never observe an event stream. Streaming `continue` follows the same [exit-code contract](/docs/reference/exit-codes) as the one-shot mode.
 
 ### list / runs
 

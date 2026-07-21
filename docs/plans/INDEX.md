@@ -22,7 +22,7 @@
 - `2026-07-20-codex-subscription-auth-847-impact-map.md` — Cross-surface impact map for Epic #847 Codex subscription routing.
 - `2026-07-20-subscription-auth-foundation-846-plan.md` — Epic #846 subscription-auth foundation: token-source, dynamic request auth, refresh cache, and registry plumbing (in implementation).
 - `2026-07-20-subscription-auth-foundation-846-impact-map.md` — Cross-surface impact map for Epic #846 provider credential plumbing.
-- `823-exit-codes.md` — Epic #823 headless CLI exit-code contract: Slices 1–2 merged (docs contract; terminal-event mapping); Slice 3 (blocked exit 3) in implementation.
+- `823-exit-codes.md` — Epic #823 headless CLI exit-code contract: Slices 1–3 merged (contract, mapping, blocked exit 3); Slice 4 (e2e assertions + per-command docs) in implementation.
 - `821-plugin-system.md` — Epic #821 slice 1: plugin home decision and `plugin.json` manifest v1 contract docs, plus legacy-dir startup warning (in implementation).
 - `813-skill-args.md` — Epic #813 slice 1: quote-aware argument tokenizer (`SplitArgs`) for skill argument paths (in implementation).
 - `807-service-install.md` — Epic #807 slice 1: `harnesscli service install/uninstall` with launchd + systemd generators (in implementation).

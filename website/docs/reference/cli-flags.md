@@ -94,6 +94,8 @@ run_id=<uuid>
 terminal_event=<run.completed|run.failed|run.cancelled>
 ```
 
+**Exit codes (non-TUI streaming):** `0` on `run.completed`, `2` on `run.failed`, `6` on `run.cancelled`, `3` when the run blocks on input while stdin is non-interactive, `1` on client/transport errors, `130` on SIGINT/SIGTERM. Full contract: [Exit Codes](/docs/reference/exit-codes).
+
 ### `list` / `runs` subcommand
 
 Both `list` and `runs` tokens route to `runList`. Calls `GET /v1/runs`.
@@ -135,7 +137,7 @@ Takes a run ID as the first positional argument and the continuation prompt as t
 | Flag | Default | Description |
 |---|---|---|
 | `-base-url` | `http://localhost:8080` | Harness API base URL. |
-| `-no-stream` | `false` | Create the continuation run without streaming events. Prints only `run_id=<id>` and exits. |
+| `-no-stream` | `false` | Create the continuation run without streaming events. Prints only `run_id=<id>` and exits `0` (`1` on error); no terminal event is observed, so the exit-code mapping does not apply. |
 
 Source: `cmd/harnesscli/runctl.go:260-264`
 
