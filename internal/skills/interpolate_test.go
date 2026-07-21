@@ -139,3 +139,40 @@ func TestInterpolate(t *testing.T) {
 		})
 	}
 }
+
+// TestHasArgPlaceholderSkillWrapper pins the delegation contract of the
+// unexported hasArgPlaceholder delegate: it must report exactly what the
+// exported HasArgPlaceholder reports for the skill's body and declared
+// frontmatter arguments. The skill invocation paths route through
+// ExpandTemplate, so this wrapper is only exercised by direct coverage —
+// this test keeps the delegate honest (regression: dropped to 0% coverage
+// after the epic #821/#813 union and tripped the coverage gate).
+func TestHasArgPlaceholderSkillWrapper(t *testing.T) {
+	tests := []struct {
+		name      string
+		body      string
+		arguments []string
+		want      bool
+	}{
+		{name: "references $ARGUMENTS", body: "Do $ARGUMENTS now", want: true},
+		{name: "references positional", body: "First is $0", want: true},
+		{name: "references double-digit positional", body: "Pick $10", want: true},
+		{name: "references declared named argument", body: "Deploy $target", arguments: []string{"target"}, want: true},
+		{name: "declared but unreferenced", body: "No placeholders", arguments: []string{"target"}, want: false},
+		{name: "named prefix is not a match", body: "Deploy $targets", arguments: []string{"target"}, want: false},
+		{name: "undeclared dollar name stays non-argument", body: "Home is $HOME", want: false},
+		{name: "empty body and no arguments", body: "", want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			skill := &Skill{Body: tt.body, Arguments: tt.arguments}
+			if got := hasArgPlaceholder(skill); got != tt.want {
+				t.Errorf("hasArgPlaceholder() = %t, want %t", got, tt.want)
+			}
+			if got, exported := hasArgPlaceholder(skill), HasArgPlaceholder(tt.body, tt.arguments); got != exported {
+				t.Errorf("hasArgPlaceholder() = %t, HasArgPlaceholder() = %t; delegate mismatch", got, exported)
+			}
+		})
+	}
+}
