@@ -11,6 +11,7 @@ Command Registry - 200x50
 /dashboard — View and control all runs
 /doctor — Show local harness diagnostic commands
 /export — Export conversation to markdown
+/feedback — Bundle local diagnostics (rollouts, redacted config, runtime info) into a zip
 /fork — Fork the current session into a new conversation and switch to it
 /help — Show help dialog
 /history — Search across stored session metadata

@@ -1,6 +1,59 @@
 # Plan: quality-of-life commands — epic #822 slices
 
-Epic: #822. Parent: #803. Slice 1 branch: `epic/822-qol-commands` (merged, PR #842). Slice 2 branch: `epic/822-qol-commands-s2` (merged, PR #863). Slice 3 branch: `epic/822-qol-commands-s3`.
+Epic: #822. Parent: #803. Slice 1 branch: `epic/822-qol-commands` (merged, PR #842). Slice 2 branch: `epic/822-qol-commands-s2` (merged, PR #863). Slice 3 branch: `epic/822-qol-commands-s3` (merged, PR #894). Slice 4 branch: `epic/822-qol-commands-s4`.
+
+---
+
+# Slice 4: /feedback — bundle local diagnostics into a zip
+
+## Context
+
+- Problem: bug reports lack a one-command way to gather diagnostics (rollouts, config, runtime info).
+- User impact: `/feedback` writes `<config-dir>/feedback/go-code-feedback-<timestamp>.zip` and prints the path; the user attaches it manually.
+- Constraints: local-only (no upload/telemetry); no secrets in the bundle (canary-tested); strict TDD.
+
+## Decided shape
+
+- New `cmd/harnesscli/tui/feedback.go`: `executeFeedbackCommand` + pure builder `buildFeedbackBundle(outPath, feedbackInput)`.
+- Bundle members:
+  - `version.json` — `harnesscli_version` (slice 5 stamp when it exists; `"unstamped"` today), `go_version` (`runtime.Version()`), `goos`, `goarch`, `base_url`, `model`, `generated_at`, `notes` (e.g. rollout-dir absence).
+  - `config.json` — the persistent CLI config (`harnessconfig.Load()`), redacted two ways: (1) exact-string replacement of every stored `api_keys` value (format-agnostic guarantee), then (2) `internal/forensics/redaction` pattern pass (catches secrets pasted into history).
+  - `rollouts/<date>/<run>.jsonl` — newest 5 `.jsonl` files (by modtime) from the rollout dir, each run through the redactor; `rollouts/NOT_PRESENT.txt` marker + note when the rollout dir is unset/missing/empty.
+- Rollout dir resolution: `HARNESS_ROLLOUT_DIR` env (the same wiring harnessd uses, `cmd/harnessd/main.go:429`); unset → absence note (per epic fallback).
+- Output: `<defaultSessionConfigDir()>/feedback/go-code-feedback-<yyyymmdd-HHMMSS>.zip`; status message reports the path (pattern after `executeExportCommand`).
+
+## Documentation Contract
+
+- Feature status: `implemented`
+- Public docs affected: `website/docs/cli/tui.md`, `docs/ux-paths.md`
+- Spec docs to update before code: none (epic #822 body is the contract)
+- Implementation notes to add after code: none required
+
+## Test Plan (TDD)
+
+- New failing tests first:
+  - `feedback_internal_test.go` (package tui): bundle members against a temp rollout dir (newest-5 cap, paths under `rollouts/`); redaction canary table (`sk-…` in api_keys value AND pasted into history, JWT, AWS `AKIA…`, postgres connection string, bearer token, short non-pattern key covered by exact-value replace); rollout content redaction canary; unset/missing rollout dir → `NOT_PRESENT.txt` + note, no error.
+  - `feedback_test.go` (package tui_test): `/feedback` writes the zip under `<HOME>/.config/harnesscli/feedback/`, prints the path, canary key absent from the bundled config; works with no rollout dir; registry + slash-complete; `TestTUI364_RegistryCompleteness` += `feedback`.
+- Regression: none beyond the above (additive change).
+
+## Cross-Surface Impact Map
+
+- None required: reads local files only; no run-request schema, server routes, or provider/model flows touched.
+
+## Implementation Checklist
+
+- [x] Acceptance criteria in tests (zip exists with JSONL + redacted config; canary secret never survives).
+- [x] Write failing tests first.
+- [x] Implement minimal code changes.
+- [x] Update docs (`tui.md`, `ux-paths.md`, plan).
+- [x] Run `go test ./cmd/harnesscli/... -count=1`; gofmt + go vet clean.
+- [ ] Push branch, open PR (no merge).
+
+## Risks and Mitigations
+
+- Risk: a stored API key in a format the regexes miss → mitigated by exact-string replacement of every `api_keys` value before the pattern pass (canary-tested).
+- Risk: tests touching the developer's real `~/.config/harnesscli` → every test sets `t.Setenv("HOME", t.TempDir())`.
+- Risk: huge rollout files bloat the zip → capped at newest 5 files.
 
 ---
 
