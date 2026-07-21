@@ -1,10 +1,79 @@
-# Plan: shell mode — epic #811 (slices 1-3)
+# Plan: shell mode — epic #811 (slices 1-4)
 
 Parent epic: #811 (parent tracking: #803).
 
+## Slice 4: Ctrl+B background handoff for running shell commands
+
+Status: `in implementation` (building on merged slices 1-3).
+
+### Context
+
+- Problem: a long shell-mode command (`!sleep 60`) blocks the foreground card
+  until it exits or is killed; there is no way to detach it and keep chatting.
+- User impact: `!sleep 5 && echo done`, Ctrl+B, keep typing; ~5s later a
+  completion card appears with `done` and exit 0.
+- Constraints: the TUI must stay responsive; the command is NOT killed; exactly
+  one completion notice per command; no `/tasks` panel (separate epic).
+
+### Scope
+
+- In scope:
+  - `cmd/harnesscli/tui/keys.go` — `Background` binding (ctrl+b), help entries.
+  - `cmd/harnesscli/tui/shellexec.go` — `detach()`: the pump stops emitting
+    live deltas and only buffers output; the terminal done message is emitted
+    as before (exit code + bounded output tail).
+  - `cmd/harnesscli/tui/model.go` — Ctrl+B arm active only while a shell
+    command is running (no-op otherwise); on detach, collapse the live card to
+    a one-line "backgrounded" note and clear `shellRunningID` (Esc/Ctrl-C no
+    longer target it); the single outstanding poll stays alive off the user's
+    interaction path and delivers the done message; on done, the backgrounded
+    line is replaced in place by the completion card (exit code + output tail)
+    via the existing `handleToolResult`/`handleToolError` pipeline; detached
+    results feed the slice-3 context block like foreground ones.
+- Out of scope: killing/listing backgrounded commands (`/tasks` panel epic),
+  persisted shell history (slice 5).
+
+### Design notes
+
+- Detach rendering: same callID card is replaced with a dim one-line
+  `shell(<command> — backgrounded (ctrl+b))` collapsed view; at done the same
+  callID is finalized, so the note is replaced in place by the completion
+  card — exactly one notice, zero shared-component changes.
+- Poll-chain safety: the output handler always re-issues the poll while the
+  executor exists (even for detached deltas that raced the detach), so the
+  done message can never be orphaned.
+- New test seam: `ShellExecCount()` (mirrors `ShellCommandRunning`).
+
+### Test Plan (TDD)
+
+- Executor: detach stops deltas but the done message carries the full bounded
+  output (`shellexec_internal_test.go`).
+- Model (`shellmode_background_test.go`): Ctrl+B detaches (command completes,
+  not killed; input usable immediately; card shows backgrounded line);
+  completion posts exactly one card with exit 0 + output; failed background
+  commands show `exit status N`; Ctrl+B idle is a no-op; Esc after detach does
+  not kill; completed background output feeds the next prompt's context block.
+- Regression: full `./cmd/harnesscli/...` suite green.
+
+### Cross-Surface Impact Map
+
+- Config: None. Server API: None.
+- TUI state: `shellDetached map[string]bool` + `detached atomic.Bool` on the
+  executor; `shellRunningID` cleared at detach.
+
+### Implementation Checklist (slice 4)
+
+- [x] Slices 1-3 merged: input state; local execution; context injection.
+- [x] Write failing detach + background tests first; watch them fail.
+- [x] shellexec.go detach (stop deltas, buffer to done).
+- [x] keys.go Ctrl+B binding + help; model wiring + backgrounded line + notice.
+- [x] `go test ./cmd/harnesscli/... -count=1` green; gofmt + go vet clean.
+- [x] Engineering-log entry; plan/index maintenance.
+- [ ] Commit, push `epic/811-shell-mode-s4`, open PR (do not merge).
+
 ## Slice 3: inject shell command output into next prompt context
 
-Status: `in implementation` (building on merged slices 1-2).
+Status: `implemented` (merged to main via PR #879).
 
 ### Context
 

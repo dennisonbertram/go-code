@@ -75,6 +75,10 @@ type shellExec struct {
 	// interrupted records that kill() — not a failure or timeout — ended the
 	// command. Read by the pump when composing the done message.
 	interrupted atomic.Bool
+	// detached records that the command was backgrounded (Ctrl+B, epic #811
+	// slice 4): the pump stops emitting live deltas and only buffers output
+	// for the terminal done message.
+	detached atomic.Bool
 }
 
 // startShellExec launches `sh -c command` in the background. The process runs
@@ -117,6 +121,13 @@ func (ex *shellExec) kill() {
 	ex.cancel()
 }
 
+// detach backgrounds the command: the pump stops emitting live deltas but
+// keeps buffering output, so the done message still carries the bounded final
+// output. The command itself is not touched — it runs to completion.
+func (ex *shellExec) detach() {
+	ex.detached.Store(true)
+}
+
 // pump reads the combined output until EOF, waits for the process, and emits
 // the terminal done message. It runs on its own goroutine for the lifetime of
 // the process.
@@ -129,7 +140,7 @@ func (ex *shellExec) pump(cmd *exec.Cmd, r io.Reader, ctx context.Context, timeo
 		if n > 0 {
 			chunk := readBuf[:n]
 			buf.Write(chunk)
-			if streamed < shellExecMaxStreamBytes {
+			if !ex.detached.Load() && streamed < shellExecMaxStreamBytes {
 				select {
 				case ex.ch <- shellExecOutputMsg{CallID: ex.callID, Chunk: string(chunk)}:
 					streamed += n

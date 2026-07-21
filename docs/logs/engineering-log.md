@@ -81,6 +81,24 @@
 - Strict TDD: `steer_echo_test.go` — immediate echo before any SSE event, confirmation dedupes to exactly one marker/entry (no longer pending), external steer appends a second marker, consumed dedupe treats a second identical payload as external, and 409/429 end-to-end (cmd driven through Update) removes echo + entry with the failure status. Two tests failed pre-implementation; the others pin invariants that held throughout.
 - Validation: `go test ./cmd/harnesscli/... -count=1` all ok; acceptance `go test ./cmd/harnesscli/tui/ -run Steer` ok; `go test ./internal/server/ ./internal/harness/ -count=1` ok; gofmt/vet clean.
 
+## 2026-07-21 (Shell Mode Slice 4 — Epic #811)
+
+- Ctrl+B backgrounds a running shell-mode command: the pump stops emitting
+  live deltas (`detach()` on the executor) but keeps buffering output; the
+  card collapses in place to a one-line `shell(<command> — backgrounded
+  (ctrl+b))` note; `shellRunningID` clears so Esc/Ctrl-C no longer target it.
+- Poll-chain safety: the output handler always re-issues the executor poll
+  (even for deltas that raced the detach), so the done message is never
+  orphaned; at done, the note is replaced in place by the completion card
+  (exit code + bounded output tail) via the existing handleToolResult/Error
+  pipeline — exactly one notice. Background completions feed the slice-3
+  context block like foreground ones.
+- Ctrl+B with nothing running is an explicit no-op. New test seam:
+  `ShellExecCount()`. No shared-component changes; no `/tasks` panel (separate
+  epic).
+- Validation: `go test ./cmd/harnesscli/... -count=1` green (29 packages);
+  gofmt/vet clean on touched files.
+
 ## 2026-07-21 (ACP Server Mode — Epic #806, Slice 3)
 
 - Prompt turns now stream live output to the editor: `assistant.message.delta` -> `agent_message_chunk`, `assistant.thinking.delta` -> `agent_thought_chunk` (payload field `content`), `tool.call.started` -> `tool_call` (`status: in_progress`, `title` = tool name, `kind` via a tool-name table), `tool.call.completed` -> `tool_call_update` (`completed`, or `failed` when the payload carries `error`; output included as content). `toolCallId` is the harness `call_id`, stable across start/complete.
