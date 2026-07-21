@@ -138,4 +138,43 @@ Epic: #812 (parent #803).
 - [x] `node --check` the JS; gofmt/go vet clean.
 - [x] Run touched-package tests.
 - [x] Seeded-daemon e2e smoke (HARNESS_RUN_DB + seeded key/runs; curl list/detail; confirm new assets served) + DOM-stubbed render smoke (15/15).
-- [x] Commit, push `epic/812-session-visualizer-s3`, open PR against repo.
+- [x] Commit, push `epic/812-session-visualizer-s3`, open PR against repo. (Merged, PR #889.)
+
+---
+
+## Slice 4 (this branch): `feat(server): event timeline view rendered from the run event stream`
+
+### Context
+
+- Problem: run detail shows metadata + summary but not *what happened* during the run.
+- User impact: chronological, live-updating timeline of canonical events per run.
+- Constraints: no new endpoints; native `EventSource` cannot set headers → fetch-based SSE reader with the Bearer header; reconnect with `Last-Event-ID`; no duplicates on resume.
+- Contract facts verified in code:
+  - `GET /v1/runs/{id}/events` (`handleRunEvents`, http_runs.go:833): `runner.Subscribe` → replay history then live channel; frames `id: <runID>:<seq>` / `retry: 3000` / `event: <type>` / `data: <full harness.Event JSON {id,run_id,type,timestamp,payload}>`; `: ping` comment keepalives; server closes after the terminal event (`run.completed|failed|cancelled`, events.go:472); in-range `Last-Event-ID` skips seen seqs, unparseable/out-of-range falls back to full replay; runner in-memory only → 404 for post-restart historical runs (UI note, same as summary).
+  - Payloads: run.started `{prompt,tenant_id?}`; run.completed `{output,usage_totals,cost_totals}`; run.failed `{error,...}`; llm.turn.requested `{step}`; llm.turn.completed `{step,tool_calls,total_duration_ms,ttft_ms,provider}`; assistant.message `{content}`; assistant.message.delta `{step,content}`; tool.call.started `{call_id,tool,arguments}`; tool.call.completed `{call_id,tool,output,duration_ms}`; run.cost_limit_reached `{step,max_cost_usd,cumulative_cost_usd}`; usage/cost totals JSON: `prompt_tokens_total,completion_tokens_total,total_tokens / cost_usd_total,cost_status`.
+
+### Scope
+
+- In scope:
+  - `app.js`: `SSEClient` (fetch reader, frame parser, seq tracking, `Last-Event-ID` resume with backoff, dedupe by seq, abort on route change); timeline renderers — lifecycle markers (`run.*`), collapsible tool.call started/completed pairs (keyed by `call_id`), `llm.turn.*` rows, assistant bubbles (delta-append + final `assistant.message`), `run.cost_limit_reached` highlight, generic JSON fallback for unknown types; seq `#n` badges per row; auto-scroll with pause-on-scroll-up; replaces the slice-3 "timeline arrives later" note in the detail view.
+  - `style.css`: timeline styles.
+  - Go contract test: mid-flight connect → replayed history prefix in seq order, then live continuation, strictly increasing `runID:seq` ids, closes after terminal (the one gap: Last-Event-ID skip ×3, SSE framing, keepalive, and e2e from-start streaming are already covered — do not duplicate).
+- Out of scope: slices 5–6 (search, ops doc); store-backed replay for post-restart runs (server-side feature, not this epic); any endpoint change.
+
+### Test Plan (TDD)
+
+- Go: new httptest `TestRunEvents_HistoryThenLiveOrdering` (signaling provider: block in `Complete` until gate closes; connect after provider entry ⇒ first events are replayed history at seq 0..k, then live continuation to terminal, ids strictly increasing). Red step: fails to compile/pass before… — this is a characterization test of existing server behavior; expected to pass immediately, run first to pin the contract before the JS depends on it.
+- JS: extend the node DOM/fetch harness with a scripted SSE byte stream (history frames + live frames + a reconnect leg asserting the `Last-Event-ID` header and no duplicate rows) and timeline DOM assertions — run BEFORE implementing (red: missing timeline container/renderers), then implement to green.
+- Existing tests to update: none.
+- Regression: `go test ./internal/server/... -count=1`.
+
+### Implementation Checklist
+
+- [x] Verify event contract + payload shapes in code.
+- [x] Write Go contract test; run (pins existing behavior).
+- [x] Extend node harness with timeline checks; watch red.
+- [x] Implement `app.js` timeline + `style.css`.
+- [x] `node --check`; harness green; gofmt/go vet clean.
+- [x] `go test ./internal/server/... -count=1`.
+- [x] Real-daemon e2e: run against a fake provider; curl SSE (history→live), confirm timeline assets served.
+- [x] Commit, push `epic/812-session-visualizer-s4`, open PR against repo. (PR #915; full regression suite result reported in PR body comments/notes.)
