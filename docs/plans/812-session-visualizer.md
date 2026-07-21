@@ -136,6 +136,6 @@ Epic: #812 (parent #803).
 - [x] Add guard test; run before JS rewrite.
 - [x] Rewrite `app.js` (routing, list, detail, filters, states); update `index.html` crumbs; extend `style.css`.
 - [x] `node --check` the JS; gofmt/go vet clean.
-- [ ] Run touched-package tests.
+- [x] Run touched-package tests.
 - [x] Seeded-daemon e2e smoke (HARNESS_RUN_DB + seeded key/runs; curl list/detail; confirm new assets served) + DOM-stubbed render smoke (15/15).
-- [ ] Commit, push `epic/812-session-visualizer-s3`, open PR against repo.
+- [x] Commit, push `epic/812-session-visualizer-s3`, open PR against repo.
