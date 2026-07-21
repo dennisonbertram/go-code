@@ -39,12 +39,10 @@ import (
 	"go-agent-harness/internal/skills"
 	"go-agent-harness/internal/skills/packs"
 	istore "go-agent-harness/internal/store"
-	"go-agent-harness/internal/store/s3backup"
 	"go-agent-harness/internal/systemprompt"
 	"go-agent-harness/internal/watcher"
 	"go-agent-harness/internal/workflows"
 	"go-agent-harness/internal/workingmemory"
-	conclusionwatcher "go-agent-harness/plugins/conclusion-watcher"
 )
 
 // callbackRunStarter is a lazy adapter that bridges the CallbackManager's
@@ -327,34 +325,27 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	harnessProfilesDir := filepath.Join(harnessConfigDir, "profiles")
 	harnessUserConfig := filepath.Join(harnessConfigDir, "config.toml")
 	harnessProjectConfig := filepath.Join(workspace, ".harness", "config.toml")
-	harnessCfg, cfgErr := config.Load(config.LoadOptions{
+	loadOpts := config.LoadOptions{
 		UserConfigPath:    harnessUserConfig,
 		ProjectConfigPath: harnessProjectConfig,
 		ProfilesDir:       harnessProfilesDir,
 		Getenv:            getenv,
-	})
-	if cfgErr != nil {
-		return fmt.Errorf("load config: %w", cfgErr)
 	}
-	harnessCfg = harnessCfg.Resolve()
 	startupProfile, err := loadStartupProfile(profileName, filepath.Join(workspace, ".harness", "profiles"), harnessProfilesDir)
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
-	harnessCfg = applyProfileDefaults(harnessCfg, startupProfile, getenv)
+	harnessCfg, cfgErr := loadHarnessConfig(loadOpts, startupProfile, getenv)
+	if cfgErr != nil {
+		return fmt.Errorf("load config: %w", cfgErr)
+	}
 
 	// Use the resolved config values. HARNESS_MODEL, HARNESS_ADDR,
 	// HARNESS_MAX_STEPS, and HARNESS_MAX_COST_PER_RUN_USD env vars are
 	// already applied by the config stack at layer 5 — backward-compatible.
+	// The MaxSteps 0→8 daemon default was applied inside loadHarnessConfig.
 	model := harnessCfg.Model
 	addr := harnessCfg.Addr
-	maxSteps := harnessCfg.MaxSteps
-	// When maxSteps is 0 from config (unlimited), preserve the old default of 8
-	// unless the user has explicitly set HARNESS_MAX_STEPS.
-	if maxSteps == 0 && getenv("HARNESS_MAX_STEPS") == "" {
-		maxSteps = 8
-	}
-	harnessCfg.MaxSteps = maxSteps
 
 	defaultSystemPrompt := "You are a practical coding assistant. Prefer using tools for file inspection and tests when needed."
 	if startupProfile != nil {
@@ -792,78 +783,59 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	if rolloutDir != "" {
 		log.Printf("rollout recording enabled: %s", rolloutDir)
 	}
-	runnerCfg := buildRunnerConfig(harnessCfg, runnerConfigOptions{
-		DefaultProviderName: func() string {
-			name := strings.TrimSpace(getenv("HARNESS_PROVIDER"))
-			if name == "fake" {
-				return ""
-			}
-			return name
-		}(),
-		DefaultSystemPrompt:  systemPrompt,
-		DefaultAgentIntent:   defaultAgentIntent,
-		AskUserTimeout:       time.Duration(askUserTimeoutSeconds) * time.Second,
-		AskUserBroker:        askUserBroker,
-		ApprovalBroker:       approvalBroker,
-		MemoryManager:        memoryManager,
-		WorkingMemoryStore:   workingMemoryStore,
-		PromptEngine:         promptEngine,
-		ToolApprovalMode:     approvalMode,
-		ProviderRegistry:     providerRegistry,
-		ConversationStore:    convStore,
-		Store:                runStore,
-		Logger:               &stdLogger{},
-		Activations:          activations,
-		GlobalMCPRegistry:    mcpRegistry,
-		GlobalMCPServerNames: mcpManager.ListServers(),
-		RoleModels: harness.RoleModels{
-			Primary:    strings.TrimSpace(getenv("HARNESS_ROLE_MODEL_PRIMARY")),
-			Summarizer: strings.TrimSpace(getenv("HARNESS_ROLE_MODEL_SUMMARIZER")),
+	// assemblyDeps captures the long-lived wiring dependencies for building a
+	// complete RunnerConfig. Startup uses them now; the config reloader
+	// (POST /v1/config/reload, epic #815) reuses them to rebuild an identical
+	// config shape on every reload.
+	assemblyDeps := runnerConfigAssemblyDeps{
+		opts: runnerConfigOptions{
+			DefaultProviderName: func() string {
+				name := strings.TrimSpace(getenv("HARNESS_PROVIDER"))
+				if name == "fake" {
+					return ""
+				}
+				return name
+			}(),
+			DefaultSystemPrompt:  systemPrompt,
+			DefaultAgentIntent:   defaultAgentIntent,
+			AskUserTimeout:       time.Duration(askUserTimeoutSeconds) * time.Second,
+			AskUserBroker:        askUserBroker,
+			ApprovalBroker:       approvalBroker,
+			MemoryManager:        memoryManager,
+			WorkingMemoryStore:   workingMemoryStore,
+			PromptEngine:         promptEngine,
+			ToolApprovalMode:     approvalMode,
+			ProviderRegistry:     providerRegistry,
+			ConversationStore:    convStore,
+			Store:                runStore,
+			Logger:               &stdLogger{},
+			Activations:          activations,
+			GlobalMCPRegistry:    mcpRegistry,
+			GlobalMCPServerNames: mcpManager.ListServers(),
+			RoleModels: harness.RoleModels{
+				Primary:    strings.TrimSpace(getenv("HARNESS_ROLE_MODEL_PRIMARY")),
+				Summarizer: strings.TrimSpace(getenv("HARNESS_ROLE_MODEL_SUMMARIZER")),
+			},
+			RolloutDirOverride:  rolloutDir,
+			Workspace:           workspace,
+			WorktreeRootDir:     subagentWorktreeRoot,
+			BaseRegistryOptions: baseRegistryOptions,
 		},
-		RolloutDirOverride:  rolloutDir,
-		Workspace:           workspace,
-		WorktreeRootDir:     subagentWorktreeRoot,
-		BaseRegistryOptions: baseRegistryOptions,
-	})
-
-	// Persist per-run profile history so get_efficiency_report has data to
-	// aggregate. Nil when the store failed to open (feature degrades gracefully).
-	runnerCfg.ProfileRunStore = profileWriteStore
-
-	// S3 backup: wire uploader when all required env vars are present.
-	if s3cfg, ok := s3backup.ConfigFromEnv(getenv); ok {
-		runnerCfg.S3Uploader = s3backup.NewUploader(s3cfg)
-		log.Printf("s3 backup enabled: bucket=%s prefix=%s region=%s", s3cfg.Bucket, s3cfg.KeyPrefix, s3cfg.Region)
-	} else {
-		runnerCfg.S3Uploader = s3backup.NewNoOpUploader()
+		profileRunStore: profileWriteStore,
+		getenv:          getenv,
+		workspace:       workspace,
+		home:            home,
+		globalDir:       globalDir,
 	}
+	runnerCfg, hooksSummary := assembleRunnerConfig(harnessCfg, assemblyDeps)
 
-	// Conclusion watcher plugin
-	if harnessCfg.ConclusionWatcher.Enabled {
-		wcfg := conclusionwatcher.WatcherConfig{
-			Mode: conclusionwatcher.InterventionMode(harnessCfg.ConclusionWatcher.InterventionMode),
-		}
-		if harnessCfg.ConclusionWatcher.EvaluatorEnabled {
-			cwAPIKey := harnessCfg.ConclusionWatcher.EvaluatorAPIKey
-			if cwAPIKey == "" {
-				cwAPIKey = getenv("OPENAI_API_KEY")
-			}
-			eval := conclusionwatcher.NewOpenAIEvaluator(cwAPIKey)
-			if harnessCfg.ConclusionWatcher.EvaluatorModel != "" {
-				eval.Model = harnessCfg.ConclusionWatcher.EvaluatorModel
-			}
-			wcfg.Evaluator = eval
-		}
-		cw := conclusionwatcher.New(wcfg)
-		cw.Register(&runnerCfg)
-	}
-
-	// Config-driven lifecycle hooks (epic #737): load hook files trust-aware
-	// and append adapters to the existing hook slices. Runs AFTER compiled-in
-	// plugins so plugin hooks keep their leading slice position.
-	hooksSummary := registerConfigDrivenHooks(harnessCfg, workspace, home, &runnerCfg)
-	pluginRoot := filepath.Join(globalDir, "plugins")
-	registerTrustedPluginHooks(pluginRoot, plugins.NewStateStore(filepath.Join(pluginRoot, "state.json")), &runnerCfg)
+	// Config reloader (epic #815): re-runs the startup load sequence, diffs
+	// against the last-known-good config, reassembles the runner config, and
+	// applies it for subsequent runs. Bound to the runner inside
+	// buildHTTPRuntime and served via POST /v1/config/reload.
+	configReloader := newConfigReloader(func() (config.Config, error) {
+		return loadHarnessConfig(loadOpts, startupProfile, getenv)
+	}, harnessCfg, assemblyDeps)
 
 	subagentConfigTOML, err := config.WorkspaceRunnerConfigFromConfig(harnessCfg).ToTOML()
 	if err != nil {
@@ -929,6 +901,7 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		workspace:            workspace,
 		provider:             provider,
 		runnerCfg:            runnerCfg,
+		configReloader:       configReloader,
 		checkpointService:    checkpointService,
 		workflowDefinitions:  workflowDefinitions,
 		workflowStore:        workflowStore,

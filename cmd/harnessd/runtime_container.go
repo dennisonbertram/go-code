@@ -62,6 +62,7 @@ type httpRuntimeOptions struct {
 	workspace            string
 	provider             harness.Provider
 	runnerCfg            harness.RunnerConfig
+	configReloader       *configReloader
 	checkpointService    *checkpoints.Service
 	workflowDefinitions  []workflows.Definition
 	workflowStore        workflows.Store
@@ -264,6 +265,10 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		opts.msgSummarizer.mu.Unlock()
 	}
 
+	if opts.configReloader != nil {
+		opts.configReloader.bindRunner(runner)
+	}
+
 	mainHandler := server.NewWithOptions(buildServerOptions(serverBootstrapOptions{
 		runner:           runner,
 		modelCatalog:     opts.modelCatalog,
@@ -286,6 +291,7 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 		hooksSummary:     opts.hooksSummary,
 		callbackMgr:      opts.callbackMgr,
 		jobTracker:       opts.jobTracker,
+		configReloader:   opts.configReloader,
 	}))
 
 	// Mount the MCP server at /mcp so external MCP clients can drive the harness.
