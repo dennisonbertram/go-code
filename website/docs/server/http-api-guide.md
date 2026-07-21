@@ -238,6 +238,7 @@ Fill in the fields below and copy the generated JSON body or curl command. The b
 | `model` | `string` | Model ID, e.g. `"gpt-4.1"`, `"claude-sonnet"`. Falls back to server default (`gpt-4.1-mini`). |
 | `provider_name` | `string` | Explicit provider override, e.g. `"openai"`, `"anthropic"`. When omitted, the provider is resolved from the model name. |
 | `workspace_type` | `string` | One of `""` (server default), `"local"`, `"worktree"`, `"container"`, `"vm"`. Unknown values are rejected. |
+| `extra_dirs` | `[]string` | Additional absolute directory roots the run may read/work in beyond the workspace root (TUI `/add-dir`). Each entry must be an absolute path to an existing directory; violations are rejected with HTTP 400. Applies to file-tool path confinement only — the bash sandbox and `glob` still confine to the primary workspace root. |
 | `system_prompt` | `string` | Overrides the runner's default system prompt for this run. |
 | `conversation_id` | `string` | Pin the run to an existing conversation so the agent has prior context. |
 

@@ -609,6 +609,7 @@ func TestBuildCommandRegistry_SlashCompleteShowsCommands(t *testing.T) {
 	// so the first visible window shows the 7 alphabetically-earliest commands
 	// in the merged command set.
 	wantVisible := []string{
+		"add-dir",
 		"attach",
 		"cancel",
 		"clear",

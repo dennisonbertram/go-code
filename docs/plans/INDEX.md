@@ -5,7 +5,7 @@
 - `2026-07-19-issue-818-clipboard-image-plan.md` — Epic #818 slice 1: read images from the system clipboard into a temp file (in implementation).
 - `2026-07-19-issue-818-clipboard-image-impact-map.md` — One-page provider/model impact map for epic #818 slice 1.
 - `810-theme-system.md` — Theme system epic #810, slice 1: token schema + JSON loader with base-palette fallback (in implementation).
-- `822-qol-commands.md` — Epic #822 plan. Slice 1 (`/title`, merged PR #842); slice 2 (`/init` AGENTS.md generation, in implementation).
+- `822-qol-commands.md` — Epic #822 plan. Slice 1 (`/title`, merged PR #842); slice 2 (`/init`, merged PR #863); slice 3 (`/add-dir` extra workspace roots, in implementation).
 
 - `2026-07-20-kimi-subscription-auth-848-plan.md` — Epic #848 Kimi Code subscription auth, endpoint spike, token import, provider wiring, and CLI/TUI lifecycle (in implementation).
 - `2026-07-20-kimi-subscription-auth-848-impact-map.md` — Cross-surface impact map for Epic #848 Kimi subscription authentication.

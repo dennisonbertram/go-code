@@ -343,6 +343,10 @@ Registry (`cmd_parser.go:79-194`): clear, context, export, help, keys, model, qu
 | `/init` (AGENTS.md exists) | refuse overwrite; hint `/init confirm`; file untouched | OK | init_agents_test.go |
 | `/init confirm` | overwrite existing AGENTS.md | OK | init_agents_test.go |
 | `/init` (run active) | refuse; no write on the other run's completion | OK | init_agents_test.go |
+| `/add-dir <path>` | attach extra root; sent as `extra_dirs` on runs; file tools confined to workspace + added roots | OK | `add_dir.go` (`executeAddDirCommand`); add_dir_test.go; `TestExtraDirs_*` (internal/harness) |
+| `/add-dir` (no args) | list attached directories | OK | add_dir_test.go |
+| `/add-dir remove <path>` | detach a directory | OK | add_dir_test.go |
+| `extra_dirs` validation | non-absolute/nonexistent/not-a-dir → HTTP 400 | OK | `validateExtraDirs` (runner.go); `TestStartRunExtraDirsValidation`; http_extra_dirs_test.go |
 | `/search <q>` | search transcript | OK | `model.go:1055-1068`; search_test.go (12+) |
 | `/search` (no args) | usage hint | OK | `model.go:1056-1058`; `TestSearch_BT002_EmptyQueryStatusMessage` |
 | `/history <q>` | search session meta | OK | `model.go:1070-1083`; `TestSearch_BT006_HistorySearchOpensOverlay` |

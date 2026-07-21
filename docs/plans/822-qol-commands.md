@@ -1,8 +1,67 @@
 # Plan: quality-of-life commands — epic #822 slices
 
-Epic: #822. Parent: #803. Slice 1 branch: `epic/822-qol-commands` (merged, PR #842). Slice 2 branch: `epic/822-qol-commands-s2`.
+Epic: #822. Parent: #803. Slice 1 branch: `epic/822-qol-commands` (merged, PR #842). Slice 2 branch: `epic/822-qol-commands-s2` (merged, PR #863). Slice 3 branch: `epic/822-qol-commands-s3`.
 
 ---
+
+# Slice 3: /add-dir — attach extra workspace directories to the session
+
+## Investigation (required by the epic, drives the shape)
+
+Traced from `runCreateRequest.WorkspacePath` (`cmd/harnesscli/tui/api.go`) through the server:
+
+1. **The TUI's `workspace_path` is silently dropped today.** `handlePostRun` (`internal/server/http_runs.go:43`) decodes into `harness.RunRequest`, which has no `workspace_path` field. The effective tool workspace is the harnessd startup config `WorkspaceBaseOptions.RepoPath` (`Runner.defaultPermissionWorkspaceRoot`), or a per-run provisioned path when `workspace_type` is set (`runPreflight`, runner.go:1147-1219). Fixing the dropped `workspace_path` is NOT this slice; `extra_dirs` are additive to whatever root a run already uses.
+2. **Confinement is real and single-rooted.** Default permission sandbox is `SandboxScopeWorkspace` (runner.go:5413, safety-biased default). Every file tool (`read/write/edit/ls/grep/apply_patch/...` in both `tools/` and `tools/core|deferred`) resolves paths through `ResolveWorkspacePathConfined` → `ConfineWorkspacePath(scope, root, extraAllowedRoots, abs)` (`internal/harness/tools/common_paths.go:165`). `ConfineWorkspacePath` **already implements extra roots** (incl. symlink-safe canonicalization, tested by `TestConfineWorkspacePath_ExtraAllowedRoots_Permitted`) — but every caller passes `nil`.
+3. **Per-run overrides reach tools via context.** The step engine sets `htools.WithSandboxScope(toolCtx, effectiveSandboxScope)` per tool call (`runner_step_engine.go:996`) from `req` — the exact seam to thread extra roots.
+4. **Bash is confined differently.** `CheckSandboxCommand` string heuristics (`sandbox.go`) plus OS-level seatbelt/bubblewrap profiles (`sandbox_darwin.go`/`sandbox_linux.go`) assume one root. Threading extra roots into OS sandbox profiles is a large change.
+
+## Decided shape (minimal viable, per epic preference)
+
+- `harness.RunRequest.ExtraDirs []string` (`json:"extra_dirs,omitempty"`); validated synchronously in `StartRun` (each entry: non-empty, absolute, exists, is a directory) → HTTP 400 on violation.
+- New context key in `internal/harness/tools/types.go`: `WithExtraAllowedRoots` / `ExtraAllowedRootsFromContext` (mirrors `WithSandboxScope`).
+- Step engine: `toolCtx = htools.WithExtraAllowedRoots(toolCtx, req.ExtraDirs)` next to the scope line.
+- `ResolveWorkspacePathConfined` passes the context roots to `ConfineWorkspacePath` (instead of `nil`).
+- TUI: `/add-dir <path>` (add, resolves relative to the session workspace, dedupes), `/add-dir` (list), `/add-dir remove <path>` (remove); dirs kept client-side per session and sent on every run via `startRunCmd` (new `extraDirs` parameter before the variadic `planMode`).
+- **Documented limits (deliberately out of scope):** bash tool commands remain confined to the primary workspace root (OS sandbox profiles unchanged); `glob` still only matches inside the primary root; extra dirs are session-scoped (not persisted); the pre-existing dropped `workspace_path` is untouched.
+
+## Documentation Contract
+
+- Feature status: `implemented`
+- Public docs affected: `website/docs/cli/tui.md`, `docs/ux-paths.md`, server API docs note for the new `extra_dirs` run-request field (`website/docs/server/http-api-guide.md`)
+- Spec docs to update before code: none (epic #822 body + this investigation)
+- Implementation notes to add after code: none required
+
+## Test Plan (TDD)
+
+- New failing tests first:
+  - `internal/harness` (acceptance, mirrors `default_sandbox_acceptance_test.go`): run with `ExtraDirs` → `read` tool reads a file under the extra root (content returned) and is still denied outside all roots; control run without `ExtraDirs` is denied under the extra root. StartRun validation table: relative/nonexistent/not-a-directory rejected; valid accepted.
+  - `internal/harness/tools` (mirrors `workspace_confinement_test.go`): `ResolveWorkspacePathConfined` + ctx roots allows the extra root, denies elsewhere; no ctx roots → unchanged behavior.
+  - `internal/server` (mirrors `http_workspace_type_test.go`): POST /v1/runs with a nonexistent `extra_dirs` entry → 400 `invalid_request`; valid entry → 202.
+  - `cmd/harnesscli/tui`: `/add-dir` add/list/remove/dedupe/not-a-directory/relative-resolution through the model; `startRunCmd` marshals `extra_dirs` (httptest body capture); registry + slash-complete; `TestTUI364_RegistryCompleteness` += `add-dir`.
+- Regression: default run (no extra_dirs) confinement unchanged — the existing GAP-1 acceptance test must stay green.
+
+## Cross-Surface Impact Map
+
+- Server API: new optional `extra_dirs` field on POST /v1/runs — additive, backward compatible. No provider/model flow, gateway, catalog, or API-key changes.
+
+## Implementation Checklist
+
+- [x] Investigation documented (above) and shape decided.
+- [x] Acceptance criteria in tests (read under added root succeeds; outside all roots denied).
+- [x] Write failing tests first.
+- [x] Implement minimal code changes.
+- [x] Update docs (`tui.md`, `ux-paths.md`, server API note, plan).
+- [x] Run `go test ./cmd/harnesscli/... ./internal/harness/... ./internal/server/... -count=1`; gofmt + go vet clean.
+- [ ] Push branch, open PR (no merge).
+
+## Risks and Mitigations
+
+- Risk: scope creep into bash/seatbelt profiles. Mitigation: file-tools-only enforcement; bash limit documented in tui.md and the PR.
+- Risk: symlinked extra root escapes. Mitigation: reuse `ConfineWorkspacePath`'s canonicalization (existing, tested) — roots are canonicalized per check.
+- Risk: `/add-dir remove` collides with a dir literally named `remove`. Mitigation: `remove` is a subcommand only with an argument; `/add-dir remove` (one arg) adds the relative path `remove`. Documented in the command description.
+
+---
+
 
 # Slice 2: /init — generate AGENTS.md for the current workspace
 

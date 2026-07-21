@@ -1065,6 +1065,10 @@ func (se *stepEngine) run() {
 			toolCtx = context.WithValue(toolCtx, htools.ContextKeyToolCallID, call.ID)
 			toolCtx = context.WithValue(toolCtx, htools.ContextKeyRunMetadata, meta)
 			toolCtx = htools.WithSandboxScope(toolCtx, effectiveSandboxScope)
+			// Extra directory roots granted on the run request (TUI /add-dir)
+			// ride the same per-call context so file-tool confinement permits
+			// them in addition to the workspace root.
+			toolCtx = htools.WithExtraAllowedRoots(toolCtx, req.ExtraDirs)
 			toolCtx = context.WithValue(toolCtx, htools.ContextKeyTranscriptReader, runTranscriptReader{runner: r, runID: runID})
 			toolCtx = htools.WithForkDepth(toolCtx, runForkDepth)
 			callID := call.ID

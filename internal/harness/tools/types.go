@@ -597,6 +597,38 @@ func WithSandboxScope(ctx context.Context, scope SandboxScope) context.Context {
 	return context.WithValue(ctx, ContextKeySandboxScope, scope)
 }
 
+// ContextKeyExtraAllowedRoots carries the per-run extra directory roots a
+// caller granted (harness.RunRequest.ExtraDirs, TUI /add-dir). File-tool
+// confinement (ConfineWorkspacePath via ResolveWorkspacePathConfined) permits
+// paths under these roots in addition to the workspace root.
+const ContextKeyExtraAllowedRoots contextKey = "extra_allowed_roots"
+
+// WithExtraAllowedRoots returns a context carrying the given extra allowed
+// roots. The slice is copied so later caller mutation cannot alter the
+// context value. Nil contexts are promoted to Background.
+func WithExtraAllowedRoots(ctx context.Context, roots []string) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	var cp []string
+	if roots != nil {
+		cp = make([]string, len(roots))
+		copy(cp, roots)
+	}
+	return context.WithValue(ctx, ContextKeyExtraAllowedRoots, cp)
+}
+
+// ExtraAllowedRootsFromContext retrieves the per-run extra allowed roots set
+// by WithExtraAllowedRoots. The second return value reports whether the value
+// was set at all (distinguishing unset from an explicit empty list).
+func ExtraAllowedRootsFromContext(ctx context.Context) ([]string, bool) {
+	if ctx == nil {
+		return nil, false
+	}
+	roots, ok := ctx.Value(ContextKeyExtraAllowedRoots).([]string)
+	return roots, ok
+}
+
 type RunMetadata struct {
 	RunID          string
 	TenantID       string

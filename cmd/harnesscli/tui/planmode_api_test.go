@@ -19,7 +19,7 @@ func TestStartRunCmdSendsPlanMode(t *testing.T) {
 		_, _ = w.Write([]byte(`{"run_id":"r"}`))
 	}))
 	defer ts.Close()
-	if _, ok := startRunCmd(ts.URL, "p", "", "", "", "", "", "", "", nil, true)().(RunStartedMsg); !ok {
+	if _, ok := startRunCmd(ts.URL, "p", "", "", "", "", "", "", "", nil, nil, true)().(RunStartedMsg); !ok {
 		t.Fatal("run not started")
 	}
 }

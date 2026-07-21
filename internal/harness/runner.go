@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	osuser "os/user"
+	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sort"
@@ -842,6 +843,12 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 		if err := validateWorkspaceProvisionPreconditions(req.WorkspaceType, rc.WorkspaceBaseOptions); err != nil {
 			return Run{}, err
 		}
+	}
+
+	// Validate extra_dirs early: each entry must be an absolute path to an
+	// existing directory so the file-tool confinement can canonicalize it.
+	if err := validateExtraDirs(req.ExtraDirs); err != nil {
+		return Run{}, err
 	}
 
 	// Subagents (runs with a recorded parent) default to the "subagent" agent
@@ -5440,6 +5447,33 @@ func validateWorkspaceType(wsType string) error {
 		return nil
 	}
 	return fmt.Errorf("unsupported workspace_type %q: must be one of local, worktree, container, vm", wsType)
+}
+
+// validateExtraDirs validates RunRequest.ExtraDirs entries: each must be a
+// non-empty absolute path to an existing directory. Absolute paths are
+// required (rather than resolving relative ones server-side) so the granted
+// root is unambiguous regardless of the harnessd process working directory.
+func validateExtraDirs(dirs []string) error {
+	for i, dir := range dirs {
+		if strings.TrimSpace(dir) == "" {
+			return fmt.Errorf("invalid extra_dirs: entry %d is empty", i)
+		}
+		if !filepath.IsAbs(dir) {
+			return fmt.Errorf("invalid extra_dirs: entry %d (%q) must be an absolute path", i, dir)
+		}
+		clean := filepath.Clean(dir)
+		fi, err := os.Stat(clean)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("invalid extra_dirs: entry %d (%q) does not exist", i, dir)
+			}
+			return fmt.Errorf("invalid extra_dirs: entry %d (%q) is not accessible: %w", i, dir, err)
+		}
+		if !fi.IsDir() {
+			return fmt.Errorf("invalid extra_dirs: entry %d (%q) is not a directory", i, dir)
+		}
+	}
+	return nil
 }
 
 // resolveWorkspaceType returns the effective workspace type for a run.

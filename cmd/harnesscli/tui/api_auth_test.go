@@ -65,7 +65,7 @@ func harnessAuthCases() []harnessAuthCase {
 		{
 			name: "startRunCmd",
 			call: func(ts *httptest.Server, apiKey string) any {
-				return startRunCmd(ts.URL, "hello", "", "gpt-test", "openai", "", "default", "/tmp", apiKey, nil)()
+				return startRunCmd(ts.URL, "hello", "", "gpt-test", "openai", "", "default", "/tmp", apiKey, nil, nil)()
 			},
 		},
 		{
