@@ -395,6 +395,10 @@ type Model struct {
 	// (e.g. load errors, name collisions with builtins).
 	pluginWarnings []string
 	pluginBrowser  pluginBrowserState
+
+	// swarm tracks the current run's agent_swarm call (epic #808 slice 4) so
+	// the /subagents view can group and live-update swarm members.
+	swarm swarmTracker
 }
 
 // New creates a new root Model.
@@ -974,6 +978,12 @@ func runPluginCommandCmd(entry CommandEntry, cmd Command) tea.Cmd {
 }
 
 // statusTickCmd returns a tea.Cmd that fires statusTickMsg after duration d.
+// swarmPollTickCmd schedules the next swarm panel poll (1s cadence while a
+// swarm is active).
+func swarmPollTickCmd() tea.Cmd {
+	return tea.Tick(time.Second, func(time.Time) tea.Msg { return SwarmPollTickMsg{} })
+}
+
 func statusTickCmd(d time.Duration) tea.Cmd {
 	return tea.Tick(d, func(time.Time) tea.Msg { return statusTickMsg{} })
 }
@@ -3611,11 +3621,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input = m.input.SetValue(edited)
 
 	case SubagentsLoadedMsg:
-		for _, line := range formatSubagentsLines(msg.Subagents) {
+		if msg.SwarmPoll {
+			// Swarm poll response: refresh the live panel in place. A stale
+			// response after completion is ignored (the panel is frozen).
+			if m.swarm.active {
+				panel := m.swarm.resolvePanel(msg.Subagents)
+				m.renderSwarmPanel(panel)
+				if swarmPanelAllTerminal(panel) {
+					m.swarm.active = false
+				}
+			}
+			break
+		}
+		var panel *swarmPanel
+		if m.swarm.hasData() {
+			p := m.swarm.resolvePanel(msg.Subagents)
+			panel = &p
+		}
+		for _, line := range formatSubagentsLines(msg.Subagents, panel) {
 			m.vp.AppendLine(line)
 		}
 		m.vp.AppendLine("")
 		cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Loaded %d subagent(s)", len(msg.Subagents))))
+
+	case SwarmPollTickMsg:
+		// Poll loop (epic #808 slice 4): refresh while the swarm is active,
+		// then re-tick. Completion or all-terminal members stops the loop.
+		if m.swarm.active {
+			cmds = append(cmds,
+				pollSwarmSubagentsCmd(m.config.BaseURL, m.config.APIKey),
+				swarmPollTickCmd(),
+			)
+		}
 
 	case SubagentsLoadFailedMsg:
 		cmds = append(cmds, m.setStatusMsg("Load subagents failed: "+msg.Err))
@@ -3761,6 +3798,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if err := json.Unmarshal(msg.Raw, &p); err == nil {
 				m.handleToolStart(p.CallID, p.Tool, p.Arguments)
+				if p.Tool == swarmToolName {
+					cmds = append(cmds, m.startSwarmTracking(p.CallID, p.Arguments)...)
+				}
 			}
 		case "tool.output.delta":
 			var p struct {
@@ -3784,6 +3824,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.handleToolError(p.CallID, p.Error, p.DurationMS)
 				} else {
 					m.handleToolResult(p.CallID, p.Output, p.DurationMS)
+				}
+				if p.Tool == swarmToolName {
+					m.completeSwarmTracking(p.CallID, p.Output)
 				}
 			}
 		case "tool.approval_required":
@@ -4513,12 +4556,70 @@ func formatTUIRunLines(runs []tuiRunRecord) []string {
 	return lines
 }
 
-func formatSubagentsLines(items []RemoteSubagent) []string {
+// startSwarmTracking begins tracking an agent_swarm call: parse the item
+// list, render the initial all-pending panel, and kick the poll loop.
+func (m *Model) startSwarmTracking(callID string, args json.RawMessage) []tea.Cmd {
+	items, resumeIDs := parseSwarmToolArgs(unwrapToolInput(args))
 	if len(items) == 0 {
+		return nil
+	}
+	m.swarm = swarmTracker{
+		active:      true,
+		callID:      callID,
+		items:       items,
+		resumeCount: len(resumeIDs),
+		startedAt:   time.Now(),
+		panelStart:  -1,
+	}
+	m.renderSwarmPanel(m.swarm.resolvePanel(nil))
+	return []tea.Cmd{
+		pollSwarmSubagentsCmd(m.config.BaseURL, m.config.APIKey),
+		swarmPollTickCmd(),
+	}
+}
+
+// completeSwarmTracking freezes the panel with the exact member statuses from
+// the aggregated report and stops the poll loop.
+func (m *Model) completeSwarmTracking(callID, output string) {
+	if !m.swarm.active || m.swarm.callID != callID {
+		return
+	}
+	m.swarm.active = false
+	if members := parseSwarmReport(output); members != nil {
+		m.swarm.report = members
+		m.swarm.reportSet = true
+	}
+	m.renderSwarmPanel(m.swarm.resolvePanel(nil))
+}
+
+// renderSwarmPanel writes the panel into the viewport, replacing the previous
+// block in place when one is already rendered. While the swarm runs the
+// parent run is blocked inside the tool call, so nothing interleaves into
+// the panel's line range; the block freezes once the swarm completes.
+func (m *Model) renderSwarmPanel(panel swarmPanel) {
+	lines := formatSwarmPanelLines(panel)
+	if m.swarm.panelCount > 0 && m.swarm.panelStart >= 0 {
+		m.vp.ReplaceLineRange(m.swarm.panelStart, m.swarm.panelCount, lines)
+	} else {
+		m.swarm.panelStart = m.vp.LineCount()
+		m.vp.AppendLines(lines)
+	}
+	m.swarm.panelCount = len(lines)
+}
+
+func formatSubagentsLines(items []RemoteSubagent, panel *swarmPanel) []string {
+	lines := []string{}
+	if panel != nil && len(panel.Members) > 0 {
+		lines = append(lines, formatSwarmPanelLines(*panel)...)
+		lines = append(lines, "")
+	}
+	if len(items) == 0 {
+		if len(lines) > 0 {
+			return append(lines, "No other managed subagents.")
+		}
 		return []string{"No managed subagents."}
 	}
 
-	lines := make([]string, 0, len(items)*2)
 	for _, item := range items {
 		summary := fmt.Sprintf("%s [%s] %s (%s)", item.ID, item.Status, item.Isolation, item.CleanupPolicy)
 		if item.WorkspaceCleaned {

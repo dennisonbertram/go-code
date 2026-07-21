@@ -157,7 +157,14 @@ type ModelSelectedMsg struct {
 	ReasoningEffort string // "" | "low" | "medium" | "high"
 }
 
-type SubagentsLoadedMsg struct{ Subagents []RemoteSubagent }
+// SubagentsLoadedMsg carries the GET /v1/subagents listing. SwarmPoll marks
+// responses to the swarm panel's poll loop (as opposed to a user-invoked
+// /subagents listing) so the update handler refreshes the live panel in
+// place instead of appending a new listing.
+type SubagentsLoadedMsg struct {
+	Subagents []RemoteSubagent
+	SwarmPoll bool
+}
 
 type SubagentsLoadFailedMsg struct{ Err string }
 

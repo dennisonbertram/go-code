@@ -170,7 +170,7 @@ func TestStartRunCmdSetsAllowFallback(t *testing.T) {
 func TestFormatSubagentsLinesRendersSummaryAndDetails(t *testing.T) {
 	t.Parallel()
 
-	if got := formatSubagentsLines(nil); len(got) != 1 || got[0] != "No managed subagents." {
+	if got := formatSubagentsLines(nil, nil); len(got) != 1 || got[0] != "No managed subagents." {
 		t.Fatalf("unexpected empty-state lines: %v", got)
 	}
 
@@ -183,7 +183,7 @@ func TestFormatSubagentsLinesRendersSummaryAndDetails(t *testing.T) {
 		BranchName:       "codex/coverage-fix",
 		BaseRef:          "main",
 		WorkspacePath:    "/tmp/sub-1",
-	}})
+	}}, nil)
 	joined := strings.Join(lines, "\n")
 
 	if !strings.Contains(joined, "sub-1 [completed] worktree (destroy) cleaned") {

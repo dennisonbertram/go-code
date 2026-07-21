@@ -13,7 +13,7 @@
 - `814-tasks-panel.md` — Epic #814 unified /tasks background panel: slice 1 `GET /v1/tasks` union, slice 2 bash-job exposure + kill, slice 3 TUI `/tasks` overlay (slices 1–3 in implementation/merged).
 - `817-compact-cmd.md` — Epic #817 slice 1: preserve-instruction in `CompactRun` and the run compact endpoint (in implementation).
 - `815-config-reload.md` — Epic #815 Slice 1: hot-swappable vs restart-only config field classification with `ReloadDiff` (in implementation).
-- `808-agent-swarm.md` — Agent swarm epic #808: Slice 1 swarm orchestrator + Slice 2 resume (merged), Slice 3 agent_swarm deferred tool with sole-call rule (in implementation).
+- `808-agent-swarm.md` — Agent swarm epic #808: Slices 1–3 (orchestrator, resume, agent_swarm tool; merged), Slice 4 TUI live swarm progress panel (in implementation).
 - `809-mcp-oauth.md` — Epic #809: slices 1–3 (headers/typed errors, token store, OAuth flow) merged; slice 4 (`harnesscli mcp login/logout/status` + 401 re-auth guidance) in implementation.
 - `812-session-visualizer.md` — Session visualizer epic #812, slice 1: embedded `/viz` static shell served by harnessd behind Bearer auth + `runs:read` (in implementation).
 - `820-tui-steering.md` — Epic #820 (in implementation): per-slice plans for mid-turn TUI steering (slices 1–2 merged; slice 3 ctrl+g binding in review).

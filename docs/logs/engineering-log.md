@@ -36,6 +36,34 @@
 - Collision rule: plain name if free, else `<bundle>:<name>`, else skip — namespacings and skips surface through the plugin warnings slice. JSON `PluginDef` files in bundle `commands/` dirs keep loading through the unchanged legacy path; untrusted/disabled bundles contribute nothing (TrustedBundles gating, pinned by `installablePluginCommandSources` tests).
 - TDD: failing-first tests cover the exported expansion contract, frontmatter parse/validation matrix, loader file handling, registration + namespacing + double-collision skip, trust gating, and the end-to-end submission.
 
+## 2026-07-21 (Agent Swarm — Epic #808, Slice 4)
+
+- Added the TUI live swarm progress panel (`cmd/harnesscli/tui/swarm_panel.go`):
+  the model's `agent_swarm` tool call is tracked from SSE events
+  (`tool.call.started` parses the item list, `tool.call.completed` parses the
+  aggregated report), and a grouped panel renders in the viewport with a
+  summary line (launched/completed counts, cap 128) plus per-member
+  pending/running/completed/failed rows with the item label.
+- Poll loop: while a swarm is active, `/v1/subagents` is re-fetched every 1s
+  (`SwarmPollTickMsg`); poll responses refresh the panel block in place
+  (keyed line-range replacement) and stop on completion or when every member
+  is terminal. No server changes: `RemoteSubagent` only gained the
+  already-sent `created_at` field for creation-window member matching.
+- Before the report arrives, members are matched to items by creation window
+  in schedule order (resumed entries render as `resumed`); the aggregated
+  report at completion replaces the heuristic with exact member IDs/statuses.
+  Single-run tracking is sound because agent_swarm is sole-call and blocks
+  the parent run.
+- `/subagents` listing groups the swarm section first via an extended
+  `formatSubagentsLines(items, panel)`; no-swarm output is unchanged.
+- TDD: internal rendering/matching tests (multi-status rows, creation window,
+  resume entries, exact report members, grouping, no-swarm regression) and an
+  external SSE-flow test (panel appears, updates in place on poll, freezes
+  with exact statuses, stale poll ignored, tick starts/stops) landed first
+  and failed on undefined symbols before implementation.
+- Validation: `go test ./cmd/harnesscli/... -count=1` (29 packages) and
+  `-race` green; full regression suite (see PR body).
+
 ## 2026-07-21 (ACP Server Mode — Epic #806, Slice 3)
 
 - Prompt turns now stream live output to the editor: `assistant.message.delta` -> `agent_message_chunk`, `assistant.thinking.delta` -> `agent_thought_chunk` (payload field `content`), `tool.call.started` -> `tool_call` (`status: in_progress`, `title` = tool name, `kind` via a tool-name table), `tool.call.completed` -> `tool_call_update` (`completed`, or `failed` when the payload carries `error`; output included as content). `toolCallId` is the harness `call_id`, stable across start/complete.
