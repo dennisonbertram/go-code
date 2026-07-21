@@ -29,6 +29,13 @@
 - 501 no-broker: `ApproveRun`/`DenyRun` map harnessd's 501 to `ErrApprovalNotConfigured`, surfaced as an `agent_message_chunk` note instead of a hang until the deadline.
 - Validation: strict TDD (red: `undefined: permissionParams`, `srv.callClient`). Flows via scripted io.Pipe client + fake harnessd (new `/approve`/`/deny` routes with 501 mode): grant -> approve + `end_turn`; reject -> deny; `cancelled` -> deny; client error -> deny; deadline expiry -> no POST and a late answer ignored; 501 -> note, no hang.
 
+## 2026-07-19 (Plugin Markdown Command Files with $ARGUMENTS — Epic #821 Slice 4)
+
+- Bundle `commands/*.md` files now register as TUI slash commands: YAML frontmatter (`name`, `description`; unknown fields rejected, body required) plus a prompt-template body. The expanded body is SUBMITTED as a prompt (transcript + message bubble + `startRunCmd`), unlike legacy JSON `prompt` plugins, which display their output — the acceptance is `/greet hello world` POSTing the expansion to `/v1/runs`, covered by a model-level test driving `inputarea.CommandSubmittedMsg`.
+- Expansion reuses epic #813's merged engine: `internal/skills` now exports `BuildTemplateVars` + `ExpandTemplate` + `HasArgPlaceholder`, with the skill invocation path (`buildVars`/`expandBody`/`hasArgPlaceholder`) delegating unchanged. `$ARGUMENTS` is the raw typed args (quotes preserved via `rawCommandArgs` from `cmd.Raw`), `$0..$n` use `SplitArgs`, `$WORKSPACE`/`$SKILL_DIR` resolve, and the `ARGUMENTS: <args>` fallback applies when the body references no placeholder.
+- Collision rule: plain name if free, else `<bundle>:<name>`, else skip — namespacings and skips surface through the plugin warnings slice. JSON `PluginDef` files in bundle `commands/` dirs keep loading through the unchanged legacy path; untrusted/disabled bundles contribute nothing (TrustedBundles gating, pinned by `installablePluginCommandSources` tests).
+- TDD: failing-first tests cover the exported expansion contract, frontmatter parse/validation matrix, loader file handling, registration + namespacing + double-collision skip, trust gating, and the end-to-end submission.
+
 ## 2026-07-21 (ACP Server Mode — Epic #806, Slice 3)
 
 - Prompt turns now stream live output to the editor: `assistant.message.delta` -> `agent_message_chunk`, `assistant.thinking.delta` -> `agent_thought_chunk` (payload field `content`), `tool.call.started` -> `tool_call` (`status: in_progress`, `title` = tool name, `kind` via a tool-name table), `tool.call.completed` -> `tool_call_update` (`completed`, or `failed` when the payload carries `error`; output included as content). `toolCallId` is the harness `call_id`, stable across start/complete.
