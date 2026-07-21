@@ -4,10 +4,22 @@
 
 - Slice 1 (docs contract): **merged** (PR #824, branch `epic/823-exit-codes`).
 - Slice 2 (map terminal events to exit codes): **merged** (PR #861, branch `epic/823-exit-codes-s2`).
-- Slice 3 (exit 3 on blocked headless runs): **this branch** (`epic/823-exit-codes-s3`), branched from `origin/main` after the Slice 2 merge.
-- Slice 4 (e2e assertions + per-command docs): future branch.
+- Slice 3 (exit 3 on blocked headless runs): **merged** (PR #882, branch `epic/823-exit-codes-s3`).
+- Slice 4 (e2e assertions + per-command docs): **this branch** (`epic/823-exit-codes-s4`), branched from `origin/main` after the Slice 3 merge.
 
-## Slice 3 scope
+## Slice 4 scope
+
+- New `test/e2e/exit_codes_test.go`: builds the real `harnesscli` binary once (`go build`) and drives it over real HTTP+SSE against the in-process harnessd (`newTestServer` patterns from `helpers_test.go`) backed by `internal/fakeprovider` — content turn → exit 0 (`run.completed`); `ExhaustError` → exit 2 (`run.failed`); `Hang` turn + `POST /v1/runs/{id}/cancel` mid-run → exit 6 (`run.cancelled`); plus an unreachable-server client-error pin (exit 1). Assertions are on the process exit code (`$?`), not stdout text.
+- Wrapper propagation: `TestGoCodeScriptPropagatesHarnessCLIExitCode` in `cmd/harnesscli/go_code_script_test.go` — stubbed `harnesscli` exits 2/6/3 in prompt and cli modes, with and without the wrapper-started-server `EXIT` trap armed; the script's exit code must equal the stub's, and the stub must actually have run.
+- Docs: per-command exit-code table in `website/docs/cli/harnesscli.md` (streaming mode + non-streaming 0/1 note), headless-scripting `$?` section in `website/docs/cli/go-code-wrapper.md`, exit-code note + `-no-stream` clarification in `website/docs/reference/cli-flags.md` — all linking the contract page.
+- Out of scope per the slice spec: blocked (exit 3) e2e — the CLI has no permissions flag, so approval-blocked runs cannot be driven through `harnesscli`; blocked coverage stays with the Slice 3 unit tests. No code changes.
+
+## Slice 4 test plan
+
+- The e2e assertions are the tests; they validate already-merged Slice 2/3 behavior over the real binary (a red result would mean the contract is broken, not that a test needs adjusting).
+- `go test ./test/e2e/... -count=1` and `go test ./cmd/harnesscli/... -count=1` green; `go test ./internal/harness/... -count=1` green; gofmt/vet clean; `npm run build` green for the edited docs pages.
+
+## Slice 3 record (completed)
 
 - `cmd/harnesscli/exitcodes.go`: `isBlockedEvent` (run.waiting_for_user, tool.approval_required, plan.approval_required) and `blockedEventReason` (question-blocked vs approval-blocked wording). The contract's blocked signals, in the same single-source-of-truth file as the code table.
 - `cmd/harnesscli/main.go`: `runBlockedError`; `processSSEBlock` returns it when a blocked signal arrives while `stdinIsTerminal()` is false (interactive stdin: stream unchanged, stays open — ask-user wiring is the other epic's scope); `run()` maps it to `exitBlocked` after `reportRunBlocked` prints the run ID, reason, and `harnesscli continue <run-id>` resume command to stderr. Terminal detection reuses the existing injectable `stdinIsTerminal` double (`cmd/harnesscli/plugins.go:107`); no new TTY dependency.

@@ -125,6 +125,24 @@ go-code improve [--target seam]         # run the self-improvement test loop
 
 ---
 
+## Headless scripting and exit codes
+
+The wrapper propagates the `harnesscli` exit code unchanged, so shell scripts and CI can branch on `$?` exactly as they would when calling `harnesscli` directly — including when the wrapper started the server itself (the auto-stop `EXIT` trap does not override the exit status):
+
+```bash
+go-code "summarize the diff"
+case $? in
+  0) echo "run completed" ;;
+  2) echo "run failed" ;;
+  3) echo "run blocked on input — resume interactively" ;;
+  6) echo "run cancelled — resumable via go-code continue <run-id> ..." ;;
+esac
+```
+
+The full code table (`0` completed, `1` client error, `2` failed, `3` blocked, `6` cancelled, `130` interrupted) and its per-command coverage are documented in [Exit Codes](/docs/reference/exit-codes).
+
+---
+
 ## Subcommand reference
 
 <Callout type="info">
