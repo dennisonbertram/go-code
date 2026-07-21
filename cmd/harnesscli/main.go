@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	harnessconfig "go-agent-harness/cmd/harnesscli/config"
 	"go-agent-harness/cmd/harnesscli/tui"
 	"go-agent-harness/internal/harness"
 
@@ -535,6 +536,13 @@ func newTUIConfig(baseURL, workspace, resumeConversationID string) tui.TUIConfig
 	if cfg, err := loadConfig(); err == nil && cfg != nil {
 		apiKey = cfg.APIKey
 	}
+	// Load the persisted theme selection (epic #810 slice 4); the TUI model
+	// resolves it through the theme loader and falls back to the default
+	// theme on any error. Missing/unreadable config just means "no theme".
+	var themeName string
+	if hcfg, err := harnessconfig.Load(); err == nil && hcfg != nil {
+		themeName = hcfg.Theme
+	}
 	return tui.TUIConfig{
 		BaseURL:              baseURL,
 		Workspace:            workspace,
@@ -543,6 +551,7 @@ func newTUIConfig(baseURL, workspace, resumeConversationID string) tui.TUIConfig
 		AltScreen:            true,
 		ResumeConversationID: resumeConversationID,
 		APIKey:               apiKey,
+		Theme:                themeName,
 	}
 }
 

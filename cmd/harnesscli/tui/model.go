@@ -522,6 +522,11 @@ func New(cfg TUIConfig) Model {
 	if cfg.ResumeConversationID != "" {
 		m.conversationID = cfg.ResumeConversationID
 	}
+	// Resolve the persisted theme selection (slice 4, epic #810). Any error
+	// silently keeps the default theme.
+	if name := strings.TrimSpace(cfg.Theme); name != "" {
+		m.applyStartupTheme(name)
+	}
 	m.applyThemeToComponents()
 	return m
 }
@@ -545,6 +550,32 @@ func (m *Model) applyThemeToComponents() {
 	m.bubbleStyles = &bubbles
 	diffs := diffviewStylesFromTheme(m.theme)
 	m.diffStyles = &diffs
+}
+
+// themesDirOrDefault resolves the themes directory: the explicit override
+// (tests) or the default ~/.config/harnesscli/themes.
+func (m *Model) themesDirOrDefault() (string, error) {
+	if m.themesDir != "" {
+		return m.themesDir, nil
+	}
+	return DefaultThemesDir()
+}
+
+// applyStartupTheme resolves a startup theme name (from TUIConfig.Theme,
+// sourced from the persisted selection) through the slice-1 loader. Any
+// failure — unknown, missing, or malformed theme — silently keeps the
+// default theme (epic #810 slice 4).
+func (m *Model) applyStartupTheme(name string) {
+	dir, err := m.themesDirOrDefault()
+	if err != nil {
+		return
+	}
+	th, err := LoadTheme(dir, name)
+	if err != nil {
+		return
+	}
+	m.theme = th
+	m.themeName = name
 }
 
 // defaultPluginsDir returns the default directory for user-defined plugin files.
@@ -1928,7 +1959,7 @@ func configEntriesFromModel(m *Model) []configpanel.ConfigEntry {
 		{Key: "model", Value: model, Description: "Active LLM model", ReadOnly: true},
 		{Key: "workspace", Value: m.config.Workspace, Description: "Workspace root path", ReadOnly: true},
 		{Key: "max_steps", Value: strconv.Itoa(m.config.MaxSteps), Description: "Max agent steps per run", ReadOnly: true},
-		{Key: "theme", Value: m.config.Theme, Description: "Color theme", ReadOnly: true},
+		{Key: "theme", Value: m.themeName, Description: "Color theme", ReadOnly: true},
 		{Key: "color_profile", Value: m.config.ColorProfile, Description: "Terminal color depth", ReadOnly: true},
 		{Key: "gateway", Value: gateway, Description: "Model routing gateway", ReadOnly: true},
 		{Key: "reasoning_effort", Value: reasoning, Description: "Reasoning effort level", ReadOnly: true},
@@ -2072,13 +2103,9 @@ func executeSessionsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 // every open (so files added while the TUI runs appear without a restart)
 // and open the picker with the current theme marked active.
 func executeThemeCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
-	dir := m.themesDir
-	if dir == "" {
-		var err error
-		dir, err = DefaultThemesDir()
-		if err != nil {
-			return []tea.Cmd{m.setStatusMsg("Theme: cannot locate themes directory")}, false
-		}
+	dir, err := m.themesDirOrDefault()
+	if err != nil {
+		return []tea.Cmd{m.setStatusMsg("Theme: cannot locate themes directory")}, false
 	}
 	names, err := ListThemes(dir)
 	if err != nil {
@@ -4559,18 +4586,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case themepicker.ThemeSelectedMsg:
 		// Apply the selected theme live (epic #810 slice 3): resolve through
 		// the slice-1 loader and redistribute via SetTheme. On loader failure
-		// keep the current theme and surface the error.
+		// keep the current theme and surface the error. On success persist the
+		// selection (slice 4) so the next launch starts in this theme.
 		m.themePicker = m.themePicker.Close()
 		m.overlayActive = false
 		m.activeOverlay = ""
-		dir := m.themesDir
-		if dir == "" {
-			var derr error
-			dir, derr = DefaultThemesDir()
-			if derr != nil {
-				cmds = append(cmds, m.setStatusMsg("Theme: cannot locate themes directory — keeping "+m.themeName))
-				return m, tea.Batch(cmds...)
-			}
+		dir, derr := m.themesDirOrDefault()
+		if derr != nil {
+			cmds = append(cmds, m.setStatusMsg("Theme: cannot locate themes directory — keeping "+m.themeName))
+			return m, tea.Batch(cmds...)
 		}
 		th, err := LoadTheme(dir, msg.Entry.Name)
 		if err != nil {
@@ -4579,6 +4603,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.themeName = msg.Entry.Name
 		m.SetTheme(th)
+		if hcfg, herr := harnessconfig.Load(); herr == nil && hcfg != nil {
+			hcfg.Theme = msg.Entry.Name
+			_ = harnessconfig.Save(hcfg)
+		}
 		cmds = append(cmds, m.setStatusMsg("Theme: "+msg.Entry.Name))
 
 	case SessionPickerSelectedMsg:

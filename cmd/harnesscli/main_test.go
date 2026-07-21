@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"go-agent-harness/cmd/harnesscli/config"
 	"go-agent-harness/internal/harness"
 )
 
@@ -316,5 +317,30 @@ func TestStreamRunEventsRejectsInvalidSSEData(t *testing.T) {
 	}
 	if !errors.Is(err, errInvalidSSEData) {
 		t.Fatalf("expected errInvalidSSEData, got %v", err)
+	}
+}
+
+// TestNewTUIConfigLoadsSavedTheme verifies the persisted theme selection is
+// threaded into TUIConfig.Theme at startup (epic #810 slice 4).
+func TestNewTUIConfigLoadsSavedTheme(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	if err := config.Save(&config.Config{Theme: "ocean"}); err != nil {
+		t.Fatalf("config.Save: %v", err)
+	}
+
+	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "")
+	if cfg.Theme != "ocean" {
+		t.Errorf("TUIConfig.Theme = %q, want %q", cfg.Theme, "ocean")
+	}
+}
+
+// TestNewTUIConfigNoSavedThemeIsEmpty verifies Theme stays empty when no
+// selection was ever persisted (default theme path).
+func TestNewTUIConfigNoSavedThemeIsEmpty(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "")
+	if cfg.Theme != "" {
+		t.Errorf("TUIConfig.Theme = %q, want empty", cfg.Theme)
 	}
 }

@@ -12,6 +12,7 @@ type Config struct {
 	Gateway        string            `json:"gateway,omitempty"` // "" = direct, "openrouter" = OpenRouter
 	APIKeys        map[string]string `json:"api_keys,omitempty"`
 	HistoryEntries []string          `json:"history_entries,omitempty"` // newest-first command history
+	Theme          string            `json:"theme,omitempty"`           // selected color theme name (epic #810)
 }
 
 func configPath() (string, error) {
