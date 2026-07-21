@@ -197,12 +197,19 @@ func main() {
 
 func run() error {
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	defer signal.Stop(sig)
 
 	if *mcpFlag {
+		// MCP stdio mode shuts down on any delivered signal; SIGHUP is
+		// deliberately not registered here so a hangup cannot kill it.
+		signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+		defer signal.Stop(sig)
 		return runMCPStdio(sig)
 	}
+
+	// HTTP server mode: SIGHUP triggers a live config reload (epic #815)
+	// instead of terminating the daemon; SIGINT/SIGTERM shut down as before.
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sig)
 
 	return runWithSignalsFunc(sig, os.Getenv, func(cfg openai.Config) (harness.Provider, error) {
 		return openai.NewClient(cfg)
@@ -949,10 +956,10 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 		}
 	}()
 
-	select {
-	case err := <-serverErr:
+	// Wait for server failure, shutdown signal, or SIGHUP (config reload).
+	// SIGINT/SIGTERM return nil here and fall through to graceful shutdown.
+	if err := awaitServer(sig, serverErr, configReloader.reload); err != nil {
 		return err
-	case <-sig:
 	}
 
 	// Shut down callbacks before the HTTP server to prevent new runs during shutdown

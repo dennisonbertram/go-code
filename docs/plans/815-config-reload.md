@@ -185,3 +185,61 @@
 - Mitigation: `configReloader.mu` serializes the whole load→diff→apply→commit sequence.
 - Risk: reload diverges from startup's effective-config resolution (MaxSteps 0→8, profile defaults).
 - Mitigation: single `loadHarnessConfig` used by both paths.
+
+---
+
+# Plan: epic(config) #815 Slice 4 — SIGHUP triggers config reload
+
+## Context
+
+- Problem: slice 3 exposed reload only over HTTP. Operators expect the classic `kill -HUP <pid>` path. Today `harnessd` registers only SIGINT/SIGTERM (`main.go:200`); SIGHUP would terminate the process (Go default) or, worse, once registered naively would be treated as shutdown by both the HTTP path and the MCP stdio path.
+- User impact: `kill -HUP <harnessd pid>` after a config edit logs `config reloaded (SIGHUP): applied=[...] restart_required=[...]` and the daemon keeps serving; reload errors are logged, never fatal; repeated SIGHUPs reload again.
+- Constraints: SIGINT/SIGTERM shutdown behavior byte-identical; MCP stdio mode (`--mcp`) must NOT gain SIGHUP handling (its signal goroutine cancels on any received signal — registering SIGHUP there would make a hangup kill the stdio server). Strict TDD.
+
+## Scope
+
+- In scope:
+  - `cmd/harnessd/main.go`: register `syscall.SIGHUP` on the HTTP-server signal path only (MCP stdio registration unchanged); replace the one-shot shutdown `select` with a loop that dispatches SIGHUP to the slice-3 `configReloader.reload` and everything else to shutdown.
+  - Extraction for testability: `awaitServer(sig, serverErr, reloadFn) error` — the signal loop as a pure-ish unit (channels + injected reload func).
+- Out of scope: TUI `/reload` (slice 5), runbook (slice 6), file-watcher auto reload.
+
+## Documentation Contract
+
+- Feature status: `in implementation`
+- Public docs affected: none yet (runbook lands in slice 6)
+- Spec docs to update before code: this plan
+- Implementation notes to add after code: engineering-log entry
+
+## Test Plan (TDD)
+
+- New failing tests first (`cmd/harnessd/sighup_test.go`):
+  - SIGHUP invokes the injected reload func exactly once, then keeps waiting; SIGTERM after returns nil
+  - reload error is logged not fatal: first SIGHUP (failing) → still alive, second SIGHUP invokes reload again (repeat reload works)
+  - server error on `serverErr` returns that error immediately
+  - SIGINT and SIGTERM return nil promptly without invoking reload (shutdown unchanged)
+  - nil reloadFn + SIGHUP does not kill the wait loop (defensive)
+- Existing tests to update: none
+- Regression tests required: the shutdown-unchanged test is the permanent guard for SIGINT/SIGTERM semantics.
+
+## Cross-Surface Impact Map
+
+- Config: none (reuses slices 1–3).
+- Server API: none.
+- TUI state: none.
+- Regression tests: `go test ./cmd/harnessd/... ./internal/config/... -count=1` green; full `test-regression.sh` before PR.
+
+## Implementation Checklist
+
+- [x] Write failing tests first (`undefined: awaitServer` = red).
+- [x] Implement `awaitServer` loop + SIGHUP registration (HTTP path only).
+- [x] `gofmt`, `go vet`, package tests green.
+- [x] `./scripts/test-regression.sh`.
+- [x] Engineering-log entry; plan checklist.
+- [ ] Commit, push `epic/815-config-reload-s4`, open PR referencing #815. Do NOT merge.
+
+## Risks and Mitigations
+
+- Risk: SIGHUP registration leaks into MCP stdio mode and turns hangups into shutdowns.
+- Mitigation: SIGHUP registered only on the non-MCP path in `run()`; MCP registration untouched.
+- Risk: a reload panic/error takes the daemon down.
+- Mitigation: reload runs synchronously inside the loop with error logged not returned; `configReloader.reload` is mutex-serialized and panic-free by construction (load errors are values); shutdown path unchanged.
