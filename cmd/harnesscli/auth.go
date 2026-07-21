@@ -197,6 +197,8 @@ func dispatch(args []string) int {
 		return runPlugin(args[1:])
 	case "auth":
 		return runAuth(args[1:])
+	case "mcp":
+		return runMCP(args[1:])
 	case "hooks":
 		return runHooks(args[1:])
 	case "service":

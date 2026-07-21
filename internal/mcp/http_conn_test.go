@@ -1149,3 +1149,239 @@ func TestClientManager_HTTP_BearerGatedServer_WithoutHeaders_Unauthorized(t *tes
 		t.Errorf("errors.Is(err, ErrUnauthorized) = false for error %q", err.Error())
 	}
 }
+
+// --- Slice 4 (epic #809): token provider and 401 re-auth guidance ---
+
+// TestHTTPConn_UnauthorizedError_ContainsLoginHint verifies that a 401
+// response produces an error that names the server and the exact remediation
+// command, while still wrapping ErrUnauthorized.
+func TestHTTPConn_UnauthorizedError_ContainsLoginHint(t *testing.T) {
+	t.Parallel()
+
+	srv := newMockMCPHTTPServer(t, mockHTTPMCPServerOpts{non2xxStatus: http.StatusUnauthorized})
+	defer srv.Close()
+
+	conn, err := mcp.DialHTTPForTest(mcp.ServerConfig{
+		Name:      "hinted",
+		Transport: "http",
+		URL:       srv.URL,
+	})
+	if err != nil {
+		t.Fatalf("DialHTTPForTest: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = conn.Initialize(ctx)
+	if err == nil {
+		t.Fatal("expected error from 401 response, got nil")
+	}
+	if !errors.Is(err, mcp.ErrUnauthorized) {
+		t.Errorf("errors.Is(err, ErrUnauthorized) = false for %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "harnesscli mcp login hinted") {
+		t.Errorf("error %q does not contain the re-auth hint %q", err.Error(), "harnesscli mcp login hinted")
+	}
+}
+
+// TestHTTPConn_TokenProvider_AttachesBearer verifies that a configured token
+// provider supplies the Authorization header end to end: a bearer-gated
+// server becomes reachable.
+func TestHTTPConn_TokenProvider_AttachesBearer(t *testing.T) {
+	t.Parallel()
+
+	srv, rec := newHeaderRecordingServer(t, "Bearer provided-tok")
+	defer srv.Close()
+
+	conn, err := mcp.DialHTTPForTest(mcp.ServerConfig{
+		Name:      "provided",
+		Transport: "http",
+		URL:       srv.URL,
+		TokenProvider: func(context.Context, string) (string, error) {
+			return "provided-tok", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("DialHTTPForTest: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := conn.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize with token provider: %v", err)
+	}
+	if _, err := conn.ListTools(ctx); err != nil {
+		t.Fatalf("ListTools with token provider: %v", err)
+	}
+	for _, method := range []string{"initialize", "tools/list"} {
+		if got := rec.headerForMethod(method, "Authorization"); got != "Bearer provided-tok" {
+			t.Errorf("%s: Authorization = %q, want %q", method, got, "Bearer provided-tok")
+		}
+	}
+}
+
+// TestHTTPConn_TokenProvider_EmptyMeansNoHeader verifies that a provider
+// returning ("", nil) leaves the request unauthenticated.
+func TestHTTPConn_TokenProvider_EmptyMeansNoHeader(t *testing.T) {
+	t.Parallel()
+
+	srv, rec := newHeaderRecordingServer(t, "")
+	defer srv.Close()
+
+	conn, err := mcp.DialHTTPForTest(mcp.ServerConfig{
+		Name:      "no-token",
+		Transport: "http",
+		URL:       srv.URL,
+		TokenProvider: func(context.Context, string) (string, error) {
+			return "", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("DialHTTPForTest: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := conn.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if got := rec.headerForMethod("initialize", "Authorization"); got != "" {
+		t.Errorf("Authorization = %q, want empty", got)
+	}
+}
+
+// TestHTTPConn_TokenProvider_StaticHeaderWins verifies that a statically
+// configured Authorization header takes precedence over the token provider.
+func TestHTTPConn_TokenProvider_StaticHeaderWins(t *testing.T) {
+	t.Parallel()
+
+	srv, rec := newHeaderRecordingServer(t, "Bearer static-tok")
+	defer srv.Close()
+
+	conn, err := mcp.DialHTTPForTest(mcp.ServerConfig{
+		Name:      "static-wins",
+		Transport: "http",
+		URL:       srv.URL,
+		Headers:   map[string]string{"Authorization": "Bearer static-tok"},
+		TokenProvider: func(context.Context, string) (string, error) {
+			return "provided-tok", nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("DialHTTPForTest: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := conn.Initialize(ctx); err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	if got := rec.headerForMethod("initialize", "Authorization"); got != "Bearer static-tok" {
+		t.Errorf("Authorization = %q, want static header %q", got, "Bearer static-tok")
+	}
+}
+
+// TestHTTPConn_TokenProvider_ErrorSurfaces verifies that a provider failure
+// fails the request with the provider's error.
+func TestHTTPConn_TokenProvider_ErrorSurfaces(t *testing.T) {
+	t.Parallel()
+
+	srv := newMockMCPServer(t, nil)
+	defer srv.Close()
+
+	conn, err := mcp.DialHTTPForTest(mcp.ServerConfig{
+		Name:      "provider-fails",
+		Transport: "http",
+		URL:       srv.URL,
+		TokenProvider: func(context.Context, string) (string, error) {
+			return "", errors.New("token store exploded")
+		},
+	})
+	if err != nil {
+		t.Fatalf("DialHTTPForTest: %v", err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err = conn.Initialize(ctx)
+	if err == nil {
+		t.Fatal("expected provider error, got nil")
+	}
+	if !strings.Contains(err.Error(), "token store exploded") {
+		t.Errorf("error %q does not contain the provider failure", err.Error())
+	}
+}
+
+// TestClientManager_SetTokenProvider verifies the manager-level default
+// provider is used by servers registered without an explicit one, and that an
+// explicit per-server provider takes precedence.
+func TestClientManager_SetTokenProvider(t *testing.T) {
+	t.Parallel()
+
+	t.Run("default used when server has none", func(t *testing.T) {
+		t.Parallel()
+
+		srv, _ := newHeaderRecordingServer(t, "Bearer x")
+		defer srv.Close()
+
+		cm := mcp.NewClientManager()
+		defer cm.Close()
+		cm.SetTokenProvider(func(context.Context, string) (string, error) { return "x", nil })
+
+		if err := cm.AddServer(mcp.ServerConfig{Name: "gated", Transport: "http", URL: srv.URL}); err != nil {
+			t.Fatalf("AddServer: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if _, err := cm.DiscoverTools(ctx, "gated"); err != nil {
+			t.Fatalf("DiscoverTools with manager default provider: %v", err)
+		}
+	})
+
+	t.Run("explicit provider overrides default", func(t *testing.T) {
+		t.Parallel()
+
+		srv, _ := newHeaderRecordingServer(t, "Bearer x")
+		defer srv.Close()
+
+		cm := mcp.NewClientManager()
+		defer cm.Close()
+		cm.SetTokenProvider(func(context.Context, string) (string, error) { return "x", nil })
+
+		if err := cm.AddServer(mcp.ServerConfig{
+			Name:      "gated-explicit",
+			Transport: "http",
+			URL:       srv.URL,
+			TokenProvider: func(context.Context, string) (string, error) {
+				return "wrong-token", nil
+			},
+		}); err != nil {
+			t.Fatalf("AddServer: %v", err)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		// The explicit (wrong) provider is used, not the manager default that
+		// would succeed — so the call must fail with 401.
+		_, err := cm.DiscoverTools(ctx, "gated-explicit")
+		if err == nil {
+			t.Fatal("expected 401 with the explicit wrong-token provider, got nil")
+		}
+		if !errors.Is(err, mcp.ErrUnauthorized) {
+			t.Errorf("errors.Is(err, ErrUnauthorized) = false for %q", err.Error())
+		}
+	})
+}

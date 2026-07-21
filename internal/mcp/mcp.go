@@ -56,7 +56,19 @@ type ServerConfig struct {
 	// after the transport's own protocol headers, so an explicitly configured
 	// header wins on collision. Ignored on the stdio transport.
 	Headers map[string]string
+
+	// TokenProvider, when set, resolves a bearer token for this server at
+	// request time (e.g. from the OAuth token store with silent refresh).
+	// It is consulted on the http transport only when no static
+	// Authorization header is configured; returning ("", nil) sends the
+	// request without credentials. Not serialized — set programmatically.
+	TokenProvider TokenProviderFunc `json:"-"`
 }
+
+// TokenProviderFunc resolves a bearer token for the named server at request
+// time. Returning ("", nil) means no credentials are available and the
+// request is sent unauthenticated.
+type TokenProviderFunc func(ctx context.Context, serverName string) (string, error)
 
 // Conn represents an active connection to an MCP server.
 type Conn interface {
@@ -110,6 +122,8 @@ type serverEntry struct {
 type ClientManager struct {
 	mu      sync.RWMutex
 	servers map[string]*serverEntry
+
+	tokenProvider TokenProviderFunc // default for servers registered without one
 }
 
 // NewClientManager returns a new, empty ClientManager.
@@ -117,6 +131,15 @@ func NewClientManager() *ClientManager {
 	return &ClientManager{
 		servers: make(map[string]*serverEntry),
 	}
+}
+
+// SetTokenProvider sets the default token provider applied to servers
+// registered without an explicit ServerConfig.TokenProvider. Call it before
+// the first connect (the provider is captured at dial time).
+func (m *ClientManager) SetTokenProvider(p TokenProviderFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.tokenProvider = p
 }
 
 // AddServer registers a server from a config. The connection is not established
@@ -274,7 +297,13 @@ func (m *ClientManager) getConn(ctx context.Context, serverName string) (Conn, e
 	if entry.factory != nil {
 		conn, err = entry.factory()
 	} else {
-		conn, err = dialServer(entry.config)
+		cfg := entry.config
+		if cfg.TokenProvider == nil {
+			m.mu.RLock()
+			cfg.TokenProvider = m.tokenProvider
+			m.mu.RUnlock()
+		}
+		conn, err = dialServer(cfg)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("mcp: connect %q: %w", serverName, err)

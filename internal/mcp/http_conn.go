@@ -31,10 +31,11 @@ var (
 // httpConn implements Conn over HTTP using JSON-RPC 2.0.
 // It supports both application/json and text/event-stream (SSE) responses.
 type httpConn struct {
-	name     string
-	endpoint string
-	headers  map[string]string
-	client   *http.Client
+	name          string
+	endpoint      string
+	headers       map[string]string
+	tokenProvider TokenProviderFunc
+	client        *http.Client
 
 	idCounter         atomic.Int64
 	negotiatedVersion string
@@ -56,10 +57,11 @@ func dialHTTP(cfg ServerConfig) (Conn, error) {
 		return nil, fmt.Errorf("mcp: server %q URL must use http or https scheme (got %q)", cfg.Name, u.Scheme)
 	}
 	return &httpConn{
-		name:     cfg.Name,
-		endpoint: cfg.URL,
-		headers:  cfg.Headers,
-		client:   &http.Client{Timeout: 30 * time.Second},
+		name:          cfg.Name,
+		endpoint:      cfg.URL,
+		headers:       cfg.Headers,
+		tokenProvider: cfg.TokenProvider,
+		client:        &http.Client{Timeout: 30 * time.Second},
 	}, nil
 }
 
@@ -220,6 +222,17 @@ func (c *httpConn) sendRequest(ctx context.Context, method string, params any) (
 	for k, v := range c.headers {
 		httpReq.Header.Set(k, v)
 	}
+	// Resolve a bearer token only when no static Authorization header is
+	// configured; static credentials always win.
+	if c.tokenProvider != nil && httpReq.Header.Get("Authorization") == "" {
+		token, err := c.tokenProvider(ctx, c.name)
+		if err != nil {
+			return nil, fmt.Errorf("mcp: resolve token for %q: %w", c.name, err)
+		}
+		if token != "" {
+			httpReq.Header.Set("Authorization", "Bearer "+token)
+		}
+	}
 
 	resp, err := c.client.Do(httpReq)
 	if err != nil {
@@ -230,7 +243,7 @@ func (c *httpConn) sendRequest(ctx context.Context, method string, params any) (
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		switch resp.StatusCode {
 		case http.StatusUnauthorized:
-			return nil, fmt.Errorf("mcp: server %q returned HTTP %d %s: %w", c.name, resp.StatusCode, resp.Status, ErrUnauthorized)
+			return nil, fmt.Errorf("mcp: server %q returned HTTP %d %s: %w; run `harnesscli mcp login %s` to authenticate", c.name, resp.StatusCode, resp.Status, ErrUnauthorized, c.name)
 		case http.StatusForbidden:
 			return nil, fmt.Errorf("mcp: server %q returned HTTP %d %s: %w", c.name, resp.StatusCode, resp.Status, ErrForbidden)
 		}
