@@ -3,6 +3,7 @@ Command Registry - 80x24
 /attach — Attach file context with @path tokens
 /cancel — Cancel a harness run
 /clear — Clear conversation history
+/compact — Compact the active run's context (/compact [instruction])
 /config — View current session configuration
 /context — View context window usage
 /cost — Show running cost and token usage
