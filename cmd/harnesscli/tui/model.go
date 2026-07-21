@@ -531,6 +531,7 @@ func buildHelpDialog(reg *CommandRegistry, keys KeyMap) helpdialog.Model {
 		{Keys: "ctrl+e", Description: keys.EditMode.Help().Desc},
 		{Keys: "esc", Description: keys.Interrupt.Help().Desc},
 		{Keys: "ctrl+s", Description: keys.Copy.Help().Desc},
+		{Keys: "ctrl+g", Description: keys.Steer.Help().Desc},
 		{Keys: "ctrl+v", Description: keys.PasteImage.Help().Desc},
 		{Keys: "ctrl+c", Description: "interrupt run (twice) / quit when idle"},
 	}
@@ -1014,6 +1015,23 @@ func (m *Model) appendSteeringMarker(message string) {
 		Timestamp: time.Now(),
 	})
 	m.appendMessageBubble(messagebubble.RoleUser, marked)
+}
+
+// steerErrorStatusText maps a SteerErrorMsg Kind (see messages.go) to the
+// status-bar text shown when a steer attempt fails.
+func steerErrorStatusText(msg SteerErrorMsg) string {
+	switch msg.Kind {
+	case "run_not_active":
+		return "Steer failed: run already finished"
+	case "steering_buffer_full":
+		return "Steer failed: steering buffer full — try again shortly"
+	case "not_found":
+		return "Steer failed: run not found"
+	case "invalid_prompt":
+		return "Steer failed: prompt is required"
+	default:
+		return "Steer failed: " + msg.Err
+	}
 }
 
 func (m *Model) appendToolUseView(view tooluse.Model) {
@@ -2289,6 +2307,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				cmds = append(cmds, m.setStatusMsg("Copy unavailable"))
 			}
+		case key.Matches(msg, m.keys.Steer):
+			// Mid-turn steering (epic #820): send the input-box content into the
+			// active run via POST /v1/runs/{id}/steer. The run is neither
+			// cancelled nor restarted — the message lands at the next step
+			// boundary (confirmed later by a steering.received SSE event).
+			steerPrompt := strings.TrimSpace(m.input.Value())
+			switch {
+			case !m.runActive || m.RunID == "":
+				cmds = append(cmds, m.setStatusMsg("No active run to steer"))
+			case steerPrompt == "":
+				cmds = append(cmds, m.setStatusMsg("Type a message to steer into the run"))
+			default:
+				m.input = m.input.Clear()
+				cmds = append(cmds,
+					m.setStatusMsg("Steering sent"),
+					steerRunCmd(m.config.BaseURL, m.RunID, steerPrompt, m.config.APIKey),
+				)
+			}
+			return m, tea.Batch(cmds...)
 		case key.Matches(msg, m.keys.Interrupt):
 			if m.overlayActive && m.activeOverlay == "dashboard" && m.dashboard.peekID != "" {
 				if m.dashboard.stopPeek != nil {
@@ -3571,6 +3608,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(cmds...)
 		}
 		cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Compacted context — %d messages removed", msg.MessagesRemoved)))
+
+	// SteerAcceptedMsg: the server queued the steering message (HTTP 202). The
+	// send-time "Steering sent" status already covers the acknowledgement; the
+	// server-confirmed transcript marker arrives later as a steering.received
+	// SSE event (slice 2). Slice 4 hooks this for the local-echo lifecycle.
+	case SteerAcceptedMsg:
+
+	case SteerErrorMsg:
+		cmds = append(cmds, m.setStatusMsg(steerErrorStatusText(msg)))
 
 	case SSEEventMsg:
 		if m.dashboard.peekID != "" {

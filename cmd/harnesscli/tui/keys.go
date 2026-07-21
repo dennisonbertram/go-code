@@ -26,6 +26,12 @@ type KeyMap struct {
 	Dashboard key.Binding
 	Quit      key.Binding
 	Copy      key.Binding
+	// Steer injects the input-box content into the active run as a steering
+	// message (epic #820) without cancelling it. Bound to ctrl+g: ctrl+s is
+	// taken by Copy, and ctrl+r stays reserved for a future history-search
+	// binding per terminal convention (both verified unbound under
+	// cmd/harnesscli at implementation time).
+	Steer key.Binding
 	// PasteImage attaches a clipboard image to the input as a placeholder
 	// chip (epic #818, slice 2).
 	PasteImage key.Binding
@@ -102,6 +108,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("ctrl+s"),
 			key.WithHelp("ctrl+s", "copy last response"),
 		),
+		Steer: key.NewBinding(
+			key.WithKeys("ctrl+g"),
+			key.WithHelp("ctrl+g", "steer run"),
+		),
 		PasteImage: key.NewBinding(
 			key.WithKeys("ctrl+v"),
 			key.WithHelp("ctrl+v", "paste image from clipboard"),
@@ -119,13 +129,13 @@ func DefaultKeyMap() KeyMap {
 
 // ShortHelp implements key.Map for the help component.
 func (k KeyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Submit, k.Interrupt, k.SlashCmd, k.Help, k.Dashboard, k.Quit, k.Newline, k.Copy}
+	return []key.Binding{k.Submit, k.Interrupt, k.Steer, k.SlashCmd, k.Help, k.Dashboard, k.Quit, k.Newline, k.Copy}
 }
 
 // FullHelp implements key.Map for the help component.
 func (k KeyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
-		{k.Submit, k.Newline, k.Interrupt, k.Quit},
+		{k.Submit, k.Newline, k.Interrupt, k.Steer, k.Quit},
 		{k.ScrollUp, k.ScrollDown, k.PageUp, k.PageDown, k.GotoTop, k.GotoBottom},
 		{k.SlashCmd, k.AtMention, k.ShellMode, k.Help, k.Dashboard},
 		{k.EditMode, k.ExpandTool},
