@@ -38,6 +38,13 @@ type CallbackLister interface {
 	ListAll() []tools.CallbackInfo
 }
 
+// CallbackCanceler cancels a pending delayed callback by ID for
+// POST /v1/callbacks/{id}/cancel (epic #814 slice 4).
+// *tools.CallbackManager satisfies it via Cancel.
+type CallbackCanceler interface {
+	Cancel(id string) (tools.CallbackInfo, error)
+}
+
 // Task is the unified DTO returned by GET /v1/tasks. It captures one piece of
 // background work — a managed subagent, a cron job, or a pending delayed
 // callback — with the fields the /tasks panel needs to render a row.
@@ -207,11 +214,13 @@ func taskFromBashJob(tj harness.TrackedJob, now time.Time) Task {
 	}
 }
 
-// handleJobByID serves POST /v1/jobs/{id}/kill, the daemon-side kill path for
-// background bash jobs (epic #814 slice 2). The {id} is the namespaced task
-// ID from GET /v1/tasks ("<managerRef>:<shellID>"). Requires runs:write,
-// matching the mutating subagent/cron routes. Cross-tenant kills are 404
-// (not 403), matching subagent cancel semantics.
+// handleJobByID serves the per-job actions for background bash jobs:
+//   - POST /v1/jobs/{id}/kill   — daemon-side kill (epic #814 slice 2), runs:write
+//   - GET  /v1/jobs/{id}/output — captured output snapshot (epic #814 slice 4), runs:read
+//
+// The {id} is the namespaced task ID from GET /v1/tasks
+// ("<managerRef>:<shellID>"). Cross-tenant access is 404 (not 403), matching
+// subagent cancel semantics.
 func (s *Server) handleJobByID(w http.ResponseWriter, r *http.Request) {
 	if s.jobTracker == nil {
 		writeError(w, http.StatusNotImplemented, "not_configured", "job tracker is not configured")
@@ -219,11 +228,24 @@ func (s *Server) handleJobByID(w http.ResponseWriter, r *http.Request) {
 	}
 	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/jobs/"), "/")
 	parts := strings.Split(path, "/")
-	if len(parts) != 2 || parts[0] == "" || parts[1] != "kill" {
+	if len(parts) != 2 || parts[0] == "" {
 		writeError(w, http.StatusNotFound, "not_found", "job action not found")
 		return
 	}
 	id := parts[0]
+	switch parts[1] {
+	case "kill":
+		s.handleJobKill(w, r, id)
+	case "output":
+		s.handleJobOutput(w, r, id)
+	default:
+		writeError(w, http.StatusNotFound, "not_found", "job action not found")
+	}
+}
+
+// handleJobKill serves POST /v1/jobs/{id}/kill. Requires runs:write, matching
+// the mutating subagent/cron routes.
+func (s *Server) handleJobKill(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
 		writeMethodNotAllowed(w, http.MethodPost)
 		return
@@ -250,6 +272,85 @@ func (s *Server) handleJobByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "killed": true})
+}
+
+// handleJobOutput serves GET /v1/jobs/{id}/output: the job's captured output
+// snapshot (same payload as the agent-facing job_output tool) for the /tasks
+// panel's view-output action (epic #814 slice 4). Requires runs:read.
+func (s *Server) handleJobOutput(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodGet {
+		writeMethodNotAllowed(w, http.MethodGet)
+		return
+	}
+	if !hasScope(r.Context(), store.ScopeRunsRead) {
+		writeScopeError(w, store.ScopeRunsRead)
+		return
+	}
+	// Tenant scoping mirrors handleJobKill.
+	if caller := TenantIDFromContext(r.Context()); caller != "" {
+		tj, ok := s.jobTracker.Get(id)
+		if !ok || tj.Info.TenantID != caller {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("job %q not found", id))
+			return
+		}
+	}
+	out, err := s.jobTracker.Output(id)
+	if err != nil {
+		if errors.Is(err, harness.ErrJobNotFound) {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("job %q not found", id))
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "output_failed", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleCallbackByID serves POST /v1/callbacks/{id}/cancel, the daemon-side
+// cancel path for pending delayed callbacks (epic #814 slice 4). Requires
+// runs:write. Cross-tenant cancels are 404 (not 403), matching the other
+// task stop routes.
+func (s *Server) handleCallbackByID(w http.ResponseWriter, r *http.Request) {
+	if s.callbackCanceler == nil {
+		writeError(w, http.StatusNotImplemented, "not_configured", "callback manager is not configured")
+		return
+	}
+	path := strings.Trim(strings.TrimPrefix(r.URL.Path, "/v1/callbacks/"), "/")
+	parts := strings.Split(path, "/")
+	if len(parts) != 2 || parts[0] == "" || parts[1] != "cancel" {
+		writeError(w, http.StatusNotFound, "not_found", "callback action not found")
+		return
+	}
+	id := parts[0]
+	if r.Method != http.MethodPost {
+		writeMethodNotAllowed(w, http.MethodPost)
+		return
+	}
+	if !hasScope(r.Context(), store.ScopeRunsWrite) {
+		writeScopeError(w, store.ScopeRunsWrite)
+		return
+	}
+	// Tenant scoping: when auth is enabled, the caller may only cancel their
+	// own tenant's callbacks. Pending callbacks are enumerated via the lister
+	// (the cancel path has no separate lookup).
+	if caller := TenantIDFromContext(r.Context()); caller != "" && s.callbackLister != nil {
+		owned := false
+		for _, info := range s.callbackLister.ListAll() {
+			if info.ID == id && info.TenantID == caller {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("callback %q not found", id))
+			return
+		}
+	}
+	if _, err := s.callbackCanceler.Cancel(id); err != nil {
+		writeError(w, http.StatusNotFound, "not_found", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"id": id, "status": "canceled"})
 }
 
 // taskAgeSeconds computes a non-negative age in whole seconds. Clock skew or

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -629,5 +630,197 @@ func TestJobKillEndpoint_NotConfigured(t *testing.T) {
 	code, _ := doSubagentRequest(t, ts, http.MethodPost, "", "/v1/jobs/jm1:job_1/kill", nil)
 	if code != http.StatusNotImplemented {
 		t.Fatalf("kill with unconfigured tracker: status %d, want 501", code)
+	}
+}
+
+// --- task output + callback cancel endpoints (epic #814 slice 4) ---
+
+// TestJobOutputEndpoint verifies GET /v1/jobs/{id}/output returns the job's
+// captured output (the view-output path for bash_job rows in /tasks).
+func TestJobOutputEndpoint(t *testing.T) {
+	t.Parallel()
+
+	tracker, mgr := newTrackedJobManager(t)
+	shellID := startBashJob(t, mgr, context.Background(), "echo hello-from-job")
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		out, err := mgr.Output(shellID, false)
+		if err != nil {
+			t.Fatalf("Output(%s): %v", shellID, err)
+		}
+		if running, _ := out["running"].(bool); !running {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("echo job did not finish in time")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	var taskID string
+	for _, tj := range tracker.List() {
+		taskID = tj.TaskID
+	}
+
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), JobTracker: tracker})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, body := doSubagentRequest(t, ts, http.MethodGet, "", "/v1/jobs/"+taskID+"/output", nil)
+	if code != http.StatusOK {
+		t.Fatalf("GET /v1/jobs/%s/output: status %d, body %s; want 200", taskID, code, body)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(body), &payload); err != nil {
+		t.Fatalf("decode output response: %v", err)
+	}
+	text, _ := payload["output"].(string)
+	if !strings.Contains(text, "hello-from-job") {
+		t.Errorf("output payload = %q, want it to contain 'hello-from-job'", text)
+	}
+}
+
+// TestJobOutputEndpoint_NotFoundAndNotConfigured verifies 404 for unknown
+// jobs and 501 when no tracker is wired.
+func TestJobOutputEndpoint_NotFoundAndNotConfigured(t *testing.T) {
+	t.Parallel()
+
+	tracker, _ := newTrackedJobManager(t)
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), JobTracker: tracker})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, _ := doSubagentRequest(t, ts, http.MethodGet, "", "/v1/jobs/jm999:job_1/output", nil)
+	if code != http.StatusNotFound {
+		t.Errorf("unknown job output: status %d, want 404", code)
+	}
+
+	bareHandler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t)})
+	bareTS := httptest.NewServer(bareHandler)
+	defer bareTS.Close()
+	code, _ = doSubagentRequest(t, bareTS, http.MethodGet, "", "/v1/jobs/jm1:job_1/output", nil)
+	if code != http.StatusNotImplemented {
+		t.Errorf("unconfigured tracker output: status %d, want 501", code)
+	}
+}
+
+// TestJobOutputEndpoint_CrossTenant verifies a caller cannot read another
+// tenant's job output.
+func TestJobOutputEndpoint_CrossTenant(t *testing.T) {
+	t.Parallel()
+
+	ms := store.NewMemoryStore()
+	_, keyA := newSubagentTenantAPIKey(t, "tenant-alpha", "key A")
+	tokenB, keyB := newSubagentTenantAPIKey(t, "tenant-bravo", "key B")
+	if err := ms.CreateAPIKey(context.Background(), keyA); err != nil {
+		t.Fatalf("CreateAPIKey A: %v", err)
+	}
+	if err := ms.CreateAPIKey(context.Background(), keyB); err != nil {
+		t.Fatalf("CreateAPIKey B: %v", err)
+	}
+
+	tracker, mgr := newTrackedJobManager(t)
+	startBashJob(t, mgr, tenantJobCtx("tenant-alpha"), "sleep 30")
+	var taskID string
+	for _, tj := range tracker.List() {
+		taskID = tj.TaskID
+	}
+
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), Store: ms, JobTracker: tracker})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, _ := doSubagentRequest(t, ts, http.MethodGet, tokenB, "/v1/jobs/"+taskID+"/output", nil)
+	if code != http.StatusNotFound {
+		t.Fatalf("cross-tenant output: status %d, want 404", code)
+	}
+}
+
+// TestCallbackCancelEndpoint verifies POST /v1/callbacks/{id}/cancel cancels a
+// pending delayed callback.
+func TestCallbackCancelEndpoint(t *testing.T) {
+	t.Parallel()
+
+	mgr := tools.NewCallbackManager(noopRunStarter{})
+	info, err := mgr.Set(tools.SetRequest{ConversationID: "conv-1", Delay: time.Hour, Prompt: "check deploy"})
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), CallbackLister: mgr, CallbackCanceler: mgr})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, body := doSubagentRequest(t, ts, http.MethodPost, "", "/v1/callbacks/"+info.ID+"/cancel", nil)
+	if code != http.StatusOK {
+		t.Fatalf("POST /v1/callbacks/%s/cancel: status %d, body %s; want 200", info.ID, code, body)
+	}
+	if got := len(mgr.ListAll()); got != 0 {
+		t.Fatalf("ListAll after cancel has %d pending callbacks, want 0", got)
+	}
+}
+
+// TestCallbackCancelEndpoint_NotFound verifies unknown IDs and already-fired
+// callbacks are reported.
+func TestCallbackCancelEndpoint_NotFound(t *testing.T) {
+	t.Parallel()
+
+	mgr := tools.NewCallbackManager(noopRunStarter{})
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), CallbackLister: mgr, CallbackCanceler: mgr})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, _ := doSubagentRequest(t, ts, http.MethodPost, "", "/v1/callbacks/cb-missing/cancel", nil)
+	if code != http.StatusNotFound {
+		t.Errorf("unknown callback cancel: status %d, want 404", code)
+	}
+}
+
+// TestCallbackCancelEndpoint_NotConfigured verifies 501 without a canceler.
+func TestCallbackCancelEndpoint_NotConfigured(t *testing.T) {
+	t.Parallel()
+
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t)})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, _ := doSubagentRequest(t, ts, http.MethodPost, "", "/v1/callbacks/cb-1/cancel", nil)
+	if code != http.StatusNotImplemented {
+		t.Errorf("unconfigured callback cancel: status %d, want 501", code)
+	}
+}
+
+// TestCallbackCancelEndpoint_CrossTenant verifies a caller cannot cancel
+// another tenant's callback.
+func TestCallbackCancelEndpoint_CrossTenant(t *testing.T) {
+	t.Parallel()
+
+	ms := store.NewMemoryStore()
+	_, keyA := newSubagentTenantAPIKey(t, "tenant-alpha", "key A")
+	tokenB, keyB := newSubagentTenantAPIKey(t, "tenant-bravo", "key B")
+	if err := ms.CreateAPIKey(context.Background(), keyA); err != nil {
+		t.Fatalf("CreateAPIKey A: %v", err)
+	}
+	if err := ms.CreateAPIKey(context.Background(), keyB); err != nil {
+		t.Fatalf("CreateAPIKey B: %v", err)
+	}
+
+	mgr := tools.NewCallbackManager(noopRunStarter{})
+	info, err := mgr.Set(tools.SetRequest{ConversationID: "conv-1", Delay: time.Hour, Prompt: "check deploy", TenantID: "tenant-alpha"})
+	if err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	handler := NewWithOptions(ServerOptions{Runner: testRunnerForAgents(t), Store: ms, CallbackLister: mgr, CallbackCanceler: mgr})
+	ts := httptest.NewServer(handler)
+	defer ts.Close()
+
+	code, _ := doSubagentRequest(t, ts, http.MethodPost, tokenB, "/v1/callbacks/"+info.ID+"/cancel", nil)
+	if code != http.StatusNotFound {
+		t.Fatalf("cross-tenant callback cancel: status %d, want 404", code)
+	}
+	if got := len(mgr.ListAll()); got != 1 {
+		t.Fatalf("cross-tenant cancel removed the callback; %d pending, want 1", got)
 	}
 }

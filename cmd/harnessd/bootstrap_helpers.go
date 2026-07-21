@@ -504,6 +504,7 @@ func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
 		RolloutDir:       opts.rolloutDir,
 		HooksSummary:     opts.hooksSummary,
 		CallbackLister:   opts.callbackMgr,
+		CallbackCanceler: opts.callbackMgr,
 		JobTracker:       opts.jobTracker,
 		ConfigReload:     configReloadFunc(opts.configReloader),
 	}

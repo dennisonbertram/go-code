@@ -99,6 +99,13 @@
 - Validation: `go test ./cmd/harnesscli/... -count=1` green (29 packages);
   gofmt/vet clean on touched files.
 
+## 2026-07-21 (Unified /tasks Panel — Epic #814, Slice 4)
+
+- The `/tasks` overlay now supports row actions. `o`/Enter views output: bash jobs via the new `GET /v1/jobs/{id}/output` (backed by `JobTracker.Output`, runs:read, tenant-checked), subagents via the existing detail endpoint, and cron/callback rows via a static detail built from the row (no endpoint exists for those). `x`/Ctrl+K stops the selected task through the type-appropriate path: bash job kill (`/v1/jobs/{id}/kill`), subagent cancel, cron DELETE, and the new `POST /v1/callbacks/{id}/cancel` (new `CallbackCanceler` server option, wired from the daemon's `CallbackManager`; runs:write, tenant-checked).
+- Deleting a cron schedule is destructive, so `x` on a cron row opens a confirmation prompt (`taskspanel` confirm mode); DELETE only fires after `y`. Esc and `n` cancel the prompt.
+- The panel gained detail (scrollable output) and confirm sub-modes plus a transient notice line for action errors; Esc inside a sub-mode backs out to the list instead of closing the overlay (the global Esc chain now consults `tasksPanel.Mode()` first). Enter is handled in the global Enter block via a tasks guard delegating to the shared `openSelectedTaskOutput` helper. A successful stop triggers a list refresh.
+- Validation: failing-first tests across all layers — `job_tracker_test.go` Output, `http_tasks_test.go` (7 new endpoint tests), `taskspanel` mode/render tests (12 new), `api_tasks_test.go` (5 new incl. per-type dispatch table), `tasks_overlay_814_test.go` (10 new model tests covering every acceptance flow). `go test ./cmd/harnesscli/... -count=1` green; gofmt/vet clean.
+
 ## 2026-07-21 (ACP Server Mode — Epic #806, Slice 3)
 
 - Prompt turns now stream live output to the editor: `assistant.message.delta` -> `agent_message_chunk`, `assistant.thinking.delta` -> `agent_thought_chunk` (payload field `content`), `tool.call.started` -> `tool_call` (`status: in_progress`, `title` = tool name, `kind` via a tool-name table), `tool.call.completed` -> `tool_call_update` (`completed`, or `failed` when the payload carries `error`; output included as content). `toolCallId` is the harness `call_id`, stable across start/complete.

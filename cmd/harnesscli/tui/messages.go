@@ -176,6 +176,23 @@ type TasksLoadedMsg struct{ Tasks []RemoteTask }
 // TasksLoadFailedMsg reports a failed /v1/tasks fetch.
 type TasksLoadFailedMsg struct{ Err string }
 
+// TaskOutputLoadedMsg carries one task's captured output for the /tasks
+// panel detail view (epic #814 slice 4).
+type TaskOutputLoadedMsg struct {
+	TaskID string
+	Title  string
+	Output string
+}
+
+// TaskActionResultMsg reports the outcome of a /tasks panel action (output
+// fetch failure, or a stop/kill/delete request; epic #814 slice 4). Err is
+// empty on success.
+type TaskActionResultMsg struct {
+	TaskID string
+	Action string // "output" | "stop"
+	Err    string
+}
+
 // HooksLoadedMsg carries the GET /v1/hooks listing for the /hooks command.
 type HooksLoadedMsg struct {
 	Hooks   []hookEntry     `json:"hooks"`

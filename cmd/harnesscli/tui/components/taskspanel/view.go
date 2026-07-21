@@ -72,17 +72,114 @@ func render(m Model, width, height int) string {
 		contentLines = 3
 	}
 
+	switch m.mode {
+	case ModeConfirm:
+		return renderConfirm(m, width, height, dialogWidth, contentLines)
+	case ModeDetail:
+		return renderDetail(m, width, height, dialogWidth, contentLines)
+	default:
+		return renderList(m, width, height, dialogWidth, contentLines)
+	}
+}
+
+// renderList renders the task list screen (default mode).
+func renderList(m Model, width, height, dialogWidth, contentLines int) string {
 	title := lipgloss.NewStyle().Width(dialogWidth).Align(lipgloss.Center).
 		Render(styleTitle.Render("Background Tasks"))
 	sep := styleSeparator.Render(strings.Repeat("─", dialogWidth))
 	header := styleHeader.Render("  " + rowCells("TYPE", "STATUS", "AGE", "COMMAND"))
 	content := renderContent(m, dialogWidth, contentLines)
 	footer := styleFooterHint.Width(dialogWidth).Align(lipgloss.Center).
-		Render("↑/↓ navigate  r refresh  esc close")
+		Render("↑/↓ navigate  o output  x stop  r refresh  esc close")
 
-	body := title + "\n" + sep + "\n" + header + "\n" + content + "\n" + footer
+	body := title + "\n" + sep + "\n" + header + "\n" + content
+	// Transient notice line (action errors) sits above the footer.
+	if m.notice != "" {
+		body += "\n" + styleErrorLine.Render("  "+truncate(m.notice, dialogWidth-2))
+	}
+	body += "\n" + footer
+
 	dialog := styleDialog.Width(dialogWidth).Render(body)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, dialog)
+}
 
+// renderConfirm renders the destructive-action confirmation prompt (deleting
+// a cron schedule cannot be undone).
+func renderConfirm(m Model, width, height, dialogWidth, contentLines int) string {
+	title := lipgloss.NewStyle().Width(dialogWidth).Align(lipgloss.Center).
+		Render(styleTitle.Render("Confirm Delete"))
+	sep := styleSeparator.Render(strings.Repeat("─", dialogWidth))
+
+	prompt := []string{
+		"",
+		styleRow.Render(fmt.Sprintf("  Delete cron job %q?", truncate(m.confirmTask.Label, dialogWidth-24))),
+		styleErrorLine.Render("  This cannot be undone."),
+	}
+	for len(prompt) < contentLines {
+		prompt = append(prompt, "")
+	}
+	footer := styleFooterHint.Width(dialogWidth).Align(lipgloss.Center).
+		Render("y confirm  n cancel")
+
+	body := title + "\n" + sep + "\n" + strings.Join(prompt, "\n") + "\n" + footer
+	dialog := styleDialog.Width(dialogWidth).Render(body)
+	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, dialog)
+}
+
+// renderDetail renders the scrollable output view for one task.
+func renderDetail(m Model, width, height, dialogWidth, contentLines int) string {
+	titleText := "Output: " + truncate(m.detailTitle, dialogWidth-10)
+	title := lipgloss.NewStyle().Width(dialogWidth).Align(lipgloss.Center).
+		Render(styleTitle.Render(titleText))
+	sep := styleSeparator.Render(strings.Repeat("─", dialogWidth))
+
+	// Window the detail lines around the scroll offset with ▲/▼ indicators,
+	// mirroring the list windowing.
+	scroll := m.detailScroll
+	if scroll < 0 {
+		scroll = 0
+	}
+	if scroll > len(m.detailLines) {
+		scroll = len(m.detailLines)
+	}
+	visLines := m.detailLines[scroll:]
+	hasAbove := scroll > 0
+	hasBelow := len(visLines) > contentLines
+
+	contentSlots := contentLines
+	if hasAbove {
+		contentSlots--
+	}
+	if hasBelow {
+		contentSlots--
+	}
+	if contentSlots < 1 {
+		contentSlots = 1
+	}
+
+	var displayLines []string
+	if hasAbove {
+		displayLines = append(displayLines,
+			styleOverflowIndicator.Render(fmt.Sprintf("  ▲ %d more above", scroll)))
+	}
+	sliceEnd := contentSlots
+	if sliceEnd > len(visLines) {
+		sliceEnd = len(visLines)
+	}
+	for _, line := range visLines[:sliceEnd] {
+		displayLines = append(displayLines, styleRow.Render("  "+truncate(line, dialogWidth-2)))
+	}
+	if hasBelow {
+		displayLines = append(displayLines,
+			styleOverflowIndicator.Render(fmt.Sprintf("  ▼ %d more below", len(visLines)-contentSlots)))
+	}
+	content := padLines(displayLines, contentLines)
+
+	footer := styleFooterHint.Width(dialogWidth).Align(lipgloss.Center).
+		Render("↑/↓ scroll  h/← back  esc close")
+
+	body := title + "\n" + sep + "\n" + content + "\n" + footer
+	dialog := styleDialog.Width(dialogWidth).Render(body)
 	return lipgloss.Place(width, height, lipgloss.Center, lipgloss.Center, dialog)
 }
 
