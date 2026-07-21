@@ -138,3 +138,141 @@ button {
   padding: 0 20px 24px;
   font-size: 13px;
 }
+
+/* ---- slice 3: runs list + run detail views ---- */
+
+.filter-bar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.filter-bar select,
+.filter-bar input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  padding: 6px 10px;
+}
+
+.filter-bar input[type="search"] {
+  flex: 1;
+}
+
+.filter-bar select:focus,
+.filter-bar input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.runs-table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14px;
+}
+
+.runs-table th,
+.runs-table td {
+  border-bottom: 1px solid var(--border);
+  padding: 8px 10px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.runs-table th {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.runs-table td a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.runs-table td a:hover {
+  text-decoration: underline;
+}
+
+.status {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  display: inline-block;
+  font-size: 12px;
+  padding: 1px 10px;
+  white-space: nowrap;
+}
+
+.status-completed {
+  color: var(--ok);
+  border-color: var(--ok);
+}
+
+.status-failed,
+.status-cancelled {
+  color: var(--err);
+  border-color: var(--err);
+}
+
+.status-running,
+.status-queued {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 16px;
+  margin: 0 0 16px;
+}
+
+.detail-grid dt {
+  color: var(--muted);
+}
+
+.detail-grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+pre.block {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+pre.block.error {
+  border-color: var(--err);
+}
+
+.empty-state {
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+#view h2 {
+  font-size: 17px;
+  margin: 4px 0 14px;
+}
+
+#view h3 {
+  font-size: 14px;
+  margin: 20px 0 8px;
+}
+
+#view > p > a {
+  color: var(--accent);
+  text-decoration: none;
+}

@@ -18,6 +18,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -196,5 +197,40 @@ func TestVizDoesNotAffectHealthz(t *testing.T) {
 	rec := vizGet(t, h, "/healthz", "")
 	if rec.Code != http.StatusOK {
 		t.Errorf("GET /healthz without token: status = %d, want %d (must stay unauthenticated)", rec.Code, http.StatusOK)
+	}
+}
+
+// vizAssetRef matches src="/viz/..." and href="/viz/..." references in the
+// served index.html.
+var vizAssetRef = regexp.MustCompile(`(?:src|href)="(/viz/[^"]+)"`)
+
+// TestVizIndexAssetReferencesResolve serves index.html under auth, extracts
+// every /viz/ asset it references (script src / link href), and asserts each
+// one resolves 200 under the same auth. This guards against broken embeds or
+// renamed static files stranding references in the shell (epic #812, slice 3:
+// the shell's markup grows while staying embed-only).
+func TestVizIndexAssetReferencesResolve(t *testing.T) {
+	t.Parallel()
+	h, tokens := vizTestServer(t)
+
+	index := vizGet(t, h, "/viz/", tokens["read"])
+	if index.Code != http.StatusOK {
+		t.Fatalf("GET /viz/: status = %d, want %d", index.Code, http.StatusOK)
+	}
+	refs := vizAssetRef.FindAllStringSubmatch(index.Body.String(), -1)
+	if len(refs) == 0 {
+		t.Fatal("index.html references no /viz/ assets; expected at least app.js and style.css")
+	}
+	seen := make(map[string]bool)
+	for _, ref := range refs {
+		path := ref[1]
+		if seen[path] {
+			continue
+		}
+		seen[path] = true
+		rec := vizGet(t, h, path, tokens["read"])
+		if rec.Code != http.StatusOK {
+			t.Errorf("index.html references %s but GET returned %d, want %d", path, rec.Code, http.StatusOK)
+		}
 	}
 }
