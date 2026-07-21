@@ -175,6 +175,6 @@ Epic: #812 (parent #803).
 - [x] Extend node harness with timeline checks; watch red.
 - [x] Implement `app.js` timeline + `style.css`.
 - [x] `node --check`; harness green; gofmt/go vet clean.
-- [ ] `go test ./internal/server/... -count=1`.
+- [x] `go test ./internal/server/... -count=1`.
 - [x] Real-daemon e2e: run against a fake provider; curl SSE (history→live), confirm timeline assets served.
-- [ ] Commit, push `epic/812-session-visualizer-s4`, open PR against repo.
+- [x] Commit, push `epic/812-session-visualizer-s4`, open PR against repo. (PR #915; full regression suite result reported in PR body comments/notes.)
