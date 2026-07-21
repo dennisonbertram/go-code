@@ -3165,9 +3165,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		})
 		// Add user message via the message bubble component path (show original).
 		m.appendMessageBubble(messagebubble.RoleUser, msg.Value)
+		// Gather pending image attachment chips (epic #818 slice 3): encode
+		// their temp files into the run request. On encode failure, abort the
+		// submit — restore the text and keep the chips so the user can fix or
+		// remove them.
+		var runAttachments []runAttachment
+		if chips := m.input.Attachments(); len(chips) > 0 {
+			encoded, encErr := encodeImageAttachments(chips)
+			if encErr != nil {
+				cmds = append(cmds, m.setStatusMsg("could not read attached image: "+encErr.Error()))
+				m.input = m.input.SetValue(msg.Value)
+				return m, tea.Batch(cmds...)
+			}
+			runAttachments = encoded
+		}
 		// Fire off the run against the harness API with the expanded prompt.
 		effModel, effProvider := m.effectiveModelAndProvider()
-		cmds = append(cmds, startRunCmd(m.config.BaseURL, expandedValue, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, m.config.Workspace, m.config.APIKey, m.planMode))
+		cmds = append(cmds, startRunCmd(m.config.BaseURL, expandedValue, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, m.config.Workspace, m.config.APIKey, runAttachments, m.planMode))
+		// The attachments were handed to the run: consume the chips and their
+		// temp files.
+		if runAttachments != nil {
+			m.input = m.input.ClearAttachments()
+		}
 
 	case AssistantDeltaMsg:
 		m.lastAssistantText += msg.Delta

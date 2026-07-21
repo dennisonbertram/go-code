@@ -42,6 +42,31 @@
 - Validation: package tests + `-race` green for subagents, harness, tools,
   deferred, harnessd; full regression suite (see PR body).
 
+## 2026-07-20 (Image Attachments Through Run Plumbing — Epic #818 Slice 3)
+
+- Added `harness.ContentBlock{Type, MediaType, Data}` (base64), additive
+  `Message.Blocks` and `RunRequest.Attachments` (text-only messages and
+  callers unchanged; `Message.Clone` deep-copies Blocks).
+- `Runner.StartRun` validates attachments (type `image`, media type
+  `image/png`|`image/jpeg`, non-empty valid base64) and enforces the
+  server-side modality gate: the effective model+provider is resolved via
+  the provider registry's catalog and known text-only models are rejected
+  with an actionable error; unknown models/modalities (nil registry,
+  discovered models) are allowed. HTTP callers get a synchronous 400
+  `invalid_request` through the existing `handlePostRun` error path.
+- `runner.execute` builds the user message with the prompt text plus Blocks;
+  blocks reach the provider `CompletionRequest` (asserted via
+  `fakeprovider.LastRequest()`). Snapshot/history stays text-only
+  (documented limitation: blocks do not persist across continuation runs).
+- TUI send path: pending chips are base64-encoded into the `POST /v1/runs`
+  body on submit and consumed (state + temp dirs); an encode failure aborts
+  the submit, restores the text, and keeps the chips. `startRunCmd` now
+  surfaces the server's error body so the 400 modality message reaches the
+  status bar.
+- Verified against a tmux `harnessd` on the real catalog: image-capable
+  `gpt-4.1` POST → 202; text-only `claude-sonnet-4-6` → 400 naming model +
+  provider; malformed base64 → 400 naming the attachment index.
+
 ## 2026-07-21 (Issue #886 runBlockedError.Error Coverage Fix)
 
 - Symptom: post-merge regression gate (`scripts/test-regression.sh`) failed after PR #882 landed: `coveragegate` flagged `(*runBlockedError).Error` (cmd/harnesscli/main.go) at 0.0% — `functions with zero coverage detected`.

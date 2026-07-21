@@ -53,6 +53,19 @@ func (tc ToolCall) Clone() ToolCall {
 	return tc // strings are immutable value types in Go
 }
 
+// ContentBlock is a typed, non-text part of a message. It is the carrier for
+// image input (epic #818): Data holds the base64-encoded payload described by
+// MediaType. Additional block types (e.g. video) are expected to reuse this
+// shape; Type discriminates them.
+type ContentBlock struct {
+	// Type is the block kind — currently only "image" is supported.
+	Type string `json:"type"`
+	// MediaType is the payload MIME type (e.g. "image/png", "image/jpeg").
+	MediaType string `json:"media_type"`
+	// Data is the base64-encoded payload bytes.
+	Data string `json:"data"`
+}
+
 type Message struct {
 	MessageID        string     `json:"message_id,omitempty"`
 	Role             string     `json:"role"`
@@ -62,6 +75,10 @@ type Message struct {
 	Name             string     `json:"name,omitempty"`
 	IsMeta           bool       `json:"is_meta,omitempty"`
 	IsCompactSummary bool       `json:"is_compact_summary,omitempty"`
+	// Blocks carries typed non-text content parts (e.g. images) travelling
+	// alongside the text Content. Text-only messages leave it nil, so existing
+	// callers and the wire format are unchanged (epic #818).
+	Blocks []ContentBlock `json:"blocks,omitempty"`
 	// CorrelationID links messages across turns within a conversation.
 	CorrelationID string `json:"correlation_id,omitempty"`
 	// ConversationID is stable across ContinueRun restarts.
@@ -81,6 +98,11 @@ func (m Message) Clone() Message {
 			tc[i] = t.Clone()
 		}
 		m.ToolCalls = tc
+	}
+	if m.Blocks != nil {
+		blocks := make([]ContentBlock, len(m.Blocks))
+		copy(blocks, m.Blocks)
+		m.Blocks = blocks
 	}
 	return m
 }
@@ -379,6 +401,10 @@ type WorkspaceProvisionOptions struct {
 
 type RunRequest struct {
 	Prompt string `json:"prompt"`
+	// Attachments carries typed non-text content (currently images) submitted
+	// with the prompt. The runner validates each block and rejects the run
+	// when the effective model lacks the matching modality (epic #818).
+	Attachments []ContentBlock `json:"attachments,omitempty"`
 	// PlanMode starts the run in the read-only planning state. While active,
 	// mutation is limited to PlanFile until the operator approves the plan.
 	PlanMode bool `json:"plan_mode,omitempty"`

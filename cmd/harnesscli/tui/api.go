@@ -43,12 +43,24 @@ func newHarnessRequest(ctx context.Context, method, url string, body io.Reader, 
 	return req, nil
 }
 
+// runAttachment is the wire shape for a typed non-text content block sent
+// with a run (epic #818). It mirrors harness.ContentBlock's JSON; the TUI
+// package deliberately does not import internal/harness.
+type runAttachment struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
+}
+
 type runCreateRequest struct {
 	Prompt          string `json:"prompt"`
 	ConversationID  string `json:"conversation_id,omitempty"`
 	Model           string `json:"model,omitempty"`
 	ProviderName    string `json:"provider_name,omitempty"`
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
+	// Attachments carries base64-encoded image blocks gathered from the input
+	// area's attachment chips (epic #818 slice 3). Nil for text-only prompts.
+	Attachments []runAttachment `json:"attachments,omitempty"`
 	// ProfileName carries the capability profile selected via /profiles. It maps
 	// to harness.RunRequest.ProfileName (JSON "profile"), which applies tool
 	// restrictions, approval policy, and workspace isolation. This is distinct
@@ -112,7 +124,9 @@ type RemoteSubagent struct {
 // profile is the name of the capability profile to use (may be empty); it is
 // sent as the "profile" field so the server applies the profile's tool
 // restrictions and isolation.
-func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile, workspace, apiKey string, planMode ...bool) tea.Cmd {
+// attachments carries the base64-encoded image blocks from the input area's
+// chips (nil for text-only prompts).
+func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile, workspace, apiKey string, attachments []runAttachment, planMode ...bool) tea.Cmd {
 	enabled := len(planMode) > 0 && planMode[0]
 	return func() tea.Msg {
 		body, _ := json.Marshal(runCreateRequest{
@@ -121,6 +135,7 @@ func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffo
 			Model:           model,
 			ProviderName:    provider,
 			ReasoningEffort: reasoningEffort,
+			Attachments:     attachments,
 			ProfileName:     profile,
 			WorkspacePath:   workspace,
 			AllowFallback:   true,
@@ -138,7 +153,10 @@ func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffo
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode >= 300 {
-			return RunFailedMsg{Error: fmt.Sprintf("start run: HTTP %d", resp.StatusCode)}
+			// Surface the server's error body so actionable rejections (e.g.
+			// the slice-3 modality gate's 400) reach the user.
+			errBody, _ := io.ReadAll(resp.Body)
+			return RunFailedMsg{Error: fmt.Sprintf("start run: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(errBody)))}
 		}
 		var created runCreateResponse
 		if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {

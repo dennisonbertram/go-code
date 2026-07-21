@@ -3,7 +3,8 @@
 ## Slice status
 
 - Slice 1 (clipboard reader): **merged** via PR #837 (`feat(tui): read images from the system clipboard into a temp file`).
-- Slice 2 (Ctrl-V paste + chips): **in implementation** on branch `epic/818-image-input-s2` — see "Slice 2" below.
+- Slice 2 (Ctrl-V paste + chips): **merged** via PR #872.
+- Slice 3 (run plumbing + modality gating): **in implementation** on branch `epic/818-image-input-s3` — see "Slice 3" below.
 
 ## Context
 
@@ -118,4 +119,46 @@
 - [x] Regression: chips survive WindowSizeMsg input re-creation (bug found in implementation; regression test added).
 - [x] gofmt + go vet clean; touched-package tests green; regression run.
 - [x] Docs/indexes/engineering log updated.
-- [ ] Commit, push `epic/818-image-input-s2`, open PR (no merge).
+- [x] Commit, push `epic/818-image-input-s2`, open PR (no merge). → PR #872, merged.
+
+---
+
+# Slice 3: image attachments through the run plumbing with modality gating
+
+## Context
+
+- Problem: slice-2 chips are pending-only — submitting never sends the image; nothing typed exists beyond the TUI.
+- User impact: submitting with chips attached sends the images as typed content blocks; a text-only model gets a clear HTTP 400 instead of silently dropping or mangling the image.
+- Constraints: `Message.Content string` stays for text-only messages (no caller churn); provider *encoding* of blocks is slice 4; strict TDD.
+
+## Scope
+
+- In scope:
+  - `internal/harness/types.go`: `ContentBlock{Type, MediaType, Data}` (base64), `Message.Blocks` (additive, omitempty), `RunRequest.Attachments`; `Message.Clone` deep-copies Blocks.
+  - Runner (`StartRun`): attachment validation (`type="image"`, `image/png`|`image/jpeg`, non-empty valid base64) → error; modality gate — resolve effective model+provider via `providerRegistry` and reject when the catalog entry is known to lack `image` (unknown/nil registry → allow). `execute` builds the user message with Blocks.
+  - Server: gate surfaces as HTTP 400 `invalid_request` through the existing `StartRun` error path in `handlePostRun` (no handler change needed).
+  - TUI: `runCreateRequest.Attachments` (local `runAttachment` wire struct — the TUI package deliberately does not import `internal/harness`); submit encodes chips (read temp file → base64) into the run request; chips are consumed (state + temp dirs) on submit; encode failure aborts the submit, restores the text, keeps the chips; `startRunCmd` now includes the server's error body (needed so the 400 gate message reaches the user).
+  - Known limitation (documented, not a bug): image blocks live in the run's in-memory messages; the text-only snapshot/history path does not persist them across continuation runs.
+- Out of scope: provider-side encoding to Anthropic/OpenAI shapes (slice 4), ReadMediaFile/downscale (slice 5), attachment persistence in conversation history, size caps.
+
+## Test Plan (TDD)
+
+- New failing tests first:
+  - `internal/harness`: blocks flow StartRun → step loop → `fakeprovider.LastRequest()` user message (Content + Blocks intact); malformed attachment matrix (bad type/media-type/empty/invalid base64) rejected at StartRun; modality gate (text-only rejected naming model+provider, image model allowed, unknown model allowed, no-attachments no gate); `Message.Clone` Blocks independence.
+  - `internal/server`: POST /v1/runs — 400 text-only model (body names the model), 400 malformed block, 400 non-image type, 202 + run_id for image-capable model.
+  - `tui` (internal): `encodeImageAttachments` round-trip + missing-file error; submit-with-chip → httptest capture proves base64 PNG in the POST body and chips consumed; submit with unreadable chip file → abort, text restored, chips kept, server untouched.
+- Acceptance: `go test ./internal/harness/ ./internal/server/ -run 'Image|Attachment|Modality'` green; curl against tmux `harnessd`: image-model POST → 202, text-only → 400.
+
+## Cross-Surface Impact Map
+
+- Updated in `docs/plans/2026-07-19-issue-818-clipboard-image-impact-map.md` — POST /v1/runs gains `attachments`; 400 modality gate; TUI consumes chips on submit.
+
+## Implementation Checklist
+
+- [x] Slice-3 failing tests first, watch them fail (compile errors on the new API, 202-instead-of-400 on the HTTP tests).
+- [x] harness ContentBlock/Message.Blocks/RunRequest.Attachments + validation + gate + execute wiring.
+- [x] TUI submit encoding + chip consumption + error body in startRunCmd.
+- [x] gofmt + go vet clean; touched-package tests green; regression run.
+- [x] Docs/indexes/engineering log updated.
+- [x] tmux harnessd curl acceptance (202 image model / 400 text-only / 400 malformed).
+- [ ] Commit, push `epic/818-image-input-s3`, open PR (no merge).

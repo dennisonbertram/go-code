@@ -68,7 +68,7 @@ func executeInitCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	effModel, effProvider := m.effectiveModelAndProvider()
 	return []tea.Cmd{
 		m.setStatusMsg("Generating AGENTS.md..."),
-		startRunCmd(m.config.BaseURL, initAgentsPrompt, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, ws, m.config.APIKey),
+		startRunCmd(m.config.BaseURL, initAgentsPrompt, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, ws, m.config.APIKey, nil),
 	}, false
 }
 
