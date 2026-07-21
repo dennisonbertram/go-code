@@ -362,7 +362,7 @@ func TestTUI041_BuiltinCommandsRegistered(t *testing.T) {
 	r := tui.NewCommandRegistry()
 	required := []string{
 		"clear", "compact", "context", "export", "help", "keys",
-		"model", "quit", "stats", "subagents",
+		"model", "quit", "stats", "subagents", "tasks",
 		"attach", "cancel", "doctor", "permissions", "replay", "resume", "runs",
 	}
 	for _, name := range required {
@@ -398,7 +398,7 @@ func TestTUI364_RegistryCompleteness(t *testing.T) {
 	knownCommands := []string{
 		"attach", "cancel", "clear", "compact", "config", "context", "cost", "dashboard", "doctor", "export", "fork", "help", "history", "hooks", "init", "keys",
 		"model", "new", "permissions", "plugins", "profiles", "quit", "replay", "resume", "runs", "search",
-		"sessions", "stats", "subagents", "rewind", "theme", "title", "undo",
+		"sessions", "stats", "subagents", "tasks", "rewind", "theme", "title", "undo",
 	}
 
 	r := tui.NewCommandRegistry()

@@ -30,6 +30,7 @@ Command Registry - 120x40
 /sessions — Browse and switch between past sessions
 /stats — Show cost and token statistics
 /subagents — View active subagent processes
+/tasks — View background tasks (bash jobs, subagents, cron, callbacks)
 /theme — View and select a color theme
 /title — Set or show the current session title (/title clear to remove)
 /undo — Remove the last n prompts from the conversation (/undo [n])

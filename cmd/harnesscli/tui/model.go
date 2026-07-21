@@ -34,6 +34,7 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/spinner"
 	"go-agent-harness/cmd/harnesscli/tui/components/statspanel"
 	"go-agent-harness/cmd/harnesscli/tui/components/statusbar"
+	"go-agent-harness/cmd/harnesscli/tui/components/taskspanel"
 	"go-agent-harness/cmd/harnesscli/tui/components/themepicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/thinkingbar"
 	"go-agent-harness/cmd/harnesscli/tui/components/tooluse"
@@ -319,6 +320,10 @@ type Model struct {
 	helpDialog  helpdialog.Model
 	contextGrid contextgrid.Model
 	statsPanel  statspanel.Model
+
+	// tasksPanel is the /tasks overlay listing unified background work from
+	// GET /v1/tasks (epic #814).
+	tasksPanel taskspanel.Model
 
 	// costDisplay is the /cost overlay showing running token usage and cost.
 	costDisplay costdisplay.Model
@@ -1768,6 +1773,19 @@ func executeSubagentsCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	}, false
 }
 
+// executeTasksCommand opens the /tasks overlay (epic #814 slice 3) and kicks
+// off the GET /v1/tasks fetch. The panel renders the loading state until
+// TasksLoadedMsg or TasksLoadFailedMsg arrives.
+func executeTasksCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
+	m.tasksPanel = m.tasksPanel.Open()
+	m.overlayActive = true
+	m.activeOverlay = "tasks"
+	return []tea.Cmd{
+		loadTasksCmd(m.config.BaseURL, m.config.APIKey),
+		func() tea.Msg { return OverlayOpenMsg{Kind: "tasks"} },
+	}, false
+}
+
 // executeHooksCommand fetches the /v1/hooks listing and renders it into the
 // viewport when HooksLoadedMsg arrives (epic #737).
 func executeHooksCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
@@ -2454,6 +2472,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.overlayActive = false
 				m.activeOverlay = ""
 				m.helpDialog = m.helpDialog.Close()
+				m.tasksPanel = m.tasksPanel.Close()
 				cmds = append(cmds, func() tea.Msg { return EscapeMsg{} })
 				return m, tea.Batch(cmds...)
 			}
@@ -2713,6 +2732,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "r":
 				m.statsPanel = m.statsPanel.TogglePeriod()
+			}
+			return m, tea.Batch(cmds...)
+		case m.overlayActive && m.activeOverlay == "tasks":
+			// Route keyboard input to the tasks panel when it is open (epic
+			// #814 slice 3): arrows/j/k move the selection, r re-fetches.
+			switch {
+			case msg.Type == tea.KeyDown || msg.String() == "j":
+				m.tasksPanel = m.tasksPanel.MoveDown(1)
+			case msg.Type == tea.KeyUp || msg.String() == "k":
+				m.tasksPanel = m.tasksPanel.MoveUp(1)
+			case msg.String() == "r":
+				m.tasksPanel = m.tasksPanel.Open()
+				cmds = append(cmds, loadTasksCmd(m.config.BaseURL, m.config.APIKey))
 			}
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "model" && m.modelConfigMode && m.modelConfigKeyInputMode:
@@ -3473,6 +3505,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.Kind == "help" {
 			m.helpDialog = m.helpDialog.Open()
 		}
+		// Reset the tasks panel when (re-)opening via message, matching the
+		// /tasks command handler (loading state, cursor at top). The fetch
+		// itself is issued by executeTasksCommand.
+		if msg.Kind == "tasks" {
+			m.tasksPanel = m.tasksPanel.Open()
+		}
 
 	case OverlayCloseMsg:
 		if m.activeOverlay == "dashboard" {
@@ -3482,6 +3520,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.overlayActive = false
 		m.activeOverlay = ""
 		m.helpDialog = m.helpDialog.Close()
+		m.tasksPanel = m.tasksPanel.Close()
 
 	case ClearMsg:
 		m.vp = viewport.New(m.width, m.layout.ViewportHeight)
@@ -3537,6 +3576,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case SubagentsLoadFailedMsg:
 		cmds = append(cmds, m.setStatusMsg("Load subagents failed: "+msg.Err))
+
+	case TasksLoadedMsg:
+		entries := make([]taskspanel.TaskEntry, len(msg.Tasks))
+		for i, task := range msg.Tasks {
+			entries[i] = taskspanel.TaskEntry{
+				ID:         task.ID,
+				Type:       task.Type,
+				Status:     task.Status,
+				Label:      task.Label,
+				AgeSeconds: task.AgeSeconds,
+				Actions:    task.Actions,
+			}
+		}
+		m.tasksPanel = m.tasksPanel.SetTasks(entries)
+
+	case TasksLoadFailedMsg:
+		m.tasksPanel = m.tasksPanel.SetError(msg.Err)
+		cmds = append(cmds, m.setStatusMsg("Load tasks failed: "+msg.Err))
 
 	case HooksLoadedMsg:
 		for _, line := range formatHooksLines(msg) {
@@ -4245,6 +4302,8 @@ func (m Model) View() string {
 		switch m.activeOverlay {
 		case "help":
 			mainContent = m.helpDialog.View(m.width, m.layout.ViewportHeight)
+		case "tasks":
+			mainContent = m.tasksPanel.View(m.width, m.layout.ViewportHeight)
 		case "stats":
 			// Box the stats overlay for consistent chrome (#666).
 			mainContent = boxOverlay(m.statsPanel.SetWidth(m.width-2).View(), m.width)
@@ -4792,6 +4851,10 @@ func (m Model) HelpDialogActiveTab() int { return int(m.helpDialog.ActiveTab()) 
 
 // HelpDialogScrollOffset returns the current scroll offset of the help dialog (for testing).
 func (m Model) HelpDialogScrollOffset() int { return m.helpDialog.ScrollOffset() }
+
+// TasksPanelCursor returns the selected row index in the /tasks overlay
+// (for testing, epic #814).
+func (m Model) TasksPanelCursor() int { return m.tasksPanel.CursorIndex() }
 
 // boxOverlay wraps overlay content in a RoundedBorder lipgloss box so that
 // /stats and /context get consistent chrome matching /help, /model etc.

@@ -5,7 +5,57 @@
 - `internal/server/http_tasks.go`: unified `Task` DTO + `GET /v1/tasks` (runs:read) unioning subagents, cron jobs, pending callbacks.
 - `CallbackManager.ListAll` for cross-conversation pending-callback enumeration; daemon wired via `ServerOptions.CallbackLister`.
 
-## Slice 2 (this branch, epic/814-tasks-panel-s2): expose background bash jobs to the task union
+## Slice 2 (merged, PR #869): expose background bash jobs to the task union
+
+- `JobManager.List()` snapshot + tenant capture; daemon-level `harness.JobTracker` (`jm<N>:job_<n>` namespacing) registered via `DefaultRegistryOptions.JobTracker`.
+- `GET /v1/tasks` unions `bash_job` entries; `POST /v1/jobs/{id}/kill` terminates them (runs:write, tenant-scoped).
+
+## Slice 3 (this branch, epic/814-tasks-panel-s3): /tasks overlay listing unified background tasks
+
+### Context
+
+- Problem: `GET /v1/tasks` (slices 1-2) has no TUI surface; `/subagents` only prints lines into the chat viewport.
+- User impact: `/tasks` opens one overlay listing every piece of background work with type, status, age, and command/label columns.
+- Constraints: slice 3 only — listing + navigation. Row actions (view output, stop/kill, cron-delete confirm) are slice 4. Strict TDD.
+
+### Scope
+
+- In scope:
+  - New component `cmd/harnesscli/tui/components/taskspanel/` modeled on `components/helpdialog/` (value-semantics Model, bordered centered dialog, overflow indicators, footer hints): columns TYPE / STATUS / AGE / COMMAND, cursor row navigation (j/k, ↑/↓) with scroll-into-view, empty ("No background tasks."), loading ("Loading tasks…"), and error states.
+  - `cmd/harnesscli/tui/api.go`: `RemoteTask` DTO + `loadTasksCmd` (mirrors `loadSubagentsCmd`); `TasksLoadedMsg`/`TasksLoadFailedMsg` in `messages.go`.
+  - `model.go`: `tasksPanel` field; `executeTasksCommand` (open overlay + kick off fetch); `TasksLoadedMsg`/`TasksLoadFailedMsg` handlers; key routing for the `tasks` overlay (up/down/j/k, `r` refresh); View case; close on Esc/OverlayCloseMsg; test accessors.
+  - `cmd_parser.go`: register `/tasks` next to `/subagents` (auto-feeds `/help`, slash-complete, and tab completion, which are registry-driven).
+  - Update command-enumeration tests (`cmd_parser_test.go`, `search_test.go`, `tabcomplete_test.go` if it asserts exact sets).
+- Out of scope: row actions (slice 4), live output streaming, periodic auto-refresh while open (manual `r` only).
+
+### Test Plan (TDD)
+
+- Failing tests first:
+  - `components/taskspanel/model_test.go`: Open resets (loading, cursor 0), SetTasks clamps cursor + clears loading, SetError, MoveUp/Down clamping, Selected.
+  - `components/taskspanel/view_test.go`: header/columns/rows render (type, status, formatted age, label); empty/loading/error states; cursor row highlight; overflow indicators on long lists.
+  - `cmd/harnesscli/tui/api_tasks_test.go`: `loadTasksCmd` success → `TasksLoadedMsg`; non-200 and invalid JSON → `TasksLoadFailedMsg` (pattern: `api_coverage_test.go`).
+  - `cmd/harnesscli/tui/tasks_overlay_814_test.go` (pattern: `overlay_670_test.go`): `/tasks` dispatch opens the `tasks` overlay in loading state; `TasksLoadedMsg` populates rows in View; empty list → "No background tasks."; fetch failure → error state; Esc closes; j/k move cursor; `r` re-fetches.
+- Existing tests to update: command-enumeration lists (`cmd_parser_test.go`, `search_test.go`).
+
+### Cross-Surface Impact Map
+
+- Not required (no provider/model flow, gateway routing, catalog, or API-key surface). Config: None. Server API: consumes existing `GET /v1/tasks` only. TUI state: new `tasksPanel` field + `tasks` overlay kind. Regression tests: listed above.
+
+### Implementation Checklist
+
+- [x] Failing tests first (component, api, model overlay).
+- [x] `taskspanel` component (model.go + view.go).
+- [x] `RemoteTask` + `loadTasksCmd` + messages.
+- [x] model wiring + `/tasks` registration + enumeration test updates.
+- [x] gofmt/vet clean; `go test ./cmd/harnesscli/... -count=1` green.
+- [x] Docs (this plan, engineering log, indexes); commit, push, open PR (no merge).
+
+### Risks and Mitigations
+
+- Risk: `initModel`-based overlay tests are sensitive to exact View output. Mitigation: assert on stable substrings (column headers, labels, state text), not exact frames.
+- Risk: cursor/scroll coupling bugs on short terminals. Mitigation: component tests at small heights with overflow indicator assertions.
+
+## Slice 2 detail (kept for reference)
 
 ### Context
 

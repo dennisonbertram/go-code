@@ -176,6 +176,14 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeSubagentsCommand,
 		},
 		{
+			Name:        "tasks",
+			Description: "View background tasks (bash jobs, subagents, cron, callbacks)",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeTasksCommand,
+		},
+		{
 			Name:        "hooks",
 			Description: "List loaded and skipped lifecycle hooks",
 			Handler: func(cmd Command) CommandResult {

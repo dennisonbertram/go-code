@@ -161,6 +161,13 @@ type SubagentsLoadedMsg struct{ Subagents []RemoteSubagent }
 
 type SubagentsLoadFailedMsg struct{ Err string }
 
+// TasksLoadedMsg carries the GET /v1/tasks union for the /tasks overlay
+// (epic #814).
+type TasksLoadedMsg struct{ Tasks []RemoteTask }
+
+// TasksLoadFailedMsg reports a failed /v1/tasks fetch.
+type TasksLoadFailedMsg struct{ Err string }
+
 // HooksLoadedMsg carries the GET /v1/hooks listing for the /hooks command.
 type HooksLoadedMsg struct {
 	Hooks   []hookEntry     `json:"hooks"`
