@@ -356,6 +356,10 @@ type Model struct {
 	shellExecSeq int
 	// shellExecTimeout bounds shell-mode commands (default 120s).
 	shellExecTimeout time.Duration
+	// shellLastResult holds the most recently completed shell-mode command's
+	// result for one-shot injection into the next agent prompt (epic #811,
+	// slice 3). Consumed and cleared on the next normal submission.
+	shellLastResult *shellResult
 
 	// pluginsDir is the directory from which custom slash-command plugins are loaded.
 	// Defaults to ~/.config/harnesscli/plugins when empty.
@@ -3075,6 +3079,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.input = m.input.SetValue(msg.Value)
 			return m, tea.Batch(cmds...)
 		}
+		// Slice 3 (epic #811): prepend the last completed shell command's
+		// context block so the agent sees what the user ran. Single-use — the
+		// display bubble and transcript below still use the original text.
+		if m.shellLastResult != nil {
+			expandedValue = formatShellContextBlock(*m.shellLastResult) + "\n\n" + expandedValue
+			m.shellLastResult = nil
+		}
 		// Reset assistant text accumulator for the new user turn.
 		m.lastAssistantText = ""
 		m.responseStarted = false
@@ -3128,9 +3139,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case shellExecDoneMsg:
 		// Terminal message for a shell-mode command — finalize its card. No
 		// re-poll: the executor emits nothing after done.
+		command := ""
+		if ex, ok := m.shellExecs[msg.CallID]; ok {
+			command = ex.command
+		}
 		delete(m.shellExecs, msg.CallID)
 		if m.shellRunningID == msg.CallID {
 			m.shellRunningID = ""
+		}
+		// Slice 3: remember the result for one-shot injection into the next
+		// agent prompt. Only commands that exited on their own qualify —
+		// interrupted/timed-out commands were killed deliberately, so their
+		// partial output is not context-worthy.
+		if !msg.Interrupted && !msg.TimedOut && msg.Err == nil {
+			m.shellLastResult = &shellResult{Command: command, Output: msg.Output, ExitCode: msg.ExitCode}
 		}
 		switch {
 		case msg.Interrupted:
