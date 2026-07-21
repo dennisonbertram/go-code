@@ -36,7 +36,8 @@ are appended below.
   - [x] Write failing tests first.
   - [x] Implement option selection in plan overlay.
   - [x] `go test ./cmd/harnesscli/tui/ -run Plan -count=1` green.
-  - [ ] Full `go test ./cmd/harnesscli/... -count=1`, gofmt/vet, commit, push, PR.
+  - [x] Full `go test ./cmd/harnesscli/... -count=1`, gofmt/vet, regression (`[regression] PASS`,
+    coverage 84.4%), commit, push, PR #901.
 
 ## Slice 3: approach options in plan-exit approval (branch `epic/819-plan-mode-s3`)
 
