@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"go-agent-harness/internal/skills"
 )
 
 const (
@@ -75,9 +77,18 @@ func ExecuteBashWithTimeout(def PluginDef, args []string, timeout time.Duration)
 }
 
 // ExecutePrompt expands a prompt plugin's template by substituting {args}
-// with the joined args string and returns the result. It never returns an error.
-func ExecutePrompt(def PluginDef, args []string) CommandResult {
-	joined := strings.Join(args, " ")
+// with the tokenized-then-joined args string and returns the result. The raw
+// args string is tokenized with the shared skills.SplitArgs semantics, so
+// quoted multi-word arguments group into single tokens (quote syntax is
+// grouping, not literal output). It never returns an error.
+func ExecutePrompt(def PluginDef, rawArgs string) CommandResult {
+	tokens, err := skills.SplitArgs(rawArgs)
+	if err != nil {
+		// SplitArgs never returns an error today; keep the join deterministic
+		// if a future error path appears.
+		tokens = nil
+	}
+	joined := strings.Join(tokens, " ")
 	expanded := strings.ReplaceAll(def.PromptTemplate, "{args}", joined)
 	return CommandResult{Output: expanded, IsError: false}
 }

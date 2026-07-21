@@ -169,7 +169,7 @@ func pluginCommandEntry(def tuiplugin.PluginDef) CommandEntry {
 			case tuiplugin.HandlerBash:
 				result = tuiplugin.ExecuteBash(def, cmd.Args)
 			case tuiplugin.HandlerPrompt:
-				result = tuiplugin.ExecutePrompt(def, cmd.Args)
+				result = tuiplugin.ExecutePrompt(def, slashArgsText(cmd.Raw))
 			default:
 				return ErrorResult(fmt.Sprintf("unsupported plugin handler %q", def.Handler))
 			}
