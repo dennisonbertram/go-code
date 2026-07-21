@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"go-agent-harness/internal/config"
 	"go-agent-harness/internal/harness"
 	"go-agent-harness/internal/provider/catalog"
 	"go-agent-harness/internal/server"
@@ -73,6 +74,11 @@ func scopeTestServer(t *testing.T) (h http.Handler, tokens map[string]string) {
 		Store:            ms,
 		Catalog:          cat,
 		ProviderRegistry: reg,
+		// Stub reload callback so admin-scope tests on POST /v1/config/reload
+		// can pass the scope gate and reach the handler.
+		ConfigReload: func(_ context.Context) (config.ReloadReport, error) {
+			return config.ReloadReport{}, nil
+		},
 	})
 	return h, tokens
 }
@@ -247,6 +253,38 @@ func TestScope_Admin_CanPutProviderKey(t *testing.T) {
 	h.ServeHTTP(w, req)
 	if w.Code == http.StatusForbidden {
 		t.Errorf("admin key should be allowed PUT /v1/providers/{name}/key, got 403: %s", w.Body.String())
+	}
+}
+
+// ============================================================
+// POST /v1/config/reload — requires admin
+// ============================================================
+
+// TestScope_Write_CannotReloadConfig verifies that a runs:write key returns 403
+// when attempting POST /v1/config/reload (admin-only endpoint).
+func TestScope_Write_CannotReloadConfig(t *testing.T) {
+	h, tokens := scopeTestServer(t)
+	assertScopeResponse(t, h, http.MethodPost, "/v1/config/reload", tokens["write"], http.StatusForbidden)
+}
+
+// TestScope_ReadOnly_CannotReloadConfig verifies that a runs:read key returns 403.
+func TestScope_ReadOnly_CannotReloadConfig(t *testing.T) {
+	h, tokens := scopeTestServer(t)
+	assertScopeResponse(t, h, http.MethodPost, "/v1/config/reload", tokens["read_only"], http.StatusForbidden)
+}
+
+// TestScope_Admin_CanReloadConfig verifies that an admin key can POST /v1/config/reload.
+func TestScope_Admin_CanReloadConfig(t *testing.T) {
+	h, tokens := scopeTestServer(t)
+	req := httptest.NewRequest(http.MethodPost, "/v1/config/reload", nil)
+	req.Header.Set("Authorization", "Bearer "+tokens["admin"])
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if w.Code == http.StatusForbidden {
+		t.Errorf("admin key should be allowed POST /v1/config/reload, got 403: %s", w.Body.String())
+	}
+	if w.Code != http.StatusOK {
+		t.Errorf("admin key POST /v1/config/reload: got %d, want 200 (body: %s)", w.Code, w.Body.String())
 	}
 }
 

@@ -123,3 +123,65 @@
 - Mitigation: `configMu` is leaf-level — `ApplyConfig`/`snapshotConfig` never touch `r.mu`; `configForRun` acquires `r.mu.RLock` and releases before `configMu.RLock` (sequential, never nested in opposite order).
 - Risk: mixed-config tearing inside one function (field A from old, field B from new).
 - Mitigation: one snapshot local per function, captured at function entry.
+
+---
+
+# Plan: epic(config) #815 Slice 3 — POST /v1/config/reload endpoint
+
+## Context
+
+- Problem: Slices 1–2 provided the classification (`config.ReloadDiff`) and the runner swap (`Runner.ApplyConfig`), but nothing triggers a reload. This slice exposes it over HTTP and wires it through `harnessd`.
+- User impact: an operator edits `~/.harness/config.toml` or `.harness/config.toml`, calls `POST /v1/config/reload` with an admin token, and hot-swappable fields (model, max_steps, auto-compact, forensics, hooks, conclusion watcher) take effect for subsequent runs; restart-only diffs (addr, memory db_*, mcp_servers) come back as warnings; invalid TOML yields 400 with the parse error and the last-known-good config stays active.
+- Constraints: admin scope per the `PUT /v1/providers/{name}/key` precedent; strict TDD; no behavior change when the callback is not wired (501, the repo's optional-feature convention).
+
+## Scope
+
+- In scope:
+  - `internal/server/http_config.go`: `ConfigReloadFunc`, `ServerOptions.ConfigReload`, route `POST /v1/config/reload` (admin scope) in `buildMux`, handler (501 unwired / 400 on reload error / 200 with `{applied, restart_required}`).
+  - `cmd/harnessd/config_reload.go`: `configReloader` (mutex-serialized) that re-runs the startup load sequence, diffs via `config.ReloadDiff` against last-known-good, reassembles the full `RunnerConfig`, and calls `ApplyConfig`.
+  - Extraction shared by startup and reload (behavior-identical): `loadHarnessConfig` (Load → Resolve → applyProfileDefaults → MaxSteps 0→8 rule) and `assembleRunnerConfig` (buildRunnerConfig + ProfileRunStore + S3 uploader + conclusion watcher + config-driven hooks + trusted plugin hooks). Extraction is required, not cosmetic: `ApplyConfig` replaces hook slices wholesale, so a reload via bare `buildRunnerConfig` would silently wipe compiled-in/config/plugin hooks and the conclusion watcher.
+  - Wiring: `httpRuntimeOptions.configReloader` → `buildHTTPRuntime` (binds the created runner, `subagentRunnerHandoff` precedent) → `serverBootstrapOptions` → `ServerOptions.ConfigReload`.
+- Out of scope: SIGHUP (slice 4), TUI `/reload` (slice 5), runbook matrix (slice 6), auto file-watching. Memory-manager-resident knobs (`memory.*` LLM/thresholds) live in the `om.Manager` built once at startup and are NOT rebuilt by this slice (documented limitation; the RunnerConfig swap covers what `buildRunnerConfig` maps). `GET /v1/hooks` keeps serving the startup-computed summary.
+
+## Documentation Contract
+
+- Feature status: `in implementation`
+- Public docs affected: none yet (runbook lands in slice 6)
+- Spec docs to update before code: this plan
+- Implementation notes to add after code: engineering-log entry
+
+## Test Plan (TDD)
+
+- New failing tests first:
+  - `internal/server/http_config_test.go`: model edit in temp config file → 200 + `applied:["model"]` + a subsequent run uses the new model; invalid TOML → 400 with parse error text + runner keeps old model; `addr` edit → 200 + `restart_required:["addr"]` + empty applied; unwired server → 501; GET → 405.
+  - `internal/server/auth_scope_test.go`: extend with `/v1/config/reload` — read_only and write tokens → 403 (`insufficient_scope`), admin token → 200 (stub callback).
+  - `cmd/harnessd/config_reload_test.go`: reloader applies new model to subsequent runs; invalid TOML → error + current config unchanged; `addr` change → restart-only report; hook slices + conclusion watcher survive a reload (assembly fidelity); concurrent reloads serialize.
+- Existing tests to update: none (startup extraction must keep `cmd/harnessd` tests green unchanged).
+- Regression tests required: the 400-retains-config test doubles as the permanent regression for last-known-good semantics.
+
+## Cross-Surface Impact Map
+
+- Config: reuses Slice 1 `ReloadDiff`; load sequence factored, semantics identical.
+- Server API: new admin route `POST /v1/config/reload`; scope table extended.
+- TUI state: none (slice 5 consumes the endpoint).
+- Regression tests: `go test ./internal/server/... ./cmd/harnessd/... -count=1` green; full `test-regression.sh` before PR.
+
+## Implementation Checklist
+
+- [x] Write failing tests first (undefined route/callback = red).
+- [x] `internal/server/http_config.go` endpoint + `ServerOptions` wiring.
+- [x] Extract `loadHarnessConfig`/`assembleRunnerConfig`; startup uses them (no behavior change).
+- [x] `configReloader` + wiring through `buildHTTPRuntime`/`buildServerOptions`.
+- [x] `gofmt`, `go vet`, package tests green.
+- [x] `./scripts/test-regression.sh`.
+- [x] Engineering-log entry; plan checklist.
+- [ ] Commit, push `epic/815-config-reload-s3`, open PR referencing #815. Do NOT merge.
+
+## Risks and Mitigations
+
+- Risk: reload wipes startup-registered hooks/plugins (ApplyConfig replaces slices).
+- Mitigation: single `assembleRunnerConfig` used by startup AND reload; harnessd test asserts hook slice survival across reload.
+- Risk: concurrent reloads interleave (diff base torn).
+- Mitigation: `configReloader.mu` serializes the whole load→diff→apply→commit sequence.
+- Risk: reload diverges from startup's effective-config resolution (MaxSteps 0→8, profile defaults).
+- Mitigation: single `loadHarnessConfig` used by both paths.

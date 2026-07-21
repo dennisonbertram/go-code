@@ -448,6 +448,7 @@ type serverBootstrapOptions struct {
 	hooksSummary     hooks.Summary
 	callbackMgr      *htools.CallbackManager
 	jobTracker       *harness.JobTracker
+	configReloader   *configReloader
 }
 
 func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
@@ -477,5 +478,15 @@ func buildServerOptions(opts serverBootstrapOptions) server.ServerOptions {
 		HooksSummary:     opts.hooksSummary,
 		CallbackLister:   opts.callbackMgr,
 		JobTracker:       opts.jobTracker,
+		ConfigReload:     configReloadFunc(opts.configReloader),
 	}
+}
+
+// configReloadFunc adapts a configReloader to server.ConfigReloadFunc,
+// returning nil (endpoint disabled) when no reloader is wired.
+func configReloadFunc(reloader *configReloader) server.ConfigReloadFunc {
+	if reloader == nil {
+		return nil
+	}
+	return reloader.reload
 }

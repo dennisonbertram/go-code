@@ -445,6 +445,14 @@ func (r *Runner) snapshotConfig() RunnerConfig {
 	return r.config
 }
 
+// Config returns a copy of the runner's current live config — the value most
+// recently set by NewRunner or ApplyConfig. It is the public counterpart of
+// ApplyConfig for inspecting what the runner would hand to a newly started
+// run. Callers must not mutate shared reference fields of the returned copy.
+func (r *Runner) Config() RunnerConfig {
+	return r.snapshotConfig()
+}
+
 // configForRun returns the config snapshot captured when the run was created.
 // It falls back to the runner's current config when the run is unknown or its
 // snapshot was never captured (runStates constructed directly in tests).

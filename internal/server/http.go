@@ -186,6 +186,11 @@ type ServerOptions struct {
 	// never re-derived per request — so the listing always matches what the
 	// runner actually registered. The zero value serves empty lists.
 	HooksSummary hooks.Summary
+	// ConfigReload enables POST /v1/config/reload (epic #815, admin scope).
+	// The callback re-runs the daemon's config load, applies the hot-swappable
+	// subset to the runner, and reports applied + restart-only fields.
+	// When nil, the endpoint returns 501.
+	ConfigReload ConfigReloadFunc
 	// MaxRequestBodyBytes caps non-replay request bodies. Values <= 0 use the default.
 	MaxRequestBodyBytes int64
 	// ReplayMaxRequestBodyBytes caps POST /v1/runs/replay bodies. Values <= 0 use the default.
@@ -238,6 +243,7 @@ func NewWithOptions(opts ServerOptions) http.Handler {
 		toolCatalog:       opts.Tools,
 		rolloutDir:        opts.RolloutDir,
 		hooksSummary:      opts.HooksSummary,
+		configReload:      opts.ConfigReload,
 		maxBodyBytes:      opts.MaxRequestBodyBytes,
 		replayBodyBytes:   opts.ReplayMaxRequestBodyBytes,
 		handlerTimeout:    opts.HandlerTimeout,
@@ -378,6 +384,11 @@ func (s *Server) buildMux() http.Handler {
 	// GET /v1/hooks — config-driven hook listing (epic #737); read scope.
 	mux.Handle("/v1/hooks", auth(read(http.HandlerFunc(s.handleHooks))))
 
+	// POST /v1/config/reload — daemon config reload (epic #815). Admin scope,
+	// matching PUT /v1/providers/{name}/key: reload changes daemon behavior
+	// for every tenant, so it is more sensitive than per-run writes.
+	mux.Handle("/v1/config/reload", auth(admin(http.HandlerFunc(s.handleConfigReload))))
+
 	// /viz — embedded read-only session visualizer shell (epic #812).
 	// Static assets only; served behind the same Bearer auth + runs:read
 	// scope as every other read route. /viz redirects to /viz/ only after
@@ -511,6 +522,10 @@ type Server struct {
 	// by GET /v1/hooks. Zero value = hooks disabled or none loaded; the route
 	// still serves empty arrays rather than null.
 	hooksSummary hooks.Summary
+
+	// configReload triggers a daemon config reload for POST /v1/config/reload
+	// (epic #815). Nil disables the endpoint (501).
+	configReload ConfigReloadFunc
 
 	maxBodyBytes    int64
 	replayBodyBytes int64
