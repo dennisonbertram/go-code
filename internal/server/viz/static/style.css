@@ -276,3 +276,113 @@ pre.block.error {
   color: var(--accent);
   text-decoration: none;
 }
+
+/* ---- slice 4: event timeline ---- */
+
+.timeline {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  max-height: 440px;
+  overflow-y: auto;
+  padding: 10px 12px;
+}
+
+.tl-row {
+  display: flex;
+  gap: 10px;
+  padding: 3px 0;
+  align-items: baseline;
+}
+
+.tl-row .seq {
+  color: var(--muted);
+  flex: 0 0 42px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+  text-align: right;
+}
+
+.tl-body {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tl-lifecycle {
+  border-bottom: 1px solid var(--border);
+  padding: 6px 0;
+}
+
+.tl-ok .tl-body strong {
+  color: var(--ok);
+}
+
+.tl-err .tl-body strong {
+  color: var(--err);
+}
+
+.tl-quiet .tl-body {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.tl-llm .tl-body {
+  color: var(--text);
+}
+
+.tl-warn {
+  background: rgba(255, 196, 66, 0.08);
+  border: 1px solid #c9a227;
+  border-radius: 6px;
+  margin: 4px 0;
+  padding: 6px 8px;
+}
+
+.tl-warn .tl-body strong {
+  color: #e3b93c;
+}
+
+.tl-bubble {
+  background: var(--panel);
+  border-left: 2px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  margin: 2px 0;
+  padding: 8px 10px;
+  white-space: pre-wrap;
+}
+
+.tool-call {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin: 2px 0;
+  padding: 4px 8px;
+}
+
+.tool-call summary {
+  cursor: pointer;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+}
+
+.tl-json {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  font-size: 12px;
+  margin: 6px 0 2px;
+  max-height: 200px;
+  overflow: auto;
+  padding: 6px 8px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tl-tool-meta {
+  font-size: 12px;
+  margin-top: 4px;
+}
+
+.tl-generic .tl-body {
+  color: var(--muted);
+}
