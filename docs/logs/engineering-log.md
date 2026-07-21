@@ -1,5 +1,13 @@
 # Engineering Log
 
+## 2026-07-21 (ACP Server Mode — Epic #806, Slice 3)
+
+- Prompt turns now stream live output to the editor: `assistant.message.delta` -> `agent_message_chunk`, `assistant.thinking.delta` -> `agent_thought_chunk` (payload field `content`), `tool.call.started` -> `tool_call` (`status: in_progress`, `title` = tool name, `kind` via a tool-name table), `tool.call.completed` -> `tool_call_update` (`completed`, or `failed` when the payload carries `error`; output included as content). `toolCallId` is the harness `call_id`, stable across start/complete.
+- `RunsClient.WaitTerminal` generalized to `WatchRun(ctx, runID, onEvent)`; oversized SSE lines (cap now a test-shrinkable var) are drained and their event skipped with a logged warning instead of corrupting the stream.
+- Backpressure discipline: one bounded (256) queue per turn with a single writer goroutine, so the SSE reader never blocks on a slow editor. Coalescing/drops trigger only on a FULL queue — same-kind deltas merge into the tail, other deltas drop (counted + logged), lifecycle updates evict buffered deltas but are never dropped. (First cut coalesced whenever the writer lagged, which made healthy streams lose chunk granularity and broke the golden ordering test; coalescing is now strictly an anti-overflow mechanism.)
+- The prompt handler closes the queue at the terminal event and drains it fully before writing the `session/prompt` response, per the spec's updates-before-result rule.
+- Validation: strict TDD (red: `undefined: runEvent`/`translateRunEvent`). Golden acceptance: scripted client observes two message chunks, a thought chunk, `tool_call`, `tool_call_update` (stable `toolCallId`) in exact order before the `end_turn` result. `go test ./internal/acp/... -count=1` green.
+
 ## 2026-07-21 (Agent Swarm — Epic #808, Slice 3)
 
 - Added the deferred `agent_swarm` tool

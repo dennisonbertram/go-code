@@ -100,7 +100,7 @@ func newSessionStore() *sessionStore {
 // session/prompt, session/cancel) backed by the given harnessd runs client.
 // Without it, session methods answer -32601 like any other unknown method.
 func (s *Server) EnableSessions(client *RunsClient) {
-	ss := &sessionHandlers{client: client, store: newSessionStore(), diag: s.diag}
+	ss := &sessionHandlers{client: client, store: newSessionStore(), diag: s.diag, srv: s}
 	s.Handle("session/new", ss.handleSessionNew)
 	s.Handle("session/prompt", ss.handleSessionPrompt)
 	s.Handle("session/cancel", ss.handleSessionCancel)
@@ -111,6 +111,7 @@ type sessionHandlers struct {
 	client *RunsClient
 	store  *sessionStore
 	diag   io.Writer
+	srv    *Server // for writeNotification (session/update)
 }
 
 // handleSessionNew creates a fresh session and returns its id. The cwd and
@@ -178,7 +179,24 @@ func (h *sessionHandlers) handleSessionPrompt(ctx context.Context, params json.R
 		}
 	}
 
-	outcome, err := h.client.WaitTerminal(ctx, runID)
+	// Stream the run's events as session/update notifications. The queue and
+	// its single writer keep notifications ordered and bound the buffering a
+	// slow editor can force (deltas coalesce or drop; lifecycle updates win).
+	queue := newUpdateQueue(updateQueueCapacity)
+	writer := startUpdateWriter(queue, h.srv, req.SessionID, h.diag)
+	outcome, err := h.client.WatchRun(ctx, runID, func(ev runEvent) {
+		if update, kind, ok := translateRunEvent(ev); ok {
+			queue.push(update, kind)
+		}
+	})
+	// The terminal event has been seen: no more updates will be produced.
+	// Drain the queue fully before responding — the spec requires all
+	// session/update notifications to arrive before the session/prompt result.
+	queue.close()
+	writer.wait()
+	if dropped := queue.droppedCount(); dropped > 0 {
+		fmt.Fprintf(h.diag, "acp: session %s: dropped %d delta update(s) under backpressure\n", req.SessionID, dropped)
+	}
 	if err != nil {
 		return nil, &rpcError{Code: CodeInternalError, Message: "wait for run: " + err.Error()}
 	}

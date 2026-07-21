@@ -149,6 +149,12 @@ func (s *Server) writeResult(id json.RawMessage, result any) error {
 	return s.conn.WriteJSON(response{JSONRPC: "2.0", ID: id, Result: result})
 }
 
+// writeNotification sends a server-initiated notification (no id, no
+// response expected). It is safe for concurrent use with responses.
+func (s *Server) writeNotification(method string, params any) error {
+	return s.conn.WriteJSON(notification{JSONRPC: "2.0", Method: method, Params: params})
+}
+
 // writeError sends an error response.
 func (s *Server) writeError(id json.RawMessage, code int, message string) error {
 	return s.conn.WriteJSON(response{JSONRPC: "2.0", ID: id, Error: &rpcError{Code: code, Message: message}})

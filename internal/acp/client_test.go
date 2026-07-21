@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -217,5 +218,60 @@ func TestRunsClientWaitTerminalSkipsNonDataLines(t *testing.T) {
 	}
 	if out.eventType != "run.completed" {
 		t.Fatalf("outcome = %+v", out)
+	}
+}
+
+// TestWatchRunSkipsOversizedEventLine pins scanner-buffer overflow handling:
+// an SSE line larger than the cap is drained and its event skipped (with a
+// logged warning) instead of corrupting the stream or aborting the wait.
+func TestWatchRunSkipsOversizedEventLine(t *testing.T) {
+	old := maxSSELineSize
+	maxSSELineSize = 128 // shrink so a normal-ish event overflows
+	t.Cleanup(func() { maxSSELineSize = old })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/runs" {
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"run_id":"run-1","status":"running"}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher, _ := w.(http.Flusher)
+		// Oversized delta event (exceeds the 128-byte cap): must be skipped.
+		big := strings.Repeat("x", 512)
+		fmt.Fprintf(w, "id: run-1:1\nevent: assistant.message.delta\ndata: {\"type\":\"assistant.message.delta\",\"payload\":{\"content\":%q}}\n\n", big)
+		if flusher != nil {
+			flusher.Flush()
+		}
+		// Normal terminal event must still be found afterwards.
+		fmt.Fprint(w, "id: run-1:2\nevent: run.completed\ndata: {\"type\":\"run.completed\",\"payload\":{\"output\":\"ok\"}}\n\n")
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}))
+	defer srv.Close()
+
+	var warnings []string
+	c := NewRunsClient(srv.URL, "")
+	c.Logf = func(format string, args ...any) { warnings = append(warnings, fmt.Sprintf(format, args...)) }
+
+	if _, err := c.StartRun(context.Background(), "hi"); err != nil {
+		t.Fatalf("StartRun: %v", err)
+	}
+	var seen []runEvent
+	out, err := c.WatchRun(context.Background(), "run-1", func(ev runEvent) { seen = append(seen, ev) })
+	if err != nil {
+		t.Fatalf("WatchRun: %v", err)
+	}
+	if out.eventType != "run.completed" {
+		t.Fatalf("outcome = %+v, want run.completed", out)
+	}
+	for _, ev := range seen {
+		if ev.Type == "assistant.message.delta" {
+			t.Fatalf("oversized delta event must have been skipped, got %+v", ev)
+		}
+	}
+	if len(warnings) == 0 {
+		t.Fatal("expected a logged warning for the skipped oversized event")
 	}
 }
