@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -259,12 +260,18 @@ func TestPasteImageNoOpWhenOverlayActive(t *testing.T) {
 	}
 }
 
-// TestPasteImageChipSurvivesTextSubmit locks the slice-2 acceptance flow
-// "re-paste, send with a text prompt": Enter submits the text normally while
-// the chip stays pending (slice 3 will consume attachments into the run
-// request).
-func TestPasteImageChipSurvivesTextSubmit(t *testing.T) {
-	stubClipboardReader(t, ClipboardImage{Path: "/tmp/fake/clipboard.png", MediaType: "image/png"}, nil)
+// TestPasteImageChipConsumedByTextSubmit locks the slice-3 send semantics:
+// Enter with a chip attached submits the text AND consumes the chip into the
+// run request (attachments are encoded in the parent's CommandSubmittedMsg
+// handler). The full encode-into-POST proof lives in
+// paste_image_send_internal_test.go.
+func TestPasteImageChipConsumedByTextSubmit(t *testing.T) {
+	pngDir := t.TempDir()
+	pngPath := pngDir + "/clipboard.png"
+	if err := os.WriteFile(pngPath, []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n', 1}, 0o600); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+	stubClipboardReader(t, ClipboardImage{Path: pngPath, MediaType: "image/png"}, nil)
 	m := newSizedModel(t)
 
 	m2, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlV})
@@ -298,16 +305,20 @@ func TestPasteImageChipSurvivesTextSubmit(t *testing.T) {
 	if submitted.Value != "hello" {
 		t.Errorf("submitted value = %q, want %q", submitted.Value, "hello")
 	}
+
+	// Feeding the submission through the parent consumes the chip (slice 3):
+	// state cleared and temp files deleted. (The run cmd is not executed, so
+	// no HTTP call happens here.)
+	m5, _ := m.Update(*submitted)
+	m = m5.(Model)
+	if len(m.input.Attachments()) != 0 {
+		t.Errorf("attachment chip must be consumed by submit, have %d", len(m.input.Attachments()))
+	}
 	if m.input.Value() != "" {
 		t.Errorf("input text must clear after submit, got %q", m.input.Value())
 	}
-	// The chip stays pending — it is NOT consumed by a text-only submit in
-	// this slice.
-	if len(m.input.Attachments()) != 1 {
-		t.Errorf("attachment chip must survive text submit, got %d", len(m.input.Attachments()))
-	}
-	if !strings.Contains(m.input.View(), "[image #1]") {
-		t.Errorf("chip must still render after text submit, got:\n%s", m.input.View())
+	if _, err := os.Stat(pngDir); !os.IsNotExist(err) {
+		t.Errorf("chip temp dir must be deleted after submit, stat err = %v", err)
 	}
 }
 

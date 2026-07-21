@@ -55,6 +55,18 @@ func (m Model) WithAttachments(atts []Attachment) Model {
 	return m
 }
 
+// ClearAttachments removes all pending attachments and deletes their temp
+// files. Used when the attachments are consumed — e.g. encoded into a run
+// request on submit (epic #818 slice 3). Value semantics.
+func (m Model) ClearAttachments() Model {
+	removed := m.attachments
+	m.attachments = nil
+	for _, a := range removed {
+		removeAttachmentFiles(a)
+	}
+	return m
+}
+
 // removeLastAttachment drops the most recent chip and deletes its temp files.
 func (m *Model) removeLastAttachment() {
 	if len(m.attachments) == 0 {

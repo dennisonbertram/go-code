@@ -1,8 +1,11 @@
 package tui
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -13,6 +16,28 @@ import (
 // a package-level seam (defaulting to the slice-1 reader) so tests can stub
 // platform clipboard access.
 var readClipboardImage = ReadImageFromClipboard
+
+// encodeImageAttachments reads each attachment chip's temp file and returns
+// the base64 wire blocks for the run request (epic #818 slice 3).
+func encodeImageAttachments(chips []inputarea.Attachment) ([]runAttachment, error) {
+	out := make([]runAttachment, 0, len(chips))
+	for _, chip := range chips {
+		data, err := os.ReadFile(chip.Path)
+		if err != nil {
+			return nil, fmt.Errorf("read attached image %s: %w", filepath.Base(chip.Path), err)
+		}
+		mediaType := chip.MediaType
+		if mediaType == "" {
+			mediaType = "image/png"
+		}
+		out = append(out, runAttachment{
+			Type:      "image",
+			MediaType: mediaType,
+			Data:      base64.StdEncoding.EncodeToString(data),
+		})
+	}
+	return out, nil
+}
 
 // clipboardImageReadMsg carries the result of an async clipboard image read
 // back into the update loop.

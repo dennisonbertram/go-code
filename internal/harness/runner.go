@@ -855,6 +855,18 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 	if model == "" {
 		model = rc.DefaultModel
 	}
+	// Image attachments (epic #818): validate the blocks, then enforce the
+	// server-side modality gate against the effective model before any run
+	// state is created — HTTP callers see a synchronous 400 via the StartRun
+	// error path.
+	if len(req.Attachments) > 0 {
+		if err := validateImageAttachments(req.Attachments); err != nil {
+			return Run{}, err
+		}
+		if err := r.gateImageAttachmentModality(model, req.ProviderName); err != nil {
+			return Run{}, err
+		}
+	}
 	// Use RepoPath as the initial workspace path so that AGENTS.md from the
 	// base repository is loaded for all runs. For workspace-type runs, the
 	// system prompt is re-resolved after provisioning with the actual workspace
@@ -1319,7 +1331,15 @@ func (r *Runner) runPreflight(ctx context.Context, runID string, req RunRequest)
 	}
 	messages := make([]Message, 0, len(priorMessages)+16)
 	messages = append(messages, priorMessages...)
-	messages = append(messages, Message{Role: "user", Content: req.Prompt})
+	// The user message carries the text prompt plus any validated image
+	// attachments as typed content blocks (epic #818). The snapshot record
+	// stays text-only by design (see the slice-3 plan's known limitation).
+	userMessage := Message{Role: "user", Content: req.Prompt}
+	if len(req.Attachments) > 0 {
+		userMessage.Blocks = make([]ContentBlock, len(req.Attachments))
+		copy(userMessage.Blocks, req.Attachments)
+	}
+	messages = append(messages, userMessage)
 	r.snapshotRecordMessage(runID, "user", req.Prompt)
 
 	if len(priorMessages) > 0 {
