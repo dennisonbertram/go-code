@@ -139,6 +139,16 @@ type Model struct {
 	// tool call ID. True = expanded, absent/false = collapsed.
 	toolExpanded map[string]bool
 
+	// compactionBlocks tracks rendered compaction summary blocks in append
+	// order (epic #817 slice 4). ctrl+o toggles the most recent one.
+	compactionBlocks []*compactionBlock
+	// compactionSeq numbers blocks as they are created (id compact-N).
+	compactionSeq int
+	// pendingAutoCompactID is the block id of an in-flight auto-compaction
+	// (auto_compact.started seen, completed not yet received), so the
+	// completed event updates that block in place instead of appending.
+	pendingAutoCompactID string
+
 	// activeToolCallID is the ID of the currently active/selected tool call,
 	// used when toggling expansion via Ctrl+O.
 	activeToolCallID string
@@ -610,7 +620,7 @@ func buildHelpDialog(reg *CommandRegistry, keys KeyMap) helpdialog.Model {
 		{Keys: "@", Description: keys.AtMention.Help().Desc},
 		{Keys: "!", Description: keys.ShellMode.Help().Desc},
 		{Keys: "? / ctrl+h", Description: keys.Help.Help().Desc},
-		{Keys: "ctrl+o", Description: "plan mode / expand active tool"},
+		{Keys: "ctrl+o", Description: "plan mode / expand active tool / compaction"},
 		{Keys: "ctrl+e", Description: keys.EditMode.Help().Desc},
 		{Keys: "esc", Description: keys.Interrupt.Help().Desc},
 		{Keys: "ctrl+s", Description: keys.Copy.Help().Desc},
@@ -1829,6 +1839,7 @@ func (m *Model) resetTranscriptView() {
 	m.toolLineOrder = nil
 	m.clearPendingSteers()
 	m.clearThinkingBar()
+	m.clearCompactionBlocks()
 }
 
 func executeClearCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
@@ -2219,6 +2230,7 @@ func executeNewSessionCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.activeAssistantLineCount = 0
 	m.clearPendingSteers()
 	m.clearThinkingBar()
+	m.clearCompactionBlocks()
 	// A fresh session has no title; drop it from the status bar.
 	m.statusBar.SetTitle("")
 	return []tea.Cmd{m.setStatusMsg("New session started")}, false
@@ -2791,11 +2803,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// No-op.
 			return m, tea.Batch(cmds...)
 		case key.Matches(msg, m.keys.ExpandTool):
-			// Dual-purpose ctrl+o with precedence (highest first):
+			// Multi-purpose ctrl+o with precedence (highest first):
 			// 1. Active tool call present → expand/collapse it (UNCHANGED behavior).
-			// 2. Idle (no run, no active tool) → toggle plan mode.
-			// This ordering ensures a later tool-card expansion ticket can add
-			// completed-card expansion between (1) and (2) without conflict.
+			// 2. Compaction block present → toggle the most recent one (epic #817 slice 4).
+			// 3. Idle (no run, no active tool, no block) → toggle plan mode (UNCHANGED).
 			if m.activeToolCallID != "" {
 				// Highest priority: expand/collapse the active tool call.
 				if m.toolExpanded == nil {
@@ -2803,6 +2814,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				m.toolExpanded[m.activeToolCallID] = !m.toolExpanded[m.activeToolCallID]
 				m.rerenderActiveToolView()
+			} else if len(m.compactionBlocks) > 0 {
+				// Next: expand/collapse the most recent compaction summary block.
+				m.toggleLatestCompactionBlock()
 			} else if !m.runActive {
 				// Idle (no run active, no active tool): toggle plan mode.
 				m.planMode = !m.planMode
@@ -3899,6 +3913,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.toolLineStarts = make(map[string]int)
 		m.toolLineOrder = nil
 		m.clearThinkingBar()
+		m.clearCompactionBlocks()
 
 	case ExportTranscriptMsg:
 		if msg.FilePath != "" {
@@ -4075,7 +4090,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.setStatusMsg("compact failed: "+msg.Err))
 			return m, tea.Batch(cmds...)
 		}
-		cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Compacted context — %d messages removed", msg.MessagesRemoved)))
+		// Render the collapsed compaction block (epic #817 slice 4); ctrl+o
+		// expands it to reveal the mode and summary.
+		title := fmt.Sprintf("Compacted context — %d messages removed", msg.MessagesRemoved)
+		details := []string{"Mode: " + msg.Mode}
+		if strings.TrimSpace(msg.Summary) != "" {
+			details = append(details, msg.Summary)
+		}
+		m.addCompactionBlock(title, details)
+		cmds = append(cmds, m.setStatusMsg(title))
 
 	// SteerAcceptedMsg: the server queued the steering message (HTTP 202). The
 	// send-time "Steering sent" status already covers the acknowledgement; the
@@ -4201,6 +4224,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "plan.approval_granted", "plan.approval_denied":
 			m.planApproval = planApprovalState{}
+		case "auto_compact.started":
+			// Render an in-progress compaction block (epic #817 slice 4); the
+			// completed event updates this same block in place.
+			var p struct {
+				EstimatedTokens int     `json:"estimated_tokens"`
+				ContextWindow   int     `json:"context_window"`
+				Threshold       float64 `json:"threshold"`
+				Mode            string  `json:"mode"`
+			}
+			if err := json.Unmarshal(msg.Raw, &p); err == nil {
+				title := fmt.Sprintf("Auto-compacting context — ~%d tokens (%s)…", p.EstimatedTokens, p.Mode)
+				details := []string{
+					fmt.Sprintf("Estimated tokens: %d", p.EstimatedTokens),
+					fmt.Sprintf("Context window: %d", p.ContextWindow),
+					fmt.Sprintf("Threshold: %.0f%%", p.Threshold*100),
+					"Mode: " + p.Mode,
+				}
+				b := m.addCompactionBlock(title, details)
+				m.pendingAutoCompactID = b.id
+			}
+		case "auto_compact.completed":
+			var p struct {
+				BeforeTokens int    `json:"before_tokens"`
+				AfterTokens  int    `json:"after_tokens"`
+				Mode         string `json:"mode"`
+				Error        string `json:"error"`
+			}
+			if err := json.Unmarshal(msg.Raw, &p); err == nil {
+				title := fmt.Sprintf("Auto-compacted context — %d → %d tokens (%s)", p.BeforeTokens, p.AfterTokens, p.Mode)
+				details := []string{
+					fmt.Sprintf("Before: %d tokens", p.BeforeTokens),
+					fmt.Sprintf("After: %d tokens", p.AfterTokens),
+					"Mode: " + p.Mode,
+				}
+				if p.Error != "" {
+					title = fmt.Sprintf("Auto-compaction failed (%s)", p.Mode)
+					details = append(details, "Error: "+p.Error)
+				}
+				if b := m.findCompactionBlock(m.pendingAutoCompactID); b != nil {
+					b.title = title
+					b.details = details
+					m.updateCompactionBlock(b)
+				} else {
+					m.addCompactionBlock(title, details)
+				}
+				m.pendingAutoCompactID = ""
+			}
 		case "usage.delta":
 			var p struct {
 				CumulativeUsage struct {
@@ -4624,6 +4694,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.responseStarted = false
 		m.activeAssistantLineCount = 0
 		m.clearPendingSteers()
+		m.clearCompactionBlocks()
 		// Show a system message so the user knows the session switch happened.
 		m.vp.AppendLine("↩ Resumed session " + msg.SessionID + ". Previous messages are on the server.")
 		m.vp.AppendLine("")
