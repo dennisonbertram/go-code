@@ -37,6 +37,9 @@ type Token struct {
 	AccessToken string `json:"access_token"`
 	// RefreshToken is used to renew the access token when it expires.
 	RefreshToken string `json:"refresh_token,omitempty"`
+	// ClientID is the OAuth client ID the token was issued to. Recorded at
+	// login so refresh requests can identify the same client.
+	ClientID string `json:"client_id,omitempty"`
 	// TokenType is the token type from the OAuth response, typically "Bearer".
 	TokenType string `json:"token_type,omitempty"`
 	// Expiry is the access token's expiration time; zero means never.

@@ -1,13 +1,20 @@
 # Plan: MCP OAuth login flow for remote servers (epic #809)
 
-## Slice 2: file-backed OAuth token store under `~/.harness/mcp/` (in implementation)
+## Slice 3: OAuth 2.1 + PKCE authorization flow with localhost callback (in implementation)
 
-- Goal: safe persistence for OAuth tokens, reusable by the flow (slice 3) and the transport (slice 4).
-- Changes: new `internal/mcp/tokens.go` — `Token` (issuer, access/refresh tokens, type, expiry, scopes), `TokenStore` with `Get(server)` / `Put(server, token)` / `Delete(server)`; one JSON file per server under `~/.harness/mcp/`, 0600 file / 0700 dir perms and atomic temp+rename writes mirroring `internal/provider/codex/store.go`; filename derived from the server name with `url.PathEscape` (traversal-safe, injective), recorded server name verified on read.
-- Expiry classification: `Get` returns the token (refresh token included) with an error wrapping `ErrTokenExpired` when expired, so callers refresh instead of failing; `ErrTokenNotFound` when absent; `ErrTokenCorrupt` for unreadable/mismatched files. Delete is idempotent.
-- Concurrency: store is mutex-guarded, safe for concurrent use.
-- Tests (TDD, temp-dir only, no writes outside injected dir): round-trip save/load, missing file, corrupt file (garbage/missing fields/server mismatch), permission bits via `os.Stat` (including pre-existing loose dir hardened to 0700), expiry classification (expired/future/zero/boundary via injected clock), overwrite, server-name sanitization, concurrent access under `-race`.
-- Acceptance: `go test ./internal/mcp/... -count=1` green.
+- Goal: browser-based login as a library function usable by the CLI (slice 4): discover endpoints, drive the browser, complete the exchange, store tokens, refresh silently.
+- Changes: new `internal/mcp/oauth` package (imports slice 2's `mcp.TokenStore`; no cycle — `internal/mcp` does not import it).
+  - Discovery: parse `WWW-Authenticate` on a 401 probe for `resource_metadata` → fetch protected-resource metadata (RFC 9728, well-known inserted before path, bare-origin retry) → fetch AS metadata (RFC 8414); fallback to well-known probing when the header is absent, and to a co-located AS at the resource origin.
+  - PKCE: S256 verifier/challenge on `crypto/rand`; random state.
+  - Loopback `net/http` listener on `127.0.0.1:0`, path `/callback`, first request wins, ctx-cancellable.
+  - Browser open via `os/exec` (`open`/`xdg-open`/`rundll32`), injectable as `Flow.OpenURL` so tests drive the redirect in-process.
+  - RFC 8707 `resource` parameter on the authorization request.
+  - Dynamic client registration (RFC 7591) when no client ID is configured and the AS advertises `registration_endpoint`; pre-registered client ID via `LoginOptions.ClientID`.
+  - Token exchange + `Refresh(serverName)` using the stored refresh token and recorded client ID (`ClientID` added to `mcp.Token` — additive); un-rotated refresh tokens are preserved; `invalid_grant` maps to `ErrReauthRequired`.
+- Tests (TDD; in-process `httptest` mock AS + mock resource server; no real network/browser/$HOME): full code+PKCE round trip with the browser stubbed (stub GETs the auth URL, mock AS 302s into the loopback), discovery via `WWW-Authenticate`, fallback when the header is absent, dynamic registration, pre-registered ID, missing-both error, state mismatch, AS error redirect, user abort via ctx cancel, token-endpoint error, refresh (success, un-rotated, invalid_grant, no token), PKCE known vector, `resource` param asserted.
+- Acceptance: `go test ./internal/mcp/oauth/... -count=1` green; round trip completes without real network or browser.
+
+## Slice 2: file-backed OAuth token store under `~/.harness/mcp/` (implemented, PR #856)
 
 ## Slice 1: MCP HTTP static headers and typed auth errors (implemented, PR #840)
 
