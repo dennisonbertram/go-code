@@ -205,7 +205,7 @@ func TestCompactCommand_AppearsInRegistryHelpAndSlashComplete(t *testing.T) {
 	}
 
 	// Slash completion suggests /compact.
-	sc := buildSlashComplete(NewCommandRegistry()).Open().SetQuery("comp")
+	sc := buildSlashComplete(NewCommandRegistry(), nil).Open().SetQuery("comp")
 	found := false
 	for _, s := range sc.Filtered() {
 		if s.Name == "compact" {

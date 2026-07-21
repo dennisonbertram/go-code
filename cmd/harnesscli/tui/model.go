@@ -43,6 +43,7 @@ import (
 	"go-agent-harness/internal/plugins"
 	"go-agent-harness/internal/provider/codex"
 	"go-agent-harness/internal/provider/kimi"
+	"go-agent-harness/internal/skills"
 )
 
 // defaultExportDir returns a runtime-safe directory for transcript exports.
@@ -233,6 +234,13 @@ type Model struct {
 
 	// slashComplete is the autocomplete dropdown shown when the user types "/".
 	slashComplete slashcomplete.Model
+
+	// skillRegistry and skillResolver back the skill: slash-command namespace
+	// (epic #813): /skill:<name> and unclaimed /<name> invocations expand
+	// through the shared skills resolution contract. Nil when skills are
+	// unavailable; every consumer is nil-safe.
+	skillRegistry *skills.Registry
+	skillResolver *skills.Resolver
 
 	// modelSwitcher is the 2-level model + reasoning overlay.
 	modelSwitcher modelswitcher.Model
@@ -469,6 +477,10 @@ func New(cfg TUIConfig) Model {
 	if warning := legacyPluginsDirWarning(m.pluginsDir); warning != "" {
 		m.pluginWarnings = append(m.pluginWarnings, warning)
 	}
+	// Load skills after plugins register so shorthand claim checks in the
+	// completion dropdown see plugin commands (precedence: builtin > plugin >
+	// shorthand skill).
+	m.skillRegistry, m.skillResolver = loadTUISkills(cfg.Workspace)
 	// Wire help dialog with real command list and keybindings derived from the
 	// registered commands and the default key map.
 	m.helpDialog = buildHelpDialog(m.commandRegistry, m.keys)
@@ -476,7 +488,7 @@ func New(cfg TUIConfig) Model {
 	// so Tab works for both "/" commands and "@" file paths.
 	m = m.WithAutocompleteProvider(buildCombinedProvider(m.commandRegistry))
 	// Wire slash-complete dropdown.
-	m.slashComplete = buildSlashComplete(m.commandRegistry)
+	m.slashComplete = buildSlashComplete(m.commandRegistry, m.skillRegistry)
 	if cfg.ResumeConversationID != "" {
 		m.conversationID = cfg.ResumeConversationID
 	}
@@ -567,16 +579,18 @@ func (m Model) WithAutocompleteProvider(fn inputarea.AutocompleteProvider) Model
 }
 
 // buildSlashComplete constructs a slashcomplete.Model populated with the
-// commands from the registry.
-func buildSlashComplete(reg *CommandRegistry) slashcomplete.Model {
+// commands from the registry plus skill entries (skill:<name> always, and the
+// bare <name> shorthand when unclaimed).
+func buildSlashComplete(reg *CommandRegistry, skillReg *skills.Registry) slashcomplete.Model {
 	entries := reg.All()
-	suggestions := make([]slashcomplete.Suggestion, len(entries))
-	for i, e := range entries {
-		suggestions[i] = slashcomplete.Suggestion{
+	suggestions := make([]slashcomplete.Suggestion, 0, len(entries))
+	for _, e := range entries {
+		suggestions = append(suggestions, slashcomplete.Suggestion{
 			Name:        e.Name,
 			Description: e.Description,
-		}
+		})
 	}
+	suggestions = append(suggestions, skillSlashSuggestions(reg, skillReg)...)
 	return slashcomplete.New(suggestions)
 }
 
@@ -679,7 +693,7 @@ func (m Model) WithPluginsDir(dir string) Model {
 	m.pluginWarnings = LoadAndRegisterPlugins(m.commandRegistry, dir)
 	// Rebuild autocomplete and slash-complete to include newly registered plugins.
 	m = m.WithAutocompleteProvider(buildCombinedProvider(m.commandRegistry))
-	m.slashComplete = buildSlashComplete(m.commandRegistry)
+	m.slashComplete = buildSlashComplete(m.commandRegistry, m.skillRegistry)
 	m.helpDialog = buildHelpDialog(m.commandRegistry, m.keys)
 	return m
 }
@@ -3279,8 +3293,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, m.startShellCommand(msg.Value)...)
 			return m, tea.Batch(cmds...)
 		}
-		// Check if it's a slash command; dispatch if so.
-		if cmd, ok := ParseCommand(msg.Value); ok {
+		// Skill invocations (epic #813): /skill:<name> always, or /<name> when
+		// unclaimed by builtin and plugin commands. The expanded skill content
+		// replaces the input and is submitted as a normal user message below.
+		if expanded, isSkill := expandSkillInvocation(m.commandRegistry, m.skillRegistry, m.skillResolver, m.config.Workspace, msg.Value); isSkill {
+			msg.Value = expanded
+		} else if cmd, ok := ParseCommand(msg.Value); ok {
 			// Plugin commands (bash or prompt handlers loaded from disk) only set
 			// CommandEntry.Handler, never Execute — built-in commands always set
 			// Execute. Dispatch those asynchronously so a slow bash plugin (up to

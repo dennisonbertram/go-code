@@ -153,7 +153,7 @@ func TestExecutePrompt_WithArgsPlaceholder(t *testing.T) {
 		Handler:        HandlerPrompt,
 		PromptTemplate: "Deploy {args} to staging",
 	}
-	result := ExecutePrompt(def, []string{"v1.2"})
+	result := ExecutePrompt(def, "v1.2")
 	if result.IsError {
 		t.Fatalf("expected IsError=false, got true; output: %q", result.Output)
 	}
@@ -170,7 +170,7 @@ func TestExecutePrompt_NoArgsPlaceholder(t *testing.T) {
 		Handler:        HandlerPrompt,
 		PromptTemplate: "Show system status",
 	}
-	result := ExecutePrompt(def, []string{"ignored", "args"})
+	result := ExecutePrompt(def, "ignored args")
 	if result.IsError {
 		t.Fatalf("expected IsError=false, got true; output: %q", result.Output)
 	}
@@ -185,38 +185,50 @@ func TestExecutePrompt_Table(t *testing.T) {
 	cases := []struct {
 		name     string
 		template string
-		args     []string
+		args     string
 		want     string
 	}{
 		{
 			name:     "with placeholder single arg",
 			template: "Deploy {args} to staging",
-			args:     []string{"v1.2"},
+			args:     "v1.2",
 			want:     "Deploy v1.2 to staging",
 		},
 		{
 			name:     "with placeholder multiple args",
 			template: "Run {args}",
-			args:     []string{"foo", "bar"},
+			args:     "foo bar",
 			want:     "Run foo bar",
 		},
 		{
 			name:     "without placeholder ignores args",
 			template: "Show status",
-			args:     []string{"ignored"},
+			args:     "ignored",
 			want:     "Show status",
 		},
 		{
 			name:     "empty args with placeholder",
 			template: "Deploy {args} now",
-			args:     []string{},
+			args:     "",
 			want:     "Deploy  now",
 		},
 		{
-			name:     "nil args with placeholder",
-			template: "Deploy {args} now",
-			args:     nil,
-			want:     "Deploy  now",
+			name:     "quoted multi-word arg is one token",
+			template: "Run {args}",
+			args:     `"hello world" --fast`,
+			want:     "Run hello world --fast",
+		},
+		{
+			name:     "single-quoted arg",
+			template: "Run {args}",
+			args:     `'a b' c`,
+			want:     "Run a b c",
+		},
+		{
+			name:     "unterminated quote consumes rest",
+			template: "Run {args}",
+			args:     `"a b`,
+			want:     "Run a b",
 		},
 	}
 
@@ -245,7 +257,7 @@ func TestExecutePrompt_NeverErrors(t *testing.T) {
 		Handler:        HandlerPrompt,
 		PromptTemplate: "always works",
 	}
-	result := ExecutePrompt(def, nil)
+	result := ExecutePrompt(def, "")
 	if result.IsError {
 		t.Errorf("ExecutePrompt should never return IsError=true, got true with output: %q", result.Output)
 	}

@@ -49,7 +49,7 @@ func TestWithPluginsDirLoadsPluginsAndExposesWarnings(t *testing.T) {
 	if !ok {
 		t.Fatal("expected summarize command to be registered")
 	}
-	result := entry.Handler(Command{Name: "summarize", Args: []string{"release", "notes"}})
+	result := entry.Handler(Command{Name: "summarize", Args: []string{"release", "notes"}, Raw: "/summarize release notes"})
 	if result.Status != CmdOK {
 		t.Fatalf("expected CmdOK, got %v with output %q", result.Status, result.Output)
 	}
@@ -86,7 +86,7 @@ func TestLegacyPluginsDirStillRegistersAndWarnsAtStartup(t *testing.T) {
 	if !ok {
 		t.Fatal("expected legacy JSON plugin command to remain registered")
 	}
-	result := entry.Handler(Command{Name: "summarize", Args: []string{"release", "notes"}})
+	result := entry.Handler(Command{Name: "summarize", Args: []string{"release", "notes"}, Raw: "/summarize release notes"})
 	if result.Status != CmdOK {
 		t.Fatalf("expected legacy plugin command to run, got %v with output %q", result.Status, result.Output)
 	}

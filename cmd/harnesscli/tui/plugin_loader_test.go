@@ -31,11 +31,45 @@ func TestLoadAndRegisterPlugins_RegistersPromptPlugin(t *testing.T) {
 	if !ok {
 		t.Fatal("expected summarize plugin command to be registered")
 	}
-	result := entry.Handler(Command{Name: "summarize", Args: []string{"release", "notes"}})
+	result := entry.Handler(Command{Name: "summarize", Args: []string{"release", "notes"}, Raw: "/summarize release notes"})
 	if result.Status != CmdOK {
 		t.Fatalf("expected CmdOK, got %v with output %q", result.Status, result.Output)
 	}
 	if result.Output != "Summarize: release notes" {
+		t.Fatalf("unexpected plugin output: %q", result.Output)
+	}
+}
+
+func TestLoadAndRegisterPlugins_PromptPluginQuotedArgs(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	pluginJSON := `{
+		"name": "deploy",
+		"description": "Deploy somewhere",
+		"handler": "prompt",
+		"prompt_template": "Deploy: {args}"
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "deploy.json"), []byte(pluginJSON), 0o644); err != nil {
+		t.Fatalf("write plugin file: %v", err)
+	}
+
+	registry := NewCommandRegistry()
+	if warnings := LoadAndRegisterPlugins(registry, dir); len(warnings) != 0 {
+		t.Fatalf("expected no warnings, got %v", warnings)
+	}
+
+	entry, ok := registry.Lookup("deploy")
+	if !ok {
+		t.Fatal("expected deploy plugin command to be registered")
+	}
+	// Quoted multi-word arguments are tokenized quote-aware (shared SplitArgs
+	// semantics): quote syntax is grouping, not literal output.
+	result := entry.Handler(Command{Name: "deploy", Raw: `/deploy "staging eu" fast`})
+	if result.Status != CmdOK {
+		t.Fatalf("expected CmdOK, got %v with output %q", result.Status, result.Output)
+	}
+	if result.Output != "Deploy: staging eu fast" {
 		t.Fatalf("unexpected plugin output: %q", result.Output)
 	}
 }

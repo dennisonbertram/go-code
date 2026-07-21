@@ -208,3 +208,88 @@ This section covers ONLY slice 3 (branch `epic/813-skill-args-s3`).
     stay literal; pinned by test.
 - Risk: `$env` clobbering `$env2` via prefix replacement.
   - Mitigation: maximal identifier run matched as one placeholder; pinned by test.
+
+---
+
+# Plan: epic #813 slice 4 — skill: slash-command namespace with unclaimed shorthand
+
+This section covers ONLY slice 4 (branch `epic/813-skill-args-s4`).
+
+## Context
+
+- Problem: skills do not appear in the TUI slash-command surface at all;
+  `buildSlashComplete` is seeded only from the builtin/plugin `CommandRegistry`,
+  so skill names collide invisibly with builtins and there is no way to invoke a
+  skill by name from the TUI.
+- User impact: skills are undiscoverable and uninvocable in the TUI; kimi parity
+  requires `/skill:<name>` always, plus `/<name>` shorthand when unclaimed.
+- Constraints: strict TDD; no CommandRegistry pollution (plugins skip on collision,
+  so registered skill shorthands would block plugins — precedence must live in the
+  dispatch fallback, not the registry); no server/API changes (epic out-of-scope).
+
+## Scope
+
+- In scope:
+  - New `cmd/harnesscli/tui/skills.go`: TUI skill loading (mirrors harnessd dirs:
+    `$HARNESS_GLOBAL_DIR|~/.go-harness/skills`, `<workspace>/.go-harness/skills`,
+    enabled plugin bundle SkillsDirs), `skill:<name>` + shorthand completion
+    suggestions, invocation-name precedence resolution, and expansion through
+    `skills.Resolver` (the slice 2/3 contract) with the raw remainder of the line.
+  - `model.go`: `skillRegistry`/`skillResolver` fields, loaded in `New()` after
+    plugins register (so shorthand claim checks see plugin commands) and before
+    `buildSlashComplete`; `buildSlashComplete(reg, skillReg)` at both call sites;
+    skill expansion hook in the `CommandSubmittedMsg` path ahead of slash dispatch.
+  - Dispatch precedence: builtin > plugin > shorthand skill; `skill:<name>` always
+    resolves the skill even when a builtin/plugin claims `<name>`.
+  - `plugin/execute.go`: `ExecutePrompt` takes the raw args string and tokenizes
+    with `skills.SplitArgs` before the `{args}` join (unquoted input unchanged;
+    quoted input loses quote syntax, gaining quote-aware grouping); caller in
+    `plugin_loader.go` passes the raw remainder of the line.
+- Out of scope: fork-context subagent plumbing, AutoInvokeHook trigger wiring,
+  server/API endpoints, docs (slice 5), ExecuteBash arg handling (shell quoting
+  must pass through untouched).
+
+## Documentation Contract
+
+- Feature status: `in implementation`
+- Public docs affected: none (slice 5 documents the namespace + shorthand rules).
+
+## Test Plan (TDD)
+
+- New failing tests first (`cmd/harnesscli/tui/skills_internal_test.go`, package tui):
+  - precedence table: builtin-claimed name never shorthand-resolves; plugin-claimed
+    name never shorthand-resolves; unclaimed resolves; `skill:<name>` always wins;
+    unknown/empty names never resolve.
+  - completion: `skill:<name>` present for every skill; shorthand present only for
+    unclaimed names; builtin-claimed skill name appears only via its builtin entry.
+  - expansion: quoted args reach `$0`/named bindings quote-aware; placeholder-less
+    body gets the `ARGUMENTS:` fallback; `$WORKSPACE` passes through; raw remainder
+    (not re-joined fields) is the args string.
+  - Model wiring: injected skill registry + `CommandSubmittedMsg` — shorthand
+    submission expands into the user message; `/stats` with a `stats` skill
+    present still runs the builtin.
+  - plugin `{args}`: quoted args tokenize quote-aware; existing unquoted cases
+    unchanged (call sites migrated to the raw-string signature).
+- Existing tests to update: `compact_command_test.go` buildSlashComplete call site;
+  `plugin/execute_test.go` ExecutePrompt call sites.
+
+## Implementation Checklist
+
+- [x] Define acceptance criteria in tests.
+- [x] Write failing tests first (watch them fail).
+- [x] Implement skills.go (loading, suggestions, precedence, expansion).
+- [x] Wire model.go (fields, New(), buildSlashComplete, dispatch hook).
+- [x] Align ExecutePrompt with SplitArgs + migrate call sites.
+- [x] gofmt + go vet clean.
+- [x] `go test ./cmd/harnesscli/... ./internal/skills/... -count=1` green.
+- [ ] Push `epic/813-skill-args-s4` and open PR (no merge).
+
+## Risks and Mitigations
+
+- Risk: registering skills into CommandRegistry blocks later plugin loads
+  (plugins skip claimed names).
+  - Mitigation: skills never enter the registry; precedence is dispatch-fallback
+    logic, pinned by the precedence table tests.
+- Risk: `skill:` suggestion clutters completion for names already builtin.
+  - Mitigation: `skill:<name>` is a distinct namespaced entry; shorthand filtered
+    by IsRegistered at build time, after plugins load.
