@@ -1,5 +1,39 @@
 # Engineering Log
 
+## 2026-07-21 (Agent Swarm — Epic #808, Slice 3)
+
+- Added the deferred `agent_swarm` tool
+  (`internal/harness/tools/deferred/agent_swarm.go`): `TierDeferred`,
+  `ActionExecute`, `Mutating: true`, params `prompt_template`/`items`/
+  `resume_agent_ids` plus profile/model overrides resolved exactly like
+  `start_subagent`; returns the aggregated report via `MarshalToolResult`.
+- Import-cycle design: `harness` and `deferred` cannot import `subagents`
+  (subagents imports harness). Mirror types (`SwarmRequest`/`SwarmReport`) +
+  `SwarmRunner` interface + `AgentSwarmToolName` const live in
+  `internal/harness/tools` (same pattern as `SubagentManager`); the adapter
+  `subagents.NewToolSwarmRunner` maps both directions; wiring happens in
+  `cmd/harnessd/runtime_container.go` next to the InlineManager.
+- Sole-call rule in `runner_step_engine.go`: a response containing
+  `agent_swarm` plus any other call executes the first swarm call and rejects
+  every other call with a corrective error naming the rule (a second
+  `agent_swarm` call is rejected too).
+- Nested-swarm prevention: new per-run `DeniedTools` denylist plumbed
+  `tools.SubagentRequest` -> `subagents.Request` -> `harness.RunRequest` ->
+  runState (carried over on continuation). `filteredToolsForRun` never offers
+  denied tools (even when activated) and the step-engine call gate blocks
+  them outright. The swarm sets `DeniedTools=[agent_swarm]` on every member.
+- Approval flow: no new code needed — the existing destructive-policy path
+  consults `Registry.IsMutating`, and the tool declares `Mutating: true`;
+  a test proves the call pauses for approval and runs after approval.
+- Description file `descriptions/agent_swarm.md` documents the sole-call
+  rule, the 128 cap, the 5->+1/700ms ramp, the env cap, and resume semantics.
+- TDD: tests landed first across four files (deferred tool contract, adapter
+  mapping, runner sole-call/denied/approval gates, fakeprovider full-stack
+  e2e showing a 4-item swarm and one aggregated tool result); all failed on
+  undefined symbols before implementation.
+- Validation: package tests + `-race` green for subagents, harness, tools,
+  deferred, harnessd; full regression suite (see PR body).
+
 ## 2026-07-21 (Issue #886 runBlockedError.Error Coverage Fix)
 
 - Symptom: post-merge regression gate (`scripts/test-regression.sh`) failed after PR #882 landed: `coveragegate` flagged `(*runBlockedError).Error` (cmd/harnesscli/main.go) at 0.0% — `functions with zero coverage detected`.

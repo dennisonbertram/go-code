@@ -207,6 +207,14 @@ func buildHTTPRuntime(opts httpRuntimeOptions) (httpRuntime, error) {
 	// Same handoff object also backs message_subagent/notify_parent — it
 	// already forwards to the runner once setRunner is called below.
 	registryOpts.RunSteerer = handoff
+	// agent_swarm (epic #808): the swarm runs on the same inline-subagent
+	// machinery (members start through the InlineManager; resume steers
+	// through the same runner handoff). Kept behind an interface in
+	// tools_default.go to avoid the harness->deferred->subagents cycle.
+	registryOpts.AgentSwarmRunner = subagents.NewToolSwarmRunner(subagents.NewSwarm(
+		registryOpts.SubagentManager,
+		subagents.WithSwarmSteerer(handoff),
+	))
 
 	tools := harness.NewDefaultRegistryWithOptions(opts.workspace, registryOpts)
 	runner := harness.NewRunner(opts.provider, tools, opts.runnerCfg)
