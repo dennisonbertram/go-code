@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"go-agent-harness/cmd/harnesscli/tui/components/modelswitcher"
+	"go-agent-harness/cmd/harnesscli/tui/components/undopicker"
 )
 
 // ─── SSE Stream Messages ────────────────────────────────────────────────────
@@ -379,6 +380,20 @@ type UndoResultMsg struct {
 	Messages          []ConversationMessage
 	Err               string
 	Conflict          bool
+}
+
+// UndoCandidatesLoadedMsg carries the conversation history fetched so the bare
+// /undo picker can list recent prompts (epic #805 slice 4). Messages include
+// the meta flags needed to find the compaction boundary.
+type UndoCandidatesLoadedMsg struct {
+	Messages []undopicker.MessageView
+	Err      string
+}
+
+// UndoPickerSelectedMsg is emitted when the user confirms a prompt in the
+// /undo picker. Count is the number of prompts the server must drop.
+type UndoPickerSelectedMsg struct {
+	Count int
 }
 
 // ForkResultMsg carries the outcome of POST /v1/conversations/{id}/fork

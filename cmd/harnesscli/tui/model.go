@@ -39,6 +39,7 @@ import (
 	"go-agent-harness/cmd/harnesscli/tui/components/thinkingbar"
 	"go-agent-harness/cmd/harnesscli/tui/components/tooluse"
 	"go-agent-harness/cmd/harnesscli/tui/components/transcriptexport"
+	"go-agent-harness/cmd/harnesscli/tui/components/undopicker"
 	"go-agent-harness/cmd/harnesscli/tui/components/viewport"
 	"go-agent-harness/internal/plugins"
 	"go-agent-harness/internal/provider/codex"
@@ -301,6 +302,9 @@ type Model struct {
 	// Session picker component and persistent session store.
 	sessionPicker sessionpicker.Model
 	sessionStore  *SessionStore
+
+	// undoPicker is the bare-/undo overlay listing recent prompts (epic #805).
+	undoPicker undopicker.Model
 
 	// permissionsPanel shows the client-local session permission rules.
 	permissionsPanel permissionspanel.Model
@@ -1645,9 +1649,22 @@ func executeClearCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	return []tea.Cmd{m.setStatusMsg("Conversation cleared")}, false
 }
 
-// executeUndoCommand implements /undo [count] (Issue #805): it asks the server
-// to drop the last count user prompts (default 1) and everything after them,
-// then rebuilds the viewport from the refetched history (see UndoResultMsg).
+// wrapUndoPickerCmd translates the undo picker's UndoSelectedMsg into the
+// model-level UndoPickerSelectedMsg so the message-type switch handles it.
+// Other messages pass through unchanged.
+func wrapUndoPickerCmd(pickerCmd tea.Cmd) tea.Cmd {
+	return func() tea.Msg {
+		raw := pickerCmd()
+		if sel, ok := raw.(undopicker.UndoSelectedMsg); ok {
+			return UndoPickerSelectedMsg{Count: sel.Entry.Count}
+		}
+		return raw
+	}
+}
+
+// executeUndoCommand implements /undo [count] (Issue #805): with a numeric
+// argument it asks the server to drop the last count user prompts directly;
+// with no argument it opens the picker overlay of recent prompts (slice 4).
 // Malformed counts are command errors — no request is ever sent. The command
 // refuses while a run is active because the run's terminal persistence would
 // rewrite the store and silently clobber the undo.
@@ -1655,7 +1672,7 @@ func executeUndoCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	if len(cmd.Args) > 1 {
 		return []tea.Cmd{m.setStatusMsg("Usage: /undo [count]")}, false
 	}
-	count := 1
+	count := 0 // 0 means: open the picker
 	if len(cmd.Args) == 1 {
 		n, err := strconv.Atoi(cmd.Args[0])
 		if err != nil || n < 1 {
@@ -1668,6 +1685,13 @@ func executeUndoCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	}
 	if m.conversationID == "" {
 		return []tea.Cmd{m.setStatusMsg("Nothing to undo yet — send a prompt first")}, false
+	}
+	if count == 0 {
+		// Bare /undo: fetch the history and open the picker (slice 4).
+		return []tea.Cmd{
+			m.setStatusMsg("Loading prompts…"),
+			fetchUndoCandidatesCmd(m.config.BaseURL, m.conversationID, m.config.APIKey),
+		}, false
 	}
 	return []tea.Cmd{
 		m.setStatusMsg(fmt.Sprintf("Undoing %d prompt(s)…", count)),
@@ -2505,6 +2529,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.activeOverlay = ""
 				return m, tea.Batch(cmds...)
 			}
+			if m.activeOverlay == "undo" {
+				m.undoPicker = m.undoPicker.Close()
+				m.overlayActive = false
+				m.activeOverlay = ""
+				return m, tea.Batch(cmds...)
+			}
 			if m.activeOverlay == "search" {
 				m.overlayActive = false
 				m.activeOverlay = ""
@@ -2619,6 +2649,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.themePicker, tpCmd = m.themePicker.Update(msg)
 				if tpCmd != nil {
 					cmds = append(cmds, tpCmd)
+				}
+				return m, tea.Batch(cmds...)
+			}
+			// When the undo overlay is active, Enter confirms the selected prompt
+			// (epic #805 slice 4). Overlay routing cases never see Enter — it is
+			// claimed by this Submit case first.
+			if m.overlayActive && m.activeOverlay == "undo" {
+				var upCmd tea.Cmd
+				m.undoPicker, upCmd = m.undoPicker.Update(msg)
+				if upCmd != nil {
+					cmds = append(cmds, wrapUndoPickerCmd(upCmd))
 				}
 				return m, tea.Batch(cmds...)
 			}
@@ -2956,6 +2997,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					}
 					return raw
 				})
+			}
+			return m, tea.Batch(cmds...)
+		case m.overlayActive && m.activeOverlay == "undo":
+			// Route navigation keys to the undo picker (epic #805 slice 4).
+			// Enter is claimed earlier by the Submit case.
+			var upCmd tea.Cmd
+			m.undoPicker, upCmd = m.undoPicker.Update(msg)
+			if upCmd != nil {
+				cmds = append(cmds, wrapUndoPickerCmd(upCmd))
 			}
 			return m, tea.Batch(cmds...)
 		case m.overlayActive && m.activeOverlay == "permissions":
@@ -4327,6 +4377,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.appendConversationMessages(msg.Messages)
 			cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Undid to before step %d (%d messages remain)", msg.RemovedFromStep, msg.RemainingMessages)))
 		}
+
+	case UndoCandidatesLoadedMsg:
+		// Bare /undo: open the picker with the fetched prompts (slice 4).
+		if msg.Err != "" {
+			cmds = append(cmds, m.setStatusMsg("Undo failed: "+msg.Err))
+			return m, tea.Batch(cmds...)
+		}
+		entries := undopicker.EntriesFromMessages(msg.Messages)
+		if len(entries) == 0 {
+			cmds = append(cmds, m.setStatusMsg("Nothing to undo yet — send a prompt first"))
+			return m, tea.Batch(cmds...)
+		}
+		m.undoPicker = undopicker.New(entries).Open()
+		m.undoPicker.Width = m.width
+		m.overlayActive = true
+		m.activeOverlay = "undo"
+
+	case UndoPickerSelectedMsg:
+		// Picker confirmed: close the overlay and run the undo for the
+		// selected prompt's count — the same path as /undo <count>.
+		m.undoPicker = m.undoPicker.Close()
+		m.overlayActive = false
+		m.activeOverlay = ""
+		cmds = append(cmds,
+			m.setStatusMsg(fmt.Sprintf("Undoing %d prompt(s)…", msg.Count)),
+			undoConversationCmd(m.config.BaseURL, m.conversationID, msg.Count, m.config.APIKey),
+		)
 	}
 
 	return m, tea.Batch(cmds...)
@@ -4437,6 +4514,12 @@ func (m Model) View() string {
 		case "sessions":
 			m.sessionPicker.Width = m.width
 			mainContent = m.sessionPicker.View(m.width)
+			if mainContent == "" {
+				mainContent = m.vp.View()
+			}
+		case "undo":
+			m.undoPicker.Width = m.width
+			mainContent = m.undoPicker.View(m.width)
 			if mainContent == "" {
 				mainContent = m.vp.View()
 			}

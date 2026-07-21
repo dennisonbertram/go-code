@@ -14,6 +14,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"go-agent-harness/cmd/harnesscli/tui/components/modelswitcher"
+	"go-agent-harness/cmd/harnesscli/tui/components/undopicker"
 )
 
 // newHarnessRequest builds an HTTP request targeting the harnessd server and,
@@ -939,6 +940,52 @@ func restoreRewindCmd(baseURL, conversationID, pointID, apiKey string) tea.Cmd {
 			out.Err = err.Error()
 		}
 		return out
+	}
+}
+
+// fetchUndoCandidatesCmd fetches the conversation history (with meta flags)
+// for the bare-/undo picker (epic #805 slice 4). On success it emits
+// UndoCandidatesLoadedMsg with the messages; on failure it sets Err.
+func fetchUndoCandidatesCmd(baseURL, conversationID, apiKey string) tea.Cmd {
+	return func() tea.Msg {
+		endpoint := strings.TrimRight(baseURL, "/") + "/v1/conversations/" + url.PathEscape(conversationID) + "/messages"
+		req, err := newHarnessRequest(context.Background(), http.MethodGet, endpoint, nil, apiKey)
+		if err != nil {
+			return UndoCandidatesLoadedMsg{Err: err.Error()}
+		}
+		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
+		if err != nil {
+			return UndoCandidatesLoadedMsg{Err: err.Error()}
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return UndoCandidatesLoadedMsg{Err: "read response: " + err.Error()}
+		}
+		if resp.StatusCode != http.StatusOK {
+			return UndoCandidatesLoadedMsg{Err: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))}
+		}
+		var payload struct {
+			Messages []struct {
+				Role             string `json:"role"`
+				Content          string `json:"content"`
+				IsMeta           bool   `json:"is_meta"`
+				IsCompactSummary bool   `json:"is_compact_summary"`
+			} `json:"messages"`
+		}
+		if err := json.Unmarshal(body, &payload); err != nil {
+			return UndoCandidatesLoadedMsg{Err: "decode response: " + err.Error()}
+		}
+		messages := make([]undopicker.MessageView, len(payload.Messages))
+		for i, m := range payload.Messages {
+			messages[i] = undopicker.MessageView{
+				Role:             m.Role,
+				Content:          m.Content,
+				IsMeta:           m.IsMeta,
+				IsCompactSummary: m.IsCompactSummary,
+			}
+		}
+		return UndoCandidatesLoadedMsg{Messages: messages}
 	}
 }
 

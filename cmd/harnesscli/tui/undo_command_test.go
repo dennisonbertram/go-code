@@ -6,7 +6,58 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
+
+// collectCmdMsgs runs cmd (unwrapping tea.BatchMsg) and records the last
+// produced message for which keep returns true into *out. Sub-commands that
+// do not return promptly (e.g. status-expiry ticks) are skipped after a
+// short grace period so picker-flow tests stay fast.
+func collectCmdMsgs(cmd tea.Cmd, out *tea.Msg, keep func(tea.Msg) bool) {
+	if cmd == nil {
+		return
+	}
+	result := cmd()
+	if result == nil {
+		return
+	}
+	if batch, ok := result.(tea.BatchMsg); ok {
+		for _, sub := range batch {
+			collectSubCmdMsgs(sub, out, keep)
+		}
+		return
+	}
+	if keep(result) {
+		*out = result
+	}
+}
+
+func collectSubCmdMsgs(cmd tea.Cmd, out *tea.Msg, keep func(tea.Msg) bool) {
+	if cmd == nil {
+		return
+	}
+	ch := make(chan tea.Msg, 1)
+	go func() { ch <- cmd() }()
+	select {
+	case r := <-ch:
+		if r == nil {
+			return
+		}
+		if batch, ok := r.(tea.BatchMsg); ok {
+			for _, sub := range batch {
+				collectSubCmdMsgs(sub, out, keep)
+			}
+			return
+		}
+		if keep(r) {
+			*out = r
+		}
+	case <-time.After(500 * time.Millisecond):
+		// Delayed commands (status-expiry ticks) are irrelevant to these tests.
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Epic #805 Slice 3: /undo command tests
@@ -147,15 +198,24 @@ func TestUndoConversationCmd_NetworkError(t *testing.T) {
 	}
 }
 
-// TestExecuteUndoCommand_DefaultCount verifies /undo with no args undoes one
-// prompt.
-func TestExecuteUndoCommand_DefaultCount(t *testing.T) {
+// TestExecuteUndoCommand_BareOpensPicker verifies that bare /undo (epic #805
+// slice 4) fetches the conversation history and opens the prompt picker
+// overlay instead of immediately undoing (the slice-3 numeric path is
+// unchanged; see TestExecuteUndoCommand_NumericArg).
+func TestExecuteUndoCommand_BareOpensPicker(t *testing.T) {
 	t.Parallel()
 
 	var got struct{ method, path, body string }
 	ts := undoTestServer(t, http.StatusOK,
-		`{"undone":true,"removed_from_step":0,"remaining_messages":1}`,
-		`{"messages":[]}`,
+		`{"undone":true,"removed_from_step":2,"remaining_messages":3}`,
+		`{"messages":[
+			{"role":"user","content":"first question"},
+			{"role":"assistant","content":"first answer"},
+			{"role":"user","content":"second question"},
+			{"role":"assistant","content":"second answer"},
+			{"role":"user","content":"third question"},
+			{"role":"assistant","content":"third answer"}
+		]}`,
 		&got)
 	defer ts.Close()
 
@@ -165,13 +225,204 @@ func TestExecuteUndoCommand_DefaultCount(t *testing.T) {
 	if quit {
 		t.Fatal("/undo must not quit")
 	}
-	cmd := lastCmd(t, cmds)
-	msg := cmd()
-	if !strings.Contains(got.body, `"count":1`) {
-		t.Errorf("default count body: %q", got.body)
+	msg := lastCmd(t, cmds)()
+
+	loaded, ok := msg.(UndoCandidatesLoadedMsg)
+	if !ok {
+		t.Fatalf("expected UndoCandidatesLoadedMsg, got %T", msg)
 	}
-	if _, ok := msg.(UndoResultMsg); !ok {
-		t.Fatalf("expected UndoResultMsg, got %T", msg)
+	if loaded.Err != "" {
+		t.Fatalf("unexpected fetch error: %s", loaded.Err)
+	}
+	// Bare /undo must not undo anything yet: no POST to /undo may have happened.
+	if got.method != "" {
+		t.Fatalf("bare /undo issued %s %s before a selection was made", got.method, got.path)
+	}
+
+	m2, _ := m.Update(loaded)
+	m = m2.(Model)
+	if !m.overlayActive || m.activeOverlay != "undo" {
+		t.Fatalf("picker overlay not open: overlayActive=%v activeOverlay=%q", m.overlayActive, m.activeOverlay)
+	}
+	if !m.undoPicker.IsOpen() {
+		t.Fatal("undoPicker is not open")
+	}
+	entries := m.undoPicker.Entries()
+	if len(entries) != 3 {
+		t.Fatalf("got %d picker entries, want 3: %+v", len(entries), entries)
+	}
+	if entries[0].Count != 1 || entries[0].Preview != "third question" {
+		t.Errorf("entries[0] = %+v, want count=1 'third question' (newest first)", entries[0])
+	}
+	if entries[2].Count != 3 || entries[2].Preview != "first question" {
+		t.Errorf("entries[2] = %+v, want count=3 'first question'", entries[2])
+	}
+}
+
+// TestUndoPickerFlow_ConfirmIssuesUndoRequest drives the full picker flow:
+// bare /undo → candidates loaded → picker opens → Down + Enter → the server
+// receives POST /undo with the selected entry's count (epic #805 slice 4
+// integration test).
+func TestUndoPickerFlow_ConfirmIssuesUndoRequest(t *testing.T) {
+	t.Parallel()
+
+	var got struct{ method, path, body string }
+	ts := undoTestServer(t, http.StatusOK,
+		`{"undone":true,"removed_from_step":2,"remaining_messages":3}`,
+		`{"messages":[
+			{"role":"user","content":"first question"},
+			{"role":"assistant","content":"first answer"},
+			{"role":"user","content":"second question"},
+			{"role":"assistant","content":"second answer"},
+			{"role":"user","content":"third question"},
+			{"role":"assistant","content":"third answer"}
+		]}`,
+		&got)
+	defer ts.Close()
+
+	m := testRunControlModel(ts.URL)
+	m.conversationID = "conv-undo"
+
+	// Open the picker.
+	cmds, _ := executeUndoCommand(&m, Command{Name: "undo"})
+	m2, _ := m.Update(lastCmd(t, cmds)())
+	m = m2.(Model)
+	if !m.undoPicker.IsOpen() {
+		t.Fatal("picker did not open")
+	}
+
+	// Move to the 2nd-newest prompt and confirm.
+	m3, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = m3.(Model)
+	m4, enterCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = m4.(Model)
+	if enterCmd == nil {
+		t.Fatal("Enter on an enabled picker row must produce a command")
+	}
+	// Unwrap the (possibly batched) command to find the translated selection msg.
+	var selMsg tea.Msg
+	collectCmdMsgs(enterCmd, &selMsg, func(msg tea.Msg) bool {
+		_, ok := msg.(UndoPickerSelectedMsg)
+		return ok
+	})
+	if selMsg == nil {
+		t.Fatal("no UndoPickerSelectedMsg produced by Enter")
+	}
+
+	// The selection closes the overlay and dispatches the undo call.
+	m5, undoCmd := m.Update(selMsg)
+	m = m5.(Model)
+	if m.overlayActive || m.undoPicker.IsOpen() {
+		t.Errorf("overlay still open after selection: overlayActive=%v pickerOpen=%v", m.overlayActive, m.undoPicker.IsOpen())
+	}
+	if undoCmd == nil {
+		t.Fatal("selection did not dispatch the undo command")
+	}
+	collectCmdMsgs(undoCmd, &selMsg, func(msg tea.Msg) bool { return true })
+	if got.method != http.MethodPost || got.path != "/v1/conversations/conv-undo/undo" {
+		t.Fatalf("undo request: got %s %s, want POST /v1/conversations/conv-undo/undo", got.method, got.path)
+	}
+	if !strings.Contains(got.body, `"count":2`) {
+		t.Errorf("undo body: got %q, want count=2 (2nd-newest prompt)", got.body)
+	}
+}
+
+// TestUndoPickerFlow_EscapeCancelsWithoutHTTP verifies Esc closes the picker
+// without issuing any undo request.
+func TestUndoPickerFlow_EscapeCancelsWithoutHTTP(t *testing.T) {
+	t.Parallel()
+
+	var got struct{ method, path, body string }
+	ts := undoTestServer(t, http.StatusOK,
+		`{"undone":true}`,
+		`{"messages":[{"role":"user","content":"q1"},{"role":"assistant","content":"a1"}]}`,
+		&got)
+	defer ts.Close()
+
+	m := testRunControlModel(ts.URL)
+	m.conversationID = "conv-undo"
+	cmds, _ := executeUndoCommand(&m, Command{Name: "undo"})
+	m2, _ := m.Update(lastCmd(t, cmds)())
+	m = m2.(Model)
+	if !m.undoPicker.IsOpen() {
+		t.Fatal("picker did not open")
+	}
+
+	m3, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = m3.(Model)
+	if m.overlayActive || m.undoPicker.IsOpen() {
+		t.Errorf("Esc did not close the picker: overlayActive=%v pickerOpen=%v", m.overlayActive, m.undoPicker.IsOpen())
+	}
+	if got.method != "" {
+		t.Errorf("Esc issued %s %s — no request may be sent on cancel", got.method, got.path)
+	}
+}
+
+// TestUndoPickerFlow_FetchError verifies a failed candidate fetch lands in the
+// status bar without opening the picker.
+func TestUndoPickerFlow_FetchError(t *testing.T) {
+	t.Parallel()
+
+	m := testRunControlModel("http://127.0.0.1:1") // unreachable
+	m.conversationID = "conv-undo"
+	cmds, _ := executeUndoCommand(&m, Command{Name: "undo"})
+	msg := lastCmd(t, cmds)()
+
+	loaded, ok := msg.(UndoCandidatesLoadedMsg)
+	if !ok {
+		t.Fatalf("expected UndoCandidatesLoadedMsg, got %T", msg)
+	}
+	if loaded.Err == "" {
+		t.Fatal("expected a fetch error for an unreachable server")
+	}
+	m2, _ := m.Update(loaded)
+	m = m2.(Model)
+	if m.overlayActive || m.undoPicker.IsOpen() {
+		t.Error("picker opened despite a failed fetch")
+	}
+	if !strings.Contains(m.statusMsg, "Undo failed") {
+		t.Errorf("expected an undo failure status, got %q", m.statusMsg)
+	}
+}
+
+// TestUndoPickerFlow_DisabledRowStaysUnselectable verifies that a prompt at or
+// below the compaction boundary is skipped by navigation and cannot be
+// confirmed, end to end at the model level.
+func TestUndoPickerFlow_DisabledRowStaysUnselectable(t *testing.T) {
+	t.Parallel()
+
+	var got struct{ method, path, body string }
+	ts := undoTestServer(t, http.StatusOK,
+		`{"undone":true}`,
+		`{"messages":[
+			{"role":"user","content":"old compacted question"},
+			{"role":"system","content":"summary","is_compact_summary":true},
+			{"role":"user","content":"new question"},
+			{"role":"assistant","content":"new answer"}
+		]}`,
+		&got)
+	defer ts.Close()
+
+	m := testRunControlModel(ts.URL)
+	m.conversationID = "conv-undo"
+	cmds, _ := executeUndoCommand(&m, Command{Name: "undo"})
+	m2, _ := m.Update(lastCmd(t, cmds)())
+	m = m2.(Model)
+
+	entries := m.undoPicker.Entries()
+	if len(entries) != 2 {
+		t.Fatalf("got %d entries, want 2", len(entries))
+	}
+	if !entries[1].Disabled || entries[1].Preview != "old compacted question" {
+		t.Errorf("entries[1] = %+v, want DISABLED 'old compacted question'", entries[1])
+	}
+
+	// Navigation can never land on the disabled row: Down from the only
+	// enabled row wraps back to itself.
+	m3, _ := m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = m3.(Model)
+	if sel, _ := m.undoPicker.Selected(); sel.Count != 1 || sel.Disabled {
+		t.Fatalf("selection landed on a disabled row: %+v", sel)
 	}
 }
 
