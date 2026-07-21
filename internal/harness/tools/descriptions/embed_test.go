@@ -60,6 +60,7 @@ func TestLoadAllKnownDescriptions(t *testing.T) {
 	names := []string{
 		"AskUserQuestion",
 		"agent",
+		"agent_swarm",
 		"agentic_fetch",
 		"apply_patch",
 		"bash",
@@ -176,6 +177,7 @@ func TestEmbeddedFSAndKnownListAreInSync(t *testing.T) {
 	knownNames := map[string]bool{
 		"AskUserQuestion":         true,
 		"agent":                   true,
+		"agent_swarm":             true,
 		"agentic_fetch":           true,
 		"apply_patch":             true,
 		"bash":                    true,

@@ -59,6 +59,7 @@ func (im *InlineManager) Start(ctx context.Context, req tools.SubagentRequest) (
 		MaxCostUSD:           req.MaxCostUSD,
 		ReasoningEffort:      req.ReasoningEffort,
 		AllowedTools:         append([]string(nil), req.AllowedTools...),
+		DeniedTools:          append([]string(nil), req.DeniedTools...),
 		ProfileName:          req.ProfileName,
 		ParentContextHandoff: req.ParentContextHandoff,
 		Isolation:            isolation,

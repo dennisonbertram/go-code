@@ -454,6 +454,10 @@ type RunRequest struct {
 	// available. Skill constraints activated during execution override this
 	// base filter for the duration of the skill.
 	AllowedTools []string `json:"allowed_tools,omitempty"`
+	// DeniedTools lists tool names that must never be offered to or callable
+	// from this run, even when activated or granted by AllowedTools. Used to
+	// keep agent_swarm out of swarm-member runs (no nested swarms).
+	DeniedTools []string `json:"denied_tools,omitempty"`
 	// MCPServers specifies per-run MCP server configurations. Each entry
 	// describes an MCP server to connect for this run only. The per-run servers
 	// shadow any global MCP servers with the same name. When the run completes,

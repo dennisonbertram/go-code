@@ -68,6 +68,11 @@ type DefaultRegistryOptions struct {
 	MessageSummarizer   htools.MessageSummarizer   // optional: enables summarize/hybrid modes in compact_history
 	// SubagentManager enables the run_agent tool for profile-based subagent delegation.
 	SubagentManager htools.SubagentManager
+	// AgentSwarmRunner enables the agent_swarm tool: a single-call template
+	// fan-out over items into concurrent subagents (epic #808). Implemented by
+	// the subagents package adapter (subagents.NewToolSwarmRunner); kept as an
+	// interface here to avoid an import cycle.
+	AgentSwarmRunner htools.SwarmRunner
 	// RunSteerer enables message_subagent (parent -> running subagent) and
 	// notify_parent (subagent -> spawning agent), both built on the same
 	// steer-a-live-run primitive in each direction.
@@ -386,6 +391,13 @@ func NewDefaultRegistryWithOptions(workspaceRoot string, opts DefaultRegistryOpt
 		if opts.RunSteerer != nil {
 			deferredTools = append(deferredTools, deferred.MessageSubagentTool(opts.SubagentManager, opts.RunSteerer))
 		}
+	}
+
+	// agent_swarm: one-call template fan-out into concurrent subagents.
+	// Registered next to the subagent tools; the swarm itself denies members
+	// agent_swarm via RunRequest.DeniedTools (no nested swarms).
+	if opts.AgentSwarmRunner != nil {
+		deferredTools = append(deferredTools, deferred.AgentSwarmTool(opts.AgentSwarmRunner, opts.ProfilesDir))
 	}
 
 	// notify_parent: the reverse direction of message_subagent (subagent ->

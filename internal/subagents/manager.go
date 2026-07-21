@@ -51,11 +51,14 @@ type Request struct {
 	// AgentIntent selects a named prompt overlay (e.g. "code_review",
 	// "autonomous") for this subagent, forwarded to RunRequest.AgentIntent.
 	// SystemPrompt (a full override) takes precedence over an intent overlay.
-	AgentIntent          string                      `json:"agent_intent,omitempty"`
-	MaxSteps             int                         `json:"max_steps,omitempty"`
-	MaxCostUSD           float64                     `json:"max_cost_usd,omitempty"`
-	ReasoningEffort      string                      `json:"reasoning_effort,omitempty"`
-	AllowedTools         []string                    `json:"allowed_tools,omitempty"`
+	AgentIntent     string   `json:"agent_intent,omitempty"`
+	MaxSteps        int      `json:"max_steps,omitempty"`
+	MaxCostUSD      float64  `json:"max_cost_usd,omitempty"`
+	ReasoningEffort string   `json:"reasoning_effort,omitempty"`
+	AllowedTools    []string `json:"allowed_tools,omitempty"`
+	// DeniedTools lists tool names the subagent must never be offered or
+	// allowed to call; swarm members always deny agent_swarm (no nesting).
+	DeniedTools          []string                    `json:"denied_tools,omitempty"`
 	ProfileName          string                      `json:"profile,omitempty"`
 	Permissions          *harness.PermissionConfig   `json:"permissions,omitempty"`
 	Isolation            IsolationMode               `json:"isolation,omitempty"`
@@ -231,6 +234,7 @@ func (m *manager) Create(ctx context.Context, req Request) (Subagent, error) {
 		MaxCostUSD:           req.MaxCostUSD,
 		ReasoningEffort:      strings.TrimSpace(req.ReasoningEffort),
 		AllowedTools:         append([]string(nil), req.AllowedTools...),
+		DeniedTools:          append([]string(nil), req.DeniedTools...),
 		ProfileName:          strings.TrimSpace(req.ProfileName),
 		Permissions:          req.Permissions,
 		AgentID:              id,

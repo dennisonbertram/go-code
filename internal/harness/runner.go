@@ -58,6 +58,10 @@ type runState struct {
 	// to the LLM. Skill constraints override this during skill execution.
 	// Nil or empty means no per-run restriction.
 	allowedTools []string
+	// deniedTools is the per-run tool denylist from RunRequest.DeniedTools.
+	// Denied tools are never offered (filteredToolsForRun) and never executed
+	// (step-engine call gate), even when activated or allowed.
+	deniedTools []string
 	// permissions is the effective two-axis permission configuration for this run.
 	permissions PermissionConfig
 	// permissionWorkspaceRoot is the workspace used to resolve path rules.
@@ -964,6 +968,7 @@ func (r *Runner) StartRun(req RunRequest) (Run, error) {
 		steeringCh:              make(chan string, steeringBufferSize),
 		maxCostUSD:              req.MaxCostUSD,
 		allowedTools:            req.AllowedTools,
+		deniedTools:             copyStringSlice(req.DeniedTools),
 		permissions:             effectivePerms,
 		permissionWorkspaceRoot: r.defaultPermissionWorkspaceRoot(),
 		snapshotBuilder:         sb,
@@ -1605,21 +1610,24 @@ func (r *Runner) ContinueRunWithOptions(runID string, req ContinueRunRequest) (R
 		contSB = errorchain.NewSnapshotBuilder(rc.ErrorContextDepth)
 	}
 	contState := &runState{
-		run:                      newRun,
-		config:                   &rc,
-		staticSystemPrompt:       systemPrompt,
-		promptResolved:           promptResolved,
-		usageTotals:              usageTotalsAccumulator{},
-		costTotals:               RunCostTotals{CostStatus: CostStatusPending},
-		messages:                 make([]Message, 0, 16),
-		events:                   make([]Event, 0, 32),
-		subscribers:              make(map[chan Event]struct{}),
-		steeringCh:               make(chan string, steeringBufferSize),
-		maxCostUSD:               srcMaxCostUSD,
-		permissions:              effectivePermissions,
-		permissionWorkspaceRoot:  r.defaultPermissionWorkspaceRoot(),
-		resolvedRoleModels:       srcResolvedRoleModels,
-		allowedTools:             effectiveAllowedTools,
+		run:                     newRun,
+		config:                  &rc,
+		staticSystemPrompt:      systemPrompt,
+		promptResolved:          promptResolved,
+		usageTotals:             usageTotalsAccumulator{},
+		costTotals:              RunCostTotals{CostStatus: CostStatusPending},
+		messages:                make([]Message, 0, 16),
+		events:                  make([]Event, 0, 32),
+		subscribers:             make(map[chan Event]struct{}),
+		steeringCh:              make(chan string, steeringBufferSize),
+		maxCostUSD:              srcMaxCostUSD,
+		permissions:             effectivePermissions,
+		permissionWorkspaceRoot: r.defaultPermissionWorkspaceRoot(),
+		resolvedRoleModels:      srcResolvedRoleModels,
+		allowedTools:            effectiveAllowedTools,
+		// The denylist always carries over: a continued swarm member stays a
+		// swarm member and must keep its tool exclusions.
+		deniedTools:              copyStringSlice(state.deniedTools),
 		previousRunID:            runID,
 		continuationPolicyNotice: policyNotice,
 		snapshotBuilder:          contSB,
@@ -2688,6 +2696,32 @@ func safeCallPostToolUseHook(hook PostToolUseHook, ctx context.Context, ev PostT
 func (r *Runner) filteredToolsForRun(runID string) []ToolDefinition {
 	defs := r.toolsForRun(runID).DefinitionsForRun(runID, r.activations)
 
+	r.mu.RLock()
+	state, stateOK := r.runs[runID]
+	var baseAllowed, denied []string
+	if stateOK {
+		baseAllowed = state.allowedTools
+		denied = state.deniedTools
+	}
+	r.mu.RUnlock()
+
+	// DeniedTools is an absolute per-run denylist: denied tools are never
+	// offered, whatever the activation, skill-constraint, or allowed-tools
+	// state says (keeps agent_swarm out of swarm-member runs).
+	if len(denied) > 0 {
+		blocked := make(map[string]bool, len(denied))
+		for _, name := range denied {
+			blocked[name] = true
+		}
+		kept := make([]ToolDefinition, 0, len(defs))
+		for _, def := range defs {
+			if !blocked[def.Name] {
+				kept = append(kept, def)
+			}
+		}
+		defs = kept
+	}
+
 	// Skill constraints (activated by the skill tool) take precedence over the
 	// per-run base filter. If a skill constraint is active with a non-nil
 	// AllowedTools list, apply it exclusively.
@@ -2711,14 +2745,6 @@ func (r *Runner) filteredToolsForRun(runID string) []ToolDefinition {
 
 	// No active skill constraint (or skill constraint with nil AllowedTools =
 	// unrestricted). Apply the per-run base allowed-tools list from RunRequest.
-	r.mu.RLock()
-	state, stateOK := r.runs[runID]
-	var baseAllowed []string
-	if stateOK {
-		baseAllowed = state.allowedTools
-	}
-	r.mu.RUnlock()
-
 	if len(baseAllowed) == 0 {
 		return defs // no per-run restriction either
 	}

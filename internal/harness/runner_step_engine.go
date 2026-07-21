@@ -745,7 +745,32 @@ func (se *stepEngine) run() {
 
 		pendingExecs := make([]pendingToolExec, 0, len(result.ToolCalls))
 
-		for _, call := range result.ToolCalls {
+		// Sole-call rule (epic #808): when a model response calls agent_swarm,
+		// that must be the response's only tool call. The first agent_swarm
+		// call proceeds; every other call in the same response is rejected
+		// below with a corrective error so the model re-issues it in a later
+		// turn.
+		agentSwarmSoleIdx := -1
+		for i, call := range result.ToolCalls {
+			if call.Name == htools.AgentSwarmToolName {
+				agentSwarmSoleIdx = i
+				break
+			}
+		}
+		enforceAgentSwarmSoleCall := agentSwarmSoleIdx >= 0 && len(result.ToolCalls) > 1
+
+		// DeniedTools is the per-run absolute denylist (swarm members deny
+		// agent_swarm to forbid nested swarms); denied calls are blocked below
+		// before any hook, permission, or approval processing.
+		var runDeniedTools map[string]bool
+		if len(stepState.deniedTools) > 0 {
+			runDeniedTools = make(map[string]bool, len(stepState.deniedTools))
+			for _, name := range stepState.deniedTools {
+				runDeniedTools[name] = true
+			}
+		}
+
+		for callIdx, call := range result.ToolCalls {
 			r.emit(runID, EventToolCallStarted, map[string]any{
 				"call_id":   call.ID,
 				"tool":      call.Name,
@@ -790,6 +815,44 @@ func (se *stepEngine) run() {
 						"step":       alert.Step,
 					})
 				}
+			}
+
+			if runDeniedTools[call.Name] {
+				deniedOutput := mustJSON(map[string]any{
+					"error": fmt.Sprintf("tool %q is not available in this run: it is denied by this run's tool policy", call.Name),
+				})
+				r.emit(runID, EventToolCallBlocked, map[string]any{
+					"call_id": call.ID,
+					"tool":    call.Name,
+					"reason":  "tool_denied_for_run",
+				})
+				messages = append(messages, Message{
+					Role:       "tool",
+					Name:       call.Name,
+					ToolCallID: call.ID,
+					Content:    deniedOutput,
+				})
+				r.stepSetMessages(runID, messages)
+				continue
+			}
+
+			if enforceAgentSwarmSoleCall && callIdx != agentSwarmSoleIdx {
+				corrective := mustJSON(map[string]any{
+					"error": fmt.Sprintf("tool %q rejected: agent_swarm must be the only tool call in a model response; re-issue it in a later turn", call.Name),
+				})
+				r.emit(runID, EventToolCallBlocked, map[string]any{
+					"call_id": call.ID,
+					"tool":    call.Name,
+					"reason":  "agent_swarm_sole_call",
+				})
+				messages = append(messages, Message{
+					Role:       "tool",
+					Name:       call.Name,
+					ToolCallID: call.ID,
+					Content:    corrective,
+				})
+				r.stepSetMessages(runID, messages)
+				continue
 			}
 
 			if !r.skillConstraints.IsToolAllowed(runID, call.Name) {

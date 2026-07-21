@@ -681,6 +681,34 @@ func TestSwarmMemberStartFailureIsCaptured(t *testing.T) {
 	}
 }
 
+func TestSwarmMembersExcludeAgentSwarmFromToolSet(t *testing.T) {
+	t.Parallel()
+
+	fake := newFakeSwarmManager()
+	fake.release()
+	swarm := NewSwarm(fake)
+	res := awaitSwarmRun(t, runSwarmAsync(swarm, context.Background(), SwarmRequest{
+		PromptTemplate: "do {{item}}",
+		Items:          []string{"a", "b"},
+	}))
+	if res.err != nil {
+		t.Fatalf("Run error = %v, want nil", res.err)
+	}
+	// Swarm members must never receive agent_swarm in their own tool set
+	// (nested swarms are out of scope), regardless of profile tool grants.
+	for i, req := range fake.started {
+		found := false
+		for _, name := range req.DeniedTools {
+			if name == "agent_swarm" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("member %d DeniedTools = %v, want agent_swarm excluded", i, req.DeniedTools)
+		}
+	}
+}
+
 func TestSwarmRunWithInlineManager(t *testing.T) {
 	t.Parallel()
 

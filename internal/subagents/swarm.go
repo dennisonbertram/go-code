@@ -251,6 +251,8 @@ func (r SwarmRequest) expandedPrompts() ([]string, error) {
 }
 
 // memberRequest builds the per-member tool-layer request from the overrides.
+// Every member is denied agent_swarm: nested swarms are out of scope, so the
+// tool is neither offered to nor callable from a member run.
 func (r SwarmRequest) memberRequest(prompt string) tools.SubagentRequest {
 	return tools.SubagentRequest{
 		Prompt:               prompt,
@@ -259,6 +261,7 @@ func (r SwarmRequest) memberRequest(prompt string) tools.SubagentRequest {
 		MaxSteps:             r.MaxSteps,
 		MaxCostUSD:           r.MaxCostUSD,
 		AllowedTools:         append([]string(nil), r.AllowedTools...),
+		DeniedTools:          []string{tools.AgentSwarmToolName},
 		ProfileName:          r.ProfileName,
 		ReasoningEffort:      r.ReasoningEffort,
 		IsolationMode:        r.IsolationMode,

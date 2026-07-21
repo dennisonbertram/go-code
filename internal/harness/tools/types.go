@@ -299,6 +299,9 @@ type SubagentRequest struct {
 	// ResultMode controls how subagent output is formatted.
 	// Empty means inherit from defaults.
 	ResultMode string
+	// DeniedTools lists tool names the subagent must never be offered or
+	// allowed to call (e.g. swarm members never receive agent_swarm).
+	DeniedTools []string
 }
 
 // SubagentResult is a tool-layer subagent result, mirroring subagents.Subagent
