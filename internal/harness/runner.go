@@ -4182,6 +4182,21 @@ func (r *Runner) ConversationMessages(conversationID string) ([]Message, bool) {
 	return nil, false
 }
 
+// DropConversationCache evicts conversationID from the in-memory conversation
+// mirror so the next ConversationMessages call falls back to the persistent
+// store. It is used after external truncations that mutate the store behind
+// the runner's back (e.g. POST /v1/conversations/{id}/undo, issue #805);
+// without it the mirror keeps serving the stale pre-truncation history.
+// Ownership records are deliberately kept so cross-tenant validation still
+// works for the conversation. A no-op when the conversation is not cached;
+// safe for active runs because run state lives in r.runs, not the mirror.
+func (r *Runner) DropConversationCache(conversationID string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.conversations, conversationID)
+	delete(r.conversationTouched, conversationID)
+}
+
 // GetConversationStore returns the configured conversation store, or nil.
 func (r *Runner) GetConversationStore() ConversationStore {
 	rc := r.snapshotConfig()

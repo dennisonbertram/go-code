@@ -334,3 +334,78 @@ func (s *memoryConversationStore) ForkConversation(_ context.Context, srcID, new
 	out := *fork
 	return &out, nil
 }
+
+// TestRunner_DropConversationCacheFallsBackToStore (epic #805 slice 3 bug
+// regression): after an external truncation of the persistent store (what
+// POST /v1/conversations/{id}/undo does), the in-memory conversation mirror
+// keeps serving the stale pre-undo history until the cache entry is dropped.
+// DropConversationCache must force the next ConversationMessages call to fall
+// back to the truncated store.
+func TestRunner_DropConversationCacheFallsBackToStore(t *testing.T) {
+	t.Parallel()
+
+	store := newTestConversationStore(t) // real SQLite so UndoPrompts truncates
+	runner := NewRunner(staticContentProvider{content: "done"}, NewRegistry(), RunnerConfig{
+		DefaultModel:      "test-model",
+		MaxSteps:          1,
+		ConversationStore: store,
+		Store:             runstore.NewMemoryStore(),
+	})
+
+	for _, prompt := range []string{"first-prompt", "second-prompt"} {
+		run, err := runner.StartRun(RunRequest{Prompt: prompt, ConversationID: "conv-drop"})
+		if err != nil {
+			t.Fatalf("start run %q: %v", prompt, err)
+		}
+		if _, err := collectRunEvents(t, runner, run.ID); err != nil {
+			t.Fatalf("collect run %q events: %v", prompt, err)
+		}
+	}
+
+	// Wait for the terminal persistence to land in the store (the mirror is
+	// written first; the store write trails it in the same cleanup path).
+	// Each run also injects an is_meta "1 step remaining" nudge (MaxSteps: 1),
+	// so two runs persist 6 messages.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if msgs, err := store.LoadMessages(context.Background(), "conv-drop"); err == nil && len(msgs) == 6 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for store persistence")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Sanity: the mirror serves all 6 messages.
+	if msgs, ok := runner.ConversationMessages("conv-drop"); !ok || len(msgs) != 6 {
+		t.Fatalf("pre-undo mirror: got %d messages (ok=%v), want 6", len(msgs), ok)
+	}
+
+	// External truncation behind the runner's back (what /undo does).
+	if _, err := store.UndoPrompts(context.Background(), "conv-drop", 1); err != nil {
+		t.Fatalf("UndoPrompts: %v", err)
+	}
+
+	// The mirror is stale until the cache entry is dropped.
+	if msgs, _ := runner.ConversationMessages("conv-drop"); len(msgs) != 6 {
+		t.Fatalf("expected stale mirror of 6 messages before drop, got %d", len(msgs))
+	}
+
+	runner.DropConversationCache("conv-drop")
+
+	// Now the view falls back to the truncated store: kept run + is_meta marker.
+	msgs, ok := runner.ConversationMessages("conv-drop")
+	if !ok {
+		t.Fatal("ConversationMessages after drop: not found")
+	}
+	if len(msgs) != 4 {
+		t.Fatalf("post-drop messages: got %d, want 4 (kept run + marker): %+v", len(msgs), msgs)
+	}
+	if msgs[0].Content != "first-prompt" {
+		t.Errorf("msgs[0].Content: got %q, want %q", msgs[0].Content, "first-prompt")
+	}
+	if !msgs[3].IsMeta {
+		t.Errorf("msgs[3]: expected the is_meta undo-boundary marker, got %+v", msgs[3])
+	}
+}

@@ -140,6 +140,12 @@ func harnessAuthCases() []harnessAuthCase {
 			},
 		},
 		{
+			name: "undoConversationCmd",
+			call: func(ts *httptest.Server, apiKey string) any {
+				return undoConversationCmd(ts.URL, "conv-1", 1, apiKey)()
+			},
+		},
+		{
 			name: "fetchAskUserPendingCmd",
 			call: func(ts *httptest.Server, apiKey string) any {
 				return fetchAskUserPendingCmd(ts.URL, "run-1", apiKey)()

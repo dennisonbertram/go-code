@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"go-agent-harness/internal/harness"
 )
@@ -376,5 +377,70 @@ func TestUndoConversationEndpoint_NoStore(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusNotImplemented {
 		t.Errorf("expected 501, got %d", res.StatusCode)
+	}
+}
+
+// TestUndoConversationEndpoint_RefreshesInMemoryMirror (epic #805 slice 3 bug
+// regression): GET /v1/conversations/{id}/messages prefers the runner's
+// in-memory conversation mirror over the store. Without reconciliation, a
+// successful undo leaves GET messages serving the stale pre-undo history, so
+// the TUI's refetch would rebuild the viewport with messages that were just
+// removed. The undo route must evict the mirror entry for the conversation.
+func TestUndoConversationEndpoint_RefreshesInMemoryMirror(t *testing.T) {
+	t.Parallel()
+
+	store := newTestSQLiteStore(t)
+	runner := harness.NewRunner(
+		&staticProvider{result: harness.CompletionResult{Content: "ok"}},
+		harness.NewRegistry(),
+		harness.RunnerConfig{ConversationStore: store, MaxSteps: 1},
+	)
+	ts := httptest.NewServer(New(runner))
+	defer ts.Close()
+
+	// Two real runs populate the runner's in-memory conversation mirror.
+	completeRun(t, runner, "conv-mirror", "mirror-first-prompt", 2)
+	completeRun(t, runner, "conv-mirror", "mirror-second-prompt", 4)
+
+	// Wait for the store write to trail the mirror write. Each run also
+	// injects an is_meta "1 step remaining" nudge (MaxSteps: 1), so two runs
+	// persist 6 messages: u1, nudge, a1, u2, nudge, a2.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if msgs, err := store.LoadMessages(context.Background(), "conv-mirror"); err == nil && len(msgs) == 6 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for store persistence")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	// Sanity: GET messages serves all 6 from the mirror.
+	if got := getConversationMessages(t, ts.URL, "conv-mirror"); len(got) != 6 {
+		t.Fatalf("pre-undo GET messages: got %d, want 6", len(got))
+	}
+
+	res, err := http.Post(ts.URL+"/v1/conversations/conv-mirror/undo", "application/json", bytes.NewBufferString(`{"count":1}`))
+	if err != nil {
+		t.Fatalf("POST undo: %v", err)
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(res.Body)
+		t.Fatalf("expected 200, got %d: %s", res.StatusCode, b)
+	}
+
+	// GET messages must serve the truncated history, not the stale mirror:
+	// u1, nudge, a1, undo-boundary marker.
+	got := getConversationMessages(t, ts.URL, "conv-mirror")
+	if len(got) != 4 {
+		t.Fatalf("post-undo GET messages: got %d, want 4 (kept run + marker): %+v", len(got), got)
+	}
+	if got[0].Content != "mirror-first-prompt" {
+		t.Errorf("got[0].Content: got %q, want %q", got[0].Content, "mirror-first-prompt")
+	}
+	if !got[3].IsMeta {
+		t.Errorf("got[3]: expected the is_meta undo-boundary marker, got %+v", got[3])
 	}
 }
