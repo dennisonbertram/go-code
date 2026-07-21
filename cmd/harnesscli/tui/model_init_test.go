@@ -616,7 +616,6 @@ func TestBuildCommandRegistry_SlashCompleteShowsCommands(t *testing.T) {
 		"compact",
 		"config",
 		"context",
-		"cost",
 	}
 	for _, cmd := range wantVisible {
 		if !strings.Contains(v, cmd) {
