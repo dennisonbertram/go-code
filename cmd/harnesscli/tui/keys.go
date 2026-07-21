@@ -129,7 +129,7 @@ func DefaultKeyMap() KeyMap {
 		),
 		ExpandTool: key.NewBinding(
 			key.WithKeys("ctrl+o"),
-			key.WithHelp("ctrl+o", "expand tool"),
+			key.WithHelp("ctrl+o", "expand tool / compaction"),
 		),
 	}
 }

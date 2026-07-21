@@ -4,7 +4,8 @@ Parent epic: #817 (`/compact [instruction]` + visible compaction summary), part 
 
 - Slice 1 (`feat(harness): accept a preserve-instruction in CompactRun and the compact endpoint`): **implemented**, merged via PR #836.
 - Slice 2 (`feat(harness): return the compaction summary from the compact endpoint`): **implemented**, merged via PR #860.
-- Slice 3 (`feat(harnesscli): /compact [instruction] slash command`): **in implementation** (branch `epic/817-compact-cmd-s3`).
+- Slice 3 (`feat(harnesscli): /compact [instruction] slash command`): **implemented**, merged via PR #884.
+- Slice 4 (`feat(tui): compaction summary block in the transcript with ctrl+o toggle`): **in implementation** (branch `epic/817-compact-cmd-s4`).
 
 ## Slice 1 (done)
 
@@ -138,3 +139,38 @@ Parent epic: #817 (`/compact [instruction]` + visible compaction summary), part 
 - [ ] gofmt + go vet clean.
 - [ ] `go test ./cmd/harnesscli/... -count=1` green.
 - [ ] Commit, push `epic/817-compact-cmd-s3`, open PR (no merge).
+
+---
+
+## Slice 4 (in implementation): compaction summary block in the transcript with ctrl+o toggle
+
+### Context
+
+- Problem: compactions are invisible — slice 3's `/compact` shows only a transient status line, and `auto_compact.*` SSE events are unhandled in the TUI dispatch.
+- Constraints: ctrl+o is already dual-purpose (active-tool expansion, then idle plan-mode toggle at `model.go` `keys.ExpandTool`); the compaction toggle must slot between them, never rebind. Block rendering reuses the tool-card in-place update pattern (tracked line offsets + `ReplaceLineRange` + start shifting), not the tooluse component itself (it is tool-call-specific).
+
+### Scope
+
+- In scope:
+  - `cmd/harnesscli/tui/compaction_block.go` (new): `compactionBlock` (title/details/expanded/lineStart/lineCount), collapsed `▸` / expanded `▾` + `⎿` detail rendering with width-wrapped details, model helpers `addCompactionBlock` / `findCompactionBlock` / `updateCompactionBlock` (shifts `toolLineStarts` and later blocks on line-count delta) / `toggleLatestCompactionBlock` / `clearCompactionBlocks`.
+  - `model.go`: `CompactResultMsg` success renders a collapsed block (`Compacted context — N messages removed`, details = mode + summary); SSE dispatch handles `auto_compact.started` (in-progress block, remembered via `pendingAutoCompactID`) and `auto_compact.completed` (updates the pending block in place, or appends when missed; error payload renders a failure title); ctrl+o chain gains the block toggle between active-tool and plan-mode; `clearCompactionBlocks()` called at every viewport rebuild (`resetTranscriptView`, `ClearMsg`, `executeNewSessionCommand`, `SessionPickerSelectedMsg`); help entries updated.
+  - `keys.go`: ExpandTool help text mentions compaction.
+- Out of scope: persisting blocks to the store / resumed sessions; toggling older (non-latest) blocks; changing auto-compact behavior itself.
+
+### Test Plan (TDD)
+
+- New failing tests first (`cmd/harnesscli/tui/compaction_block_test.go`):
+  - manual result renders collapsed block (title visible, summary hidden, slice-3 status line preserved).
+  - ctrl+o expands then collapses; with a block present ctrl+o does NOT toggle plan mode.
+  - auto_compact started→completed renders one block updated in place with before/after tokens; completed-without-started appends.
+  - precedence regression: active tool + block → ctrl+o expands the tool, block stays collapsed.
+  - plan-mode idle toggle regression: covered by existing `planmode_test.go` (unmodified, must stay green).
+- Regression: `go test ./cmd/harnesscli/... -count=1`.
+
+### Implementation Checklist
+
+- [x] Write failing tests first (watched red: `m.compactionBlocks undefined`).
+- [x] Implement minimal code changes.
+- [ ] gofmt + go vet clean.
+- [ ] `go test ./cmd/harnesscli/... -count=1` green.
+- [ ] Commit, push `epic/817-compact-cmd-s4`, open PR (no merge).
