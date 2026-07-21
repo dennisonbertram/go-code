@@ -79,13 +79,16 @@ func AutoInvokeHook(registry *Registry) func(lastUserMessage string) *SkillActiv
 	}
 }
 
-// buildVars creates the variable map for skill body interpolation.
-// Positional variables are 0-based: $0 is the first argument token.
-func buildVars(skill *Skill, args, workspace string) map[string]string {
+// BuildTemplateVars creates the variable map for prompt-template expansion,
+// shared by skill invocation and bundle markdown commands. Positional
+// variables are 0-based: $0 is the first argument token (SplitArgs
+// tokenization). Named arguments are bound to tokens in declaration order;
+// names with no corresponding token expand empty.
+func BuildTemplateVars(namedArgs []string, args, workspace, dir string) map[string]string {
 	vars := map[string]string{
 		"$ARGUMENTS": args,
 		"$WORKSPACE": workspace,
-		"$SKILL_DIR": filepath.Dir(skill.FilePath),
+		"$SKILL_DIR": dir,
 	}
 	fields, err := SplitArgs(args)
 	if err != nil {
@@ -97,9 +100,8 @@ func buildVars(skill *Skill, args, workspace string) map[string]string {
 	for i, field := range fields {
 		vars[fmt.Sprintf("$%d", i)] = field
 	}
-	// Bind named arguments declared in frontmatter to tokens in declaration
-	// order. Names with no corresponding token expand empty.
-	for i, name := range skill.Arguments {
+	// Bind named arguments to tokens in declaration order.
+	for i, name := range namedArgs {
 		if i < len(fields) {
 			vars["$"+name] = fields[i]
 		} else {
@@ -109,6 +111,26 @@ func buildVars(skill *Skill, args, workspace string) map[string]string {
 	return vars
 }
 
+// ExpandTemplate interpolates a prompt-template body with the shared
+// expansion contract used by every invocation path (AutoInvokeHook,
+// Resolver.ResolveSkill, and bundle markdown commands): when the body
+// references no argument placeholder ($ARGUMENTS, $N, or a declared named
+// argument) and the raw args are non-empty, the raw args are appended
+// verbatim as a trailing "ARGUMENTS: <args>" line instead of being dropped.
+func ExpandTemplate(body string, namedArgs []string, args, workspace, dir string) string {
+	content := Interpolate(body, BuildTemplateVars(namedArgs, args, workspace, dir))
+	if args != "" && !HasArgPlaceholder(body, namedArgs) {
+		content += "\nARGUMENTS: " + args
+	}
+	return content
+}
+
+// buildVars creates the variable map for skill body interpolation.
+// Positional variables are 0-based: $0 is the first argument token.
+func buildVars(skill *Skill, args, workspace string) map[string]string {
+	return BuildTemplateVars(skill.Arguments, args, workspace, filepath.Dir(skill.FilePath))
+}
+
 // expandBody interpolates the skill body with the given arguments and
 // workspace, applying the shared expansion contract used by every invocation
 // path (AutoInvokeHook and Resolver.ResolveSkill): when the body references
@@ -116,10 +138,5 @@ func buildVars(skill *Skill, args, workspace string) map[string]string {
 // the raw args are non-empty, the raw args are appended verbatim as a
 // trailing "ARGUMENTS: <args>" line instead of being dropped.
 func expandBody(skill *Skill, args, workspace string) string {
-	vars := buildVars(skill, args, workspace)
-	content := Interpolate(skill.Body, vars)
-	if args != "" && !hasArgPlaceholder(skill) {
-		content += "\nARGUMENTS: " + args
-	}
-	return content
+	return ExpandTemplate(skill.Body, skill.Arguments, args, workspace, filepath.Dir(skill.FilePath))
 }

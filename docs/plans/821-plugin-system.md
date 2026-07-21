@@ -171,3 +171,54 @@
 
 - Risk: zip-slip via crafted prefixes (e.g. all entries under `../`).
 - Mitigation: every original entry name is validated (no `..` element, not absolute, no backslash) BEFORE the shared-prefix is computed and stripped; symlink entries rejected pre-extraction; pinned by tests.
+
+---
+
+# Plan: Epic #821 Slice 4 — markdown command files as namespaced slash commands with $ARGUMENTS
+
+## Context
+
+- Problem: A bundle's `commands/` dir only loads legacy JSON `PluginDef` files; kimi-code's markdown command files with frontmatter and `$ARGUMENTS` expansion are unsupported.
+- User impact: Bundle authors cannot write markdown slash commands.
+- Constraints: Reuse epic #813's merged argument expansion in `internal/skills` (SplitArgs tokenizer, $0..$n, named args, `ARGUMENTS:` fallback) — do not re-implement. JSON `PluginDef` files keep working unchanged. Trusted bundles only (existing gating). Strict TDD.
+
+## Scope
+
+- In scope:
+  - `internal/skills`: export the shared expansion engine — `BuildTemplateVars(namedArgs, args, workspace, dir)` + `ExpandTemplate(body, namedArgs, args, workspace, dir)` + `HasArgPlaceholder(body, namedArgs)` — with existing `buildVars`/`expandBody`/`hasArgPlaceholder` delegating (behavior unchanged, covered by existing tests).
+  - `cmd/harnesscli/tui/plugin`: `MarkdownCommand` + `LoadMarkdownCommands(dir)` parsing `*.md` files with strict YAML frontmatter (`name`, `description`; unknown fields rejected); body is the prompt template.
+  - `cmd/harnesscli/tui/plugin_loader.go`: `LoadAndRegisterBundleCommands(registry, sources...)` — registers each markdown command as a slash command whose expanded body is SUBMITTED as a prompt (unlike legacy JSON prompt plugins, which display output); collision rule: plain name if free, else `<bundle>:<name>`, else skip — namespacing and skips logged via the warnings slice.
+  - `cmd/harnesscli/tui/installable_plugins.go`: `installablePluginCommandSources()` returning `{BundleName, Dir}` per trusted bundle (TrustedBundles gating unchanged); model wiring registers JSON defs (unchanged path) plus markdown commands.
+  - Docs: design doc commands section, engineering log, this plan.
+- Out of scope: `/plugins` TUI manager + reload (slice 5), e2e (slice 6), `arguments` frontmatter for commands (spec is name+description only; the shared engine supports named args, and the loader passes none).
+
+## Test Plan (TDD)
+
+- New failing tests first:
+  - `internal/skills`: `ExpandTemplate` covers $ARGUMENTS/$0..$n/$WORKSPACE/$SKILL_DIR expansion, SplitArgs quote handling, unknown `$HOME` left literal, and the `ARGUMENTS:` fallback; existing skill tests pin the delegation.
+  - `tui/plugin`: frontmatter parse/validation (missing name/description, invalid name, empty body, unknown field, missing delimiters); `LoadMarkdownCommands` skips non-`.md`, collects per-file errors, missing dir is not an error.
+  - `tui`: registration + expansion matches skills semantics (quoted tokens, raw `$ARGUMENTS`); collision → `<bundle>:<name>` + warning, double collision → skip + warning; JSON defs unaffected; `installablePluginCommandSources` returns nothing for untrusted bundles; model-level: `/greet hello world` via `inputarea.CommandSubmittedMsg` POSTs the expanded prompt to `/v1/runs` (acceptance).
+- Existing tests to update: none (wiring is additive).
+
+## Cross-Surface Impact Map
+
+- None. TUI command registration + a thin exported wrapper over the existing skills expansion.
+
+## Implementation Checklist
+
+- [x] Write failing tests first; watch them fail (`ExpandTemplate`/`MarkdownCommand`/`LoadAndRegisterBundleCommands` undefined).
+- [x] Export skills expansion engine; delegate existing internals.
+- [x] Implement markdown loader, registration, namespacing, submission.
+- [x] Update design doc, plan, engineering log.
+- [x] `go test ./cmd/harnesscli/... ./internal/plugins/... ./internal/skills/... -count=1` green; gofmt + go vet clean. **Green (32 packages ok).**
+- [x] Push `epic/821-plugin-system-s4`, open PR (no merge).
+
+## Slice 4 Verification Results
+
+- `GOCACHE=/tmp/go-build go test ./cmd/harnesscli/... ./internal/plugins/... ./internal/skills/... -count=1` — PASS, all 32 packages `ok` (incl. existing skills hook/resolver tests pinning the delegation, and the JSON plugin registration tests).
+- `gofmt -l` on changed Go files — clean; `go vet` on touched packages — clean.
+
+## Risks and Mitigations
+
+- Risk: divergence between skill and command expansion semantics.
+- Mitigation: one engine (`ExpandTemplate`) serves both; skills' own tests pin the delegation, command tests assert identical outcomes.

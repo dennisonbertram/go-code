@@ -465,7 +465,16 @@ func New(cfg TUIConfig) Model {
 	if m.pluginsDir == "" {
 		m.pluginsDir = defaultPluginsDir()
 	}
-	m.pluginWarnings = LoadAndRegisterPlugins(m.commandRegistry, append([]string{m.pluginsDir}, installablePluginCommandDirs()...)...)
+	commandSources := installablePluginCommandSources()
+	jsonDirs := make([]string, 0, len(commandSources)+1)
+	jsonDirs = append(jsonDirs, m.pluginsDir)
+	for _, source := range commandSources {
+		jsonDirs = append(jsonDirs, source.Dir)
+	}
+	m.pluginWarnings = LoadAndRegisterPlugins(m.commandRegistry, jsonDirs...)
+	// Markdown command files from trusted bundles register as slash commands
+	// whose expanded bodies are submitted as prompts (epic #821 slice 4).
+	m.pluginWarnings = append(m.pluginWarnings, LoadAndRegisterBundleCommands(m.commandRegistry, commandSources...)...)
 	if warning := legacyPluginsDirWarning(m.pluginsDir); warning != "" {
 		m.pluginWarnings = append(m.pluginWarnings, warning)
 	}

@@ -1,6 +1,6 @@
 # Installable Plugin Bundles
 
-Status: implemented (Epic #748). Manifest v1 authoring contract and plugin-home decision published under Epic #821 (slice 1); trust grant/revoke CLI and install-time confirmation (slice 2) and zip/GitHub-archive install sources (slice 3) implemented. Items marked **planned** are later slices of Epic #821 and are not implemented yet.
+Status: implemented (Epic #748). Manifest v1 authoring contract and plugin-home decision published under Epic #821 (slice 1); trust grant/revoke CLI and install-time confirmation (slice 2), zip/GitHub-archive install sources (slice 3), and markdown command files with `$ARGUMENTS` (slice 4) implemented. Items marked **planned** are later slices of Epic #821 and are not implemented yet.
 
 An installable bundle is a directory with a `plugin.json` manifest declaring optional `skills`, `commands`, `agents`, `hooks`, and `mcp` components. Bundles are installed from a local directory, git URL, or GitHub shorthand, validated without executing their content, and atomically promoted into a versioned plugin home. This document is the stable v1 authoring contract for that manifest and the lifecycle around it.
 
@@ -34,7 +34,7 @@ The manifest is a single JSON object at the bundle root. Unknown fields are reje
 | `version` | string | yes | Safe path segment: `^[A-Za-z0-9][A-Za-z0-9._+-]*$`, never `.`, `..`, or absolute. Becomes the versioned install directory name. |
 | `description` | string | no | Free text shown in listings. |
 | `skills` | string | no | Relative path to a **directory** of skills (`SKILL.md` trees), loaded by the standard skills loader. |
-| `commands` | string | no | Relative path to a **directory** of slash-command definitions. Today each `*.json` file uses the legacy `PluginDef` schema (`name`, `description`, `handler` = `bash`/`prompt`, `command` or `prompt_template`). Markdown command files with `$ARGUMENTS` are **planned** (Epic #821, slice 4). |
+| `commands` | string | no | Relative path to a **directory** of slash-command definitions. `*.json` files use the legacy `PluginDef` schema (`name`, `description`, `handler` = `bash`/`prompt`, `command` or `prompt_template`). `*.md` files are markdown commands (see below). Both kinds coexist. |
 | `agents` | string | no | Relative path to a **directory** of agent TOML profiles, searched when resolving `--profile`. |
 | `hooks` | string | no | Relative path to a hook **file** (`*.json`, config-driven hooks schema: `event`, `kind` = `command`/`http`, `command`/`url`, optional `matcher`, `timeout_seconds`; see `docs/design/plugins.md`). Every `*.json` file in the declared file's directory is loaded. |
 | `mcp` | string | no | Relative path to an MCP servers **file**: a JSON array of `{name, transport, command, args, url}` entries (`transport` = `stdio` or `http`; `command`/`args` for stdio, `url` for http), validated by the same parser as `HARNESS_MCP_SERVERS`. |
@@ -74,6 +74,24 @@ release-helper/
 │   └── hooks.json            # config-driven hook definition(s)
 └── mcp.json                  # [{"name":"gh","transport":"stdio","command":"gh-mcp","args":["serve"]}]
 ```
+
+### Markdown command files (`commands/<name>.md`)
+
+A `*.md` file in the `commands` directory declares a slash command with a YAML frontmatter block and a prompt-template body:
+
+```markdown
+---
+name: greet
+description: Greet someone
+---
+Say hello to $0. Everyone: $ARGUMENTS
+```
+
+- Frontmatter fields are exactly `name` (`^[a-z][a-z0-9-]*$`) and `description`; both are required and unknown fields are rejected (same discipline as `plugin.json`). The body must be non-empty.
+- At invocation the body expands with the shared `internal/skills` argument contract: `$ARGUMENTS` is the raw argument text as typed, `$0..$n` are quote-aware `SplitArgs` tokens, `$WORKSPACE` is the session workspace, `$SKILL_DIR` is the command file's directory, and unknown `$VARS` stay literal. When the body references no placeholder and arguments were given, they are appended verbatim as a trailing `ARGUMENTS: <args>` line.
+- The expanded body is **submitted as a prompt** (unlike legacy JSON `prompt` plugins, which display their output in the viewport).
+- Registration needs an enabled **and trusted** bundle, same as JSON command defs. A name colliding with an existing command (built-in or another plugin's) is registered as `<bundle>:<name>`; if that is taken too, the command is skipped. Namespacings and skips are logged via the plugin warnings slice.
+- `/help` and slash completion pick registered markdown commands up automatically.
 
 ## 3. Install layout and lifecycle
 

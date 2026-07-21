@@ -57,19 +57,18 @@ func Interpolate(body string, vars map[string]string) string {
 	return result
 }
 
-// hasArgPlaceholder reports whether a skill body references any argument
-// placeholder: $ARGUMENTS, a positional $N, or a named argument declared in
-// the skill's frontmatter arguments field.
-func hasArgPlaceholder(skill *Skill) bool {
-	body := skill.Body
+// HasArgPlaceholder reports whether a prompt-template body references any
+// argument placeholder: $ARGUMENTS, a positional $N, or a named argument in
+// namedArgs.
+func HasArgPlaceholder(body string, namedArgs []string) bool {
 	if strings.Contains(body, "$ARGUMENTS") || positionalVarPattern.MatchString(body) {
 		return true
 	}
-	if len(skill.Arguments) == 0 {
+	if len(namedArgs) == 0 {
 		return false
 	}
-	declared := make(map[string]bool, len(skill.Arguments))
-	for _, name := range skill.Arguments {
+	declared := make(map[string]bool, len(namedArgs))
+	for _, name := range namedArgs {
 		declared["$"+name] = true
 	}
 	for _, ref := range namedVarPattern.FindAllString(body, -1) {
@@ -78,4 +77,11 @@ func hasArgPlaceholder(skill *Skill) bool {
 		}
 	}
 	return false
+}
+
+// hasArgPlaceholder reports whether a skill body references any argument
+// placeholder: $ARGUMENTS, a positional $N, or a named argument declared in
+// the skill's frontmatter arguments field.
+func hasArgPlaceholder(skill *Skill) bool {
+	return HasArgPlaceholder(skill.Body, skill.Arguments)
 }
