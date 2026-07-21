@@ -14,6 +14,15 @@ var (
 	ErrNoPendingApproval = errors.New("no pending approval")
 )
 
+// PlanApproachOption is one labeled approach the agent offered in its plan's
+// trailing "## Approaches" section. IDs are assigned positionally ("a", "b",
+// "c"); 1-3 options are allowed, anything else is treated as no options.
+type PlanApproachOption struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+}
+
 // ApprovalRequest holds the details of a tool call awaiting operator approval.
 type ApprovalRequest struct {
 	RunID   string
@@ -21,16 +30,20 @@ type ApprovalRequest struct {
 	Tool    string
 	Args    string
 	Timeout time.Duration
+	// Options lists the approach options presented for a plan-exit approval
+	// (Tool == "plan_exit"). Empty for ordinary tool approvals.
+	Options []PlanApproachOption
 }
 
 // PendingApproval is the read-only view of a pending approval entry.
 // Returned by InMemoryApprovalBroker.Pending().
 type PendingApproval struct {
-	RunID      string    `json:"run_id"`
-	CallID     string    `json:"call_id"`
-	Tool       string    `json:"tool"`
-	Args       string    `json:"args"`
-	DeadlineAt time.Time `json:"deadline_at"`
+	RunID      string               `json:"run_id"`
+	CallID     string               `json:"call_id"`
+	Tool       string               `json:"tool"`
+	Args       string               `json:"args"`
+	DeadlineAt time.Time            `json:"deadline_at"`
+	Options    []PlanApproachOption `json:"options,omitempty"`
 }
 
 // ApprovalTimeoutError is returned by InMemoryApprovalBroker.Ask when the
@@ -54,7 +67,8 @@ func IsApprovalTimeout(err error) bool {
 
 // approvalDecision is the outcome sent over the internal channel.
 type approvalDecision struct {
-	approved bool // true = approve, false = deny
+	approved bool   // true = approve, false = deny
+	option   string // selected plan approach option ID, "" for a plain approve/deny
 }
 
 type pendingApprovalEntry struct {
@@ -66,13 +80,17 @@ type pendingApprovalEntry struct {
 // operator approval.
 //
 // Ask() is called by the runner's execute() loop to pause a tool call pending
-// approval. It blocks until Approve(), Deny(), context cancellation, or timeout.
-// Approve() and Deny() are called by HTTP handlers for
-// POST /v1/runs/{id}/approve and POST /v1/runs/{id}/deny.
+// approval. It blocks until Approve(), ApproveWithOption(), Deny(), context
+// cancellation, or timeout. The returned option ID is the operator's selected
+// plan approach option ("" when none was offered or chosen). Approve() and
+// Deny() are called by HTTP handlers for POST /v1/runs/{id}/approve and
+// POST /v1/runs/{id}/deny; ApproveWithOption is used when the operator picked
+// one of the presented plan approach options.
 type ApprovalBroker interface {
-	Ask(ctx context.Context, req ApprovalRequest) (approved bool, err error)
+	Ask(ctx context.Context, req ApprovalRequest) (approved bool, selectedOption string, err error)
 	Pending(runID string) (PendingApproval, bool)
 	Approve(runID string) error
+	ApproveWithOption(runID, option string) error
 	Deny(runID string) error
 }
 
@@ -91,10 +109,12 @@ func NewInMemoryApprovalBroker() *InMemoryApprovalBroker {
 }
 
 // Ask registers a pending approval for the given run and blocks until an
-// operator calls Approve() or Deny(), the context is cancelled, or the timeout
-// elapses. Returns (true, nil) on approval, (false, nil) on denial, and
-// (false, err) on timeout or context cancellation.
-func (b *InMemoryApprovalBroker) Ask(ctx context.Context, req ApprovalRequest) (bool, error) {
+// operator calls Approve(), ApproveWithOption(), or Deny(), the context is
+// cancelled, or the timeout elapses. Returns (true, option, nil) on approval —
+// option is the ID of the operator's selected plan approach option, or "" for
+// a plain approve — (false, "", nil) on denial, and (false, "", err) on
+// timeout or context cancellation.
+func (b *InMemoryApprovalBroker) Ask(ctx context.Context, req ApprovalRequest) (bool, string, error) {
 	if req.Timeout <= 0 {
 		req.Timeout = 5 * time.Minute
 	}
@@ -107,6 +127,7 @@ func (b *InMemoryApprovalBroker) Ask(ctx context.Context, req ApprovalRequest) (
 			Tool:       req.Tool,
 			Args:       req.Args,
 			DeadlineAt: deadlineAt,
+			Options:    req.Options,
 		},
 		decisionCh: make(chan approvalDecision, 1),
 	}
@@ -114,7 +135,7 @@ func (b *InMemoryApprovalBroker) Ask(ctx context.Context, req ApprovalRequest) (
 	b.mu.Lock()
 	if _, exists := b.pending[req.RunID]; exists {
 		b.mu.Unlock()
-		return false, fmt.Errorf("pending approval already exists for run %q", req.RunID)
+		return false, "", fmt.Errorf("pending approval already exists for run %q", req.RunID)
 	}
 	b.pending[req.RunID] = entry
 	b.mu.Unlock()
@@ -124,17 +145,17 @@ func (b *InMemoryApprovalBroker) Ask(ctx context.Context, req ApprovalRequest) (
 
 	select {
 	case decision := <-entry.decisionCh:
-		return decision.approved, nil
+		return decision.approved, decision.option, nil
 	case <-timer.C:
 		b.clearPendingIfMatch(req.RunID, entry)
-		return false, &ApprovalTimeoutError{
+		return false, "", &ApprovalTimeoutError{
 			RunID:      req.RunID,
 			CallID:     req.CallID,
 			DeadlineAt: deadlineAt,
 		}
 	case <-ctx.Done():
 		b.clearPendingIfMatch(req.RunID, entry)
-		return false, ctx.Err()
+		return false, "", ctx.Err()
 	}
 }
 
@@ -149,19 +170,26 @@ func (b *InMemoryApprovalBroker) Pending(runID string) (PendingApproval, bool) {
 	return entry.pending, true
 }
 
-// Approve resolves the pending approval for runID as approved.
-// Returns ErrNoPendingApproval if no approval is pending for that run.
+// Approve resolves the pending approval for runID as approved with no selected
+// option. Returns ErrNoPendingApproval if no approval is pending for that run.
 func (b *InMemoryApprovalBroker) Approve(runID string) error {
-	return b.resolve(runID, true)
+	return b.resolve(runID, true, "")
+}
+
+// ApproveWithOption resolves the pending approval for runID as approved and
+// records the operator's selected plan approach option ID.
+// Returns ErrNoPendingApproval if no approval is pending for that run.
+func (b *InMemoryApprovalBroker) ApproveWithOption(runID, option string) error {
+	return b.resolve(runID, true, option)
 }
 
 // Deny resolves the pending approval for runID as denied.
 // Returns ErrNoPendingApproval if no approval is pending for that run.
 func (b *InMemoryApprovalBroker) Deny(runID string) error {
-	return b.resolve(runID, false)
+	return b.resolve(runID, false, "")
 }
 
-func (b *InMemoryApprovalBroker) resolve(runID string, approved bool) error {
+func (b *InMemoryApprovalBroker) resolve(runID string, approved bool, option string) error {
 	b.mu.Lock()
 	entry, ok := b.pending[runID]
 	if !ok {
@@ -171,7 +199,7 @@ func (b *InMemoryApprovalBroker) resolve(runID string, approved bool) error {
 	delete(b.pending, runID)
 	b.mu.Unlock()
 
-	entry.decisionCh <- approvalDecision{approved: approved}
+	entry.decisionCh <- approvalDecision{approved: approved, option: option}
 	return nil
 }
 

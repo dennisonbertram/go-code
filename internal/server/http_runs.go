@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -496,6 +497,9 @@ func (s *Server) handleCancelRun(w http.ResponseWriter, r *http.Request, runID s
 
 // handleApproveRun handles POST /v1/runs/{id}/approve.
 // Approves the pending tool call for the given run, allowing it to execute.
+// The optional JSON body {"option": "<id>"} records the operator's selected
+// plan approach option for plan-exit approvals; an absent or unknown option
+// ID falls back to a plain approve.
 // Returns 404 when no pending approval exists for the run.
 func (s *Server) handleApproveRun(w http.ResponseWriter, r *http.Request, runID string) {
 	if r.Method != http.MethodPost {
@@ -506,12 +510,43 @@ func (s *Server) handleApproveRun(w http.ResponseWriter, r *http.Request, runID 
 		writeError(w, http.StatusNotImplemented, "not_implemented", "approval broker is not configured")
 		return
 	}
-	if err := s.approvalBroker.Approve(runID); err != nil {
-		if errors.Is(err, harness.ErrNoPendingApproval) {
+	var body struct {
+		Option string `json:"option"`
+	}
+	if r.Body != nil {
+		// An empty body is a plain approve; a malformed body is a client error.
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+			writeError(w, http.StatusBadRequest, "bad_request", fmt.Sprintf("invalid approve body: %v", err))
+			return
+		}
+	}
+	approveErr := error(nil)
+	if option := strings.TrimSpace(body.Option); option != "" {
+		// Validate the requested option against the pending approval's options;
+		// an unknown ID falls back to a plain approve.
+		valid := false
+		if pending, ok := s.approvalBroker.Pending(runID); ok {
+			for _, opt := range pending.Options {
+				if opt.ID == option {
+					valid = true
+					break
+				}
+			}
+		}
+		if valid {
+			approveErr = s.approvalBroker.ApproveWithOption(runID, option)
+		} else {
+			approveErr = s.approvalBroker.Approve(runID)
+		}
+	} else {
+		approveErr = s.approvalBroker.Approve(runID)
+	}
+	if approveErr != nil {
+		if errors.Is(approveErr, harness.ErrNoPendingApproval) {
 			writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("no pending approval for run %q", runID))
 			return
 		}
-		writeError(w, http.StatusInternalServerError, "approve_failed", err.Error())
+		writeError(w, http.StatusInternalServerError, "approve_failed", approveErr.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"status": "approved"})

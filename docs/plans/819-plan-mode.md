@@ -1,6 +1,54 @@
 # Plan: pin plan-mode exit semantics across approval modes (epic #819, slice 1)
 
-Slice 1 shipped (PR #827). Slice 2 plan is appended below.
+Slice 1 shipped (PR #827), slice 2 shipped (PR #858). Slice 2 and 3 plans are appended below.
+
+## Slice 3: approach options in plan-exit approval (branch `epic/819-plan-mode-s3`)
+
+- Problem: the agent cannot attach 1-3 approach options to a plan exit, and the operator cannot
+  approve with a chosen option; `plan.approval_required` carries only `{tool, plan}` and the
+  approve/deny API is binary.
+- Design decisions:
+  - Option shape: `{id, label, description}` with positional IDs `a`/`b`/`c` (matches the epic's
+    `{"option":"b"}` curl example).
+  - Extraction convention (from slice 2's guidance): the plan's trailing `## Approaches` section;
+    numbered (`1.`/`2)`) or bullet (`-`/`*`) items; label/description split on ` — `, ` – `,
+    `: `, or ` - `; markdown bold stripped. Exactly 1-3 valid items required — anything else is
+    treated as a no-option plan (behavior identical to pre-slice-3).
+  - Broker contract: `ApprovalRequest.Options` / `PendingApproval.Options`;
+    `Ask` returns `(approved, selectedOption, err)`; new `ApproveWithOption(runID, option)`;
+    `Approve(runID)` unchanged (delegates with `""`), so all existing callers compile.
+  - Validation lives at the HTTP edge (`POST /v1/runs/{id}/approve`): unknown/absent option ID
+    falls back to plain approve; `awaitPlanApproval` also only echoes IDs matching a presented
+    option, so a direct broker call with a bogus ID degrades the same way.
+  - Checkpoint broker: options persist in the approval record's `Questions` field (unused for
+    `KindApproval`, no schema change); selection returns via
+    `checkpoints.Service.ApproveWithPayload` (new) → resume payload `{"option": id}`.
+  - Relay: on approve-with-option the step engine appends a user message
+    (`The operator approved the plan and selected approach "..." (x). Follow that approach.`)
+    before completing, so continuations see the choice; `plan.approval_granted` carries
+    `option`/`option_label`.
+- In scope: `internal/harness/approval_broker.go`, `plan_mode.go`, `checkpoint_brokers.go`,
+  `runner_step_engine.go` (3 call sites), `internal/checkpoints/service.go`,
+  `internal/server/http_runs.go`; tests below.
+- Out of scope: TUI option selection (slice 4), website docs (slice 5).
+- TDD (written first, watched fail to compile — undefined `PlanApproachOption`,
+  `parsePlanApproaches`, `ApproveWithOption`, `PendingApproval.Options`):
+  - `internal/harness/plan_mode_options_test.go`: `TestParsePlanApproaches` (7-case table),
+    `TestPlanApprovalRequiredCarriesOptions` (event payload + pending), 
+    `TestPlanApprovalRequiredOmitsOptionsWithoutApproaches` (regression guard),
+    `TestPlanExitApproveWithOptionRoundTrip` (broker→Ask→granted→transcript relay),
+    `TestInMemoryApprovalBrokerOptionsRoundTrip`.
+  - `internal/harness/checkpoint_broker_test.go`: `TestCheckpointApprovalBrokerOptionsRoundTrip`.
+  - `internal/checkpoints/service_test.go`: `TestServiceApproveWithPayloadWakesWaiterWithPayload`.
+  - `internal/server/http_plan_mode_test.go`: `TestHTTPPlanExitApproveWithOption`,
+    `TestHTTPPlanExitApproveWithInvalidOptionFallsBack`.
+  - Existing `Ask` call sites in `approval_broker_test.go` / `checkpoint_broker_test.go` updated
+    for the new 3-value return.
+- Checklist:
+  - [x] Write failing tests first.
+  - [x] Implement options end-to-end.
+  - [x] Targeted tests green on fresh `origin/main` base.
+  - [x] Plan file, full package tests, gofmt/vet, regression (`[regression] PASS`, coverage 84.2%), commit, push, PR #890.
 
 ## Slice 2: tell the model it is in plan mode (branch `epic/819-plan-mode-s2`)
 

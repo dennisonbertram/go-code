@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"go-agent-harness/internal/checkpoints"
@@ -18,9 +19,19 @@ func NewCheckpointApprovalBroker(service *checkpoints.Service) ApprovalBroker {
 	return &checkpointApprovalBroker{service: service}
 }
 
-func (b *checkpointApprovalBroker) Ask(ctx context.Context, req ApprovalRequest) (bool, error) {
+func (b *checkpointApprovalBroker) Ask(ctx context.Context, req ApprovalRequest) (bool, string, error) {
 	if req.Timeout <= 0 {
 		req.Timeout = 5 * time.Minute
+	}
+	// Options presented to the operator (plan approach options) ride in the
+	// record's Questions field, which is otherwise unused for KindApproval.
+	var options string
+	if len(req.Options) > 0 {
+		raw, err := json.Marshal(req.Options)
+		if err != nil {
+			return false, "", fmt.Errorf("marshal approval options: %w", err)
+		}
+		options = string(raw)
 	}
 	record, err := b.service.Create(ctx, checkpoints.CreateRequest{
 		Kind:       checkpoints.KindApproval,
@@ -28,10 +39,11 @@ func (b *checkpointApprovalBroker) Ask(ctx context.Context, req ApprovalRequest)
 		CallID:     req.CallID,
 		Tool:       req.Tool,
 		Args:       req.Args,
+		Questions:  options,
 		DeadlineAt: time.Now().UTC().Add(req.Timeout),
 	})
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, req.Timeout)
@@ -41,15 +53,19 @@ func (b *checkpointApprovalBroker) Ask(ctx context.Context, req ApprovalRequest)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			_ = b.service.Expire(context.Background(), record.ID)
-			return false, &ApprovalTimeoutError{
+			return false, "", &ApprovalTimeoutError{
 				RunID:      req.RunID,
 				CallID:     req.CallID,
 				DeadlineAt: record.DeadlineAt,
 			}
 		}
-		return false, err
+		return false, "", err
 	}
-	return result.Status == checkpoints.StatusApproved, nil
+	var option string
+	if result.Status == checkpoints.StatusApproved {
+		option, _ = result.Payload["option"].(string)
+	}
+	return result.Status == checkpoints.StatusApproved, option, nil
 }
 
 func (b *checkpointApprovalBroker) Pending(runID string) (PendingApproval, bool) {
@@ -57,16 +73,27 @@ func (b *checkpointApprovalBroker) Pending(runID string) (PendingApproval, bool)
 	if err != nil || !ok || record.Kind != checkpoints.KindApproval {
 		return PendingApproval{}, false
 	}
+	var options []PlanApproachOption
+	if record.Questions != "" {
+		if err := json.Unmarshal([]byte(record.Questions), &options); err != nil {
+			options = nil
+		}
+	}
 	return PendingApproval{
 		RunID:      record.RunID,
 		CallID:     record.CallID,
 		Tool:       record.Tool,
 		Args:       record.Args,
 		DeadlineAt: record.DeadlineAt,
+		Options:    options,
 	}, true
 }
 
 func (b *checkpointApprovalBroker) Approve(runID string) error {
+	return b.ApproveWithOption(runID, "")
+}
+
+func (b *checkpointApprovalBroker) ApproveWithOption(runID, option string) error {
 	record, ok, err := b.service.PendingByRun(context.Background(), runID)
 	if err != nil {
 		return err
@@ -74,7 +101,10 @@ func (b *checkpointApprovalBroker) Approve(runID string) error {
 	if !ok || record.Kind != checkpoints.KindApproval {
 		return ErrNoPendingApproval
 	}
-	return b.service.Approve(context.Background(), record.ID)
+	if option == "" {
+		return b.service.Approve(context.Background(), record.ID)
+	}
+	return b.service.ApproveWithPayload(context.Background(), record.ID, map[string]any{"option": option})
 }
 
 func (b *checkpointApprovalBroker) Deny(runID string) error {

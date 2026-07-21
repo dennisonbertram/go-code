@@ -17,7 +17,7 @@ func TestApprovalBrokerApproveLifecycle(t *testing.T) {
 	resultCh := make(chan approvalBrokerResult, 1)
 
 	go func() {
-		approved, err := broker.Ask(context.Background(), ApprovalRequest{
+		approved, _, err := broker.Ask(context.Background(), ApprovalRequest{
 			RunID:   "run_1",
 			CallID:  "call_1",
 			Tool:    "bash",
@@ -91,7 +91,7 @@ func TestApprovalBrokerDenyLifecycle(t *testing.T) {
 	resultCh := make(chan approvalBrokerResult, 1)
 
 	go func() {
-		approved, err := broker.Ask(context.Background(), ApprovalRequest{
+		approved, _, err := broker.Ask(context.Background(), ApprovalRequest{
 			RunID:   "run_2",
 			CallID:  "call_2",
 			Tool:    "write",
@@ -135,7 +135,7 @@ func TestApprovalBrokerTimeout(t *testing.T) {
 	t.Parallel()
 
 	broker := NewInMemoryApprovalBroker()
-	_, err := broker.Ask(context.Background(), ApprovalRequest{
+	_, _, err := broker.Ask(context.Background(), ApprovalRequest{
 		RunID:   "run_timeout",
 		CallID:  "call_timeout",
 		Tool:    "bash",
@@ -160,7 +160,7 @@ func TestApprovalBrokerContextCancellation(t *testing.T) {
 
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := broker.Ask(ctx, ApprovalRequest{
+		_, _, err := broker.Ask(ctx, ApprovalRequest{
 			RunID:   "run_ctx",
 			CallID:  "call_ctx",
 			Tool:    "bash",
@@ -204,7 +204,7 @@ func TestApprovalBrokerRejectsDuplicate(t *testing.T) {
 	defer cancel()
 
 	go func() {
-		_, _ = broker.Ask(ctx, ApprovalRequest{
+		_, _, _ = broker.Ask(ctx, ApprovalRequest{
 			RunID:   "run_dup",
 			CallID:  "call_1",
 			Tool:    "bash",
@@ -224,7 +224,7 @@ func TestApprovalBrokerRejectsDuplicate(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	_, err := broker.Ask(context.Background(), ApprovalRequest{
+	_, _, err := broker.Ask(context.Background(), ApprovalRequest{
 		RunID:   "run_dup",
 		CallID:  "call_2",
 		Tool:    "write",

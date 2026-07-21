@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	htools "go-agent-harness/internal/harness/tools"
@@ -29,18 +30,25 @@ import (
 //     re-present the same plan.
 //   - Broker timeout or context cancellation propagates as an error and fails
 //     the run — the defined outcome instead of waiting forever.
-func (r *Runner) awaitPlanApproval(ctx context.Context, runID, content string) (bool, error) {
+//
+// Approach options (epic #819, slice 3): when the presented plan ends with a
+// "## Approaches" section of 1-3 labeled items, the options are included in
+// the plan.approval_required payload and the broker request; the operator's
+// selected option is returned to the caller (echoed in plan.approval_granted
+// as option/option_label and relayed to the model). An option ID that does
+// not match a presented option degrades to a plain approve.
+func (r *Runner) awaitPlanApproval(ctx context.Context, runID, content string) (bool, PlanApproachOption, error) {
 	rc := r.configForRun(runID)
 	r.mu.Lock()
 	st := r.runs[runID]
 	if st == nil || st.planMode != PlanModeActive {
 		r.mu.Unlock()
-		return true, nil
+		return true, PlanApproachOption{}, nil
 	}
 	st.planMode = PlanModeExitPending
 	r.mu.Unlock()
 	if rc.ApprovalBroker == nil {
-		return false, fmt.Errorf("plan mode requires an approval broker")
+		return false, PlanApproachOption{}, fmt.Errorf("plan mode requires an approval broker")
 	}
 	r.setStatus(runID, RunStatusWaitingForApproval, "", "")
 	if plans, ok := rc.ConversationStore.(PlanContentStore); ok {
@@ -52,13 +60,18 @@ func (r *Runner) awaitPlanApproval(ctx context.Context, runID, content string) (
 		}
 		r.mu.RUnlock()
 		if err := plans.SavePlanContent(ctx, convID, runID, content); err != nil {
-			return false, err
+			return false, PlanApproachOption{}, err
 		}
 	}
-	r.emit(runID, EventPlanApprovalRequired, map[string]any{"tool": "plan_exit", "plan": content})
-	approved, err := rc.ApprovalBroker.Ask(ctx, ApprovalRequest{RunID: runID, CallID: "plan_exit", Tool: "plan_exit", Args: content, Timeout: rc.AskUserTimeout})
+	options := parsePlanApproaches(content)
+	required := map[string]any{"tool": "plan_exit", "plan": content}
+	if len(options) > 0 {
+		required["options"] = options
+	}
+	r.emit(runID, EventPlanApprovalRequired, required)
+	approved, selectedID, err := rc.ApprovalBroker.Ask(ctx, ApprovalRequest{RunID: runID, CallID: "plan_exit", Tool: "plan_exit", Args: content, Timeout: rc.AskUserTimeout, Options: options})
 	if err != nil {
-		return false, err
+		return false, PlanApproachOption{}, err
 	}
 	r.mu.Lock()
 	st = r.runs[runID]
@@ -72,11 +85,101 @@ func (r *Runner) awaitPlanApproval(ctx context.Context, runID, content string) (
 	r.mu.Unlock()
 	r.setStatus(runID, RunStatusRunning, "", "")
 	if approved {
-		r.emit(runID, EventPlanApprovalGranted, map[string]any{"plan": content})
-	} else {
-		r.emit(runID, EventPlanApprovalDenied, map[string]any{"plan": content})
+		granted := map[string]any{"plan": content}
+		var selected PlanApproachOption
+		for _, opt := range options {
+			if opt.ID == selectedID {
+				selected = opt
+				break
+			}
+		}
+		if selected.ID != "" {
+			granted["option"] = selected.ID
+			granted["option_label"] = selected.Label
+		}
+		r.emit(runID, EventPlanApprovalGranted, granted)
+		return true, selected, nil
 	}
-	return approved, nil
+	r.emit(runID, EventPlanApprovalDenied, map[string]any{"plan": content})
+	return false, PlanApproachOption{}, nil
+}
+
+// parsePlanApproaches extracts 1-3 approach options from the presented plan's
+// trailing "## Approaches" section (the convention the plan-mode guidance
+// teaches). Option IDs are assigned positionally: "a", "b", "c". It returns
+// nil when the section is absent or holds anything other than 1-3 valid list
+// items — such plans behave exactly as no-option plans.
+func parsePlanApproaches(plan string) []PlanApproachOption {
+	lines := strings.Split(plan, "\n")
+	start := -1
+	for i, line := range lines {
+		if isApproachesHeading(line) {
+			start = i + 1 // keep the last Approaches section
+		}
+	}
+	if start < 0 {
+		return nil
+	}
+	var items []string
+	for _, line := range lines[start:] {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			break // the next heading ends the section
+		}
+		if item, ok := parseApproachItem(trimmed); ok {
+			items = append(items, item)
+		}
+	}
+	if len(items) < 1 || len(items) > 3 {
+		return nil
+	}
+	ids := []string{"a", "b", "c"}
+	options := make([]PlanApproachOption, 0, len(items))
+	for i, item := range items {
+		label, description := splitApproachLabel(item)
+		if label == "" {
+			return nil // a malformed item invalidates the whole section
+		}
+		options = append(options, PlanApproachOption{ID: ids[i], Label: label, Description: description})
+	}
+	return options
+}
+
+// isApproachesHeading reports whether line is a "## Approaches" heading.
+func isApproachesHeading(line string) bool {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "##") || strings.HasPrefix(trimmed, "###") {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(trimmed, "##")), "Approaches")
+}
+
+// parseApproachItem strips a numbered ("1." / "2)") or bullet ("-" / "*") list
+// marker from a line, returning the item text.
+func parseApproachItem(line string) (string, bool) {
+	for _, prefix := range []string{"- ", "* "} {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix)), true
+		}
+	}
+	if i := strings.IndexAny(line, ".)"); i > 0 && i+1 < len(line) && line[i+1] == ' ' {
+		if _, err := strconv.Atoi(line[:i]); err == nil {
+			return strings.TrimSpace(line[i+1:]), true
+		}
+	}
+	return "", false
+}
+
+// splitApproachLabel splits an approaches item into label and description on
+// the first " — ", " – ", ": ", or " - " separator, stripping markdown bold.
+func splitApproachLabel(item string) (string, string) {
+	item = strings.ReplaceAll(item, "**", "")
+	for _, sep := range []string{" — ", " – ", ": ", " - "} {
+		if i := strings.Index(item, sep); i > 0 {
+			return strings.TrimSpace(item[:i]), strings.TrimSpace(item[i+len(sep):])
+		}
+	}
+	return strings.TrimSpace(item), ""
 }
 
 // planModePromptBlock returns the model-facing guidance injected into the

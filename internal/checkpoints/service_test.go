@@ -308,3 +308,60 @@ func TestSQLiteStoreUpdatePendingByWorkflowRunAndNotFound(t *testing.T) {
 		t.Fatal("IsNotFound returned true for unrelated error")
 	}
 }
+
+// TestServiceApproveWithPayloadWakesWaiterWithPayload covers the
+// approve-with-payload path used by plan-exit approach options: the waiter
+// observes an approved status and the operator's selected option.
+func TestServiceApproveWithPayloadWakesWaiterWithPayload(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 5, 12, 0, 0, 0, time.UTC)
+	svc := NewService(NewMemoryStore(), func() time.Time { return now })
+	record, err := svc.Create(context.Background(), CreateRequest{
+		Kind:       KindApproval,
+		RunID:      "run-1",
+		CallID:     "plan_exit",
+		Tool:       "plan_exit",
+		DeadlineAt: now.Add(5 * time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	waitCh := make(chan WaitResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, err := svc.Wait(context.Background(), record.ID)
+		if err != nil {
+			errCh <- err
+			return
+		}
+		waitCh <- result
+	}()
+
+	if err := svc.ApproveWithPayload(context.Background(), record.ID, map[string]any{"option": "b"}); err != nil {
+		t.Fatalf("ApproveWithPayload: %v", err)
+	}
+
+	select {
+	case err := <-errCh:
+		t.Fatalf("Wait error: %v", err)
+	case result := <-waitCh:
+		if result.Status != StatusApproved {
+			t.Fatalf("wait status = %q, want %q", result.Status, StatusApproved)
+		}
+		if got := result.Payload["option"]; got != "b" {
+			t.Fatalf("payload option = %v, want b", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for approve")
+	}
+
+	loaded, err := svc.Get(context.Background(), record.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if loaded.Status != StatusApproved {
+		t.Fatalf("stored status = %q, want %q", loaded.Status, StatusApproved)
+	}
+}

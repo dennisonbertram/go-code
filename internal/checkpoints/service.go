@@ -135,6 +135,13 @@ func (s *Service) Approve(ctx context.Context, id string) error {
 	return s.resolve(ctx, id, StatusApproved, nil)
 }
 
+// ApproveWithPayload resolves the checkpoint as approved and records payload
+// (e.g. the operator's selected plan approach option) as the resume payload
+// returned to the waiter.
+func (s *Service) ApproveWithPayload(ctx context.Context, id string, payload map[string]any) error {
+	return s.resolve(ctx, id, StatusApproved, payload)
+}
+
 func (s *Service) Deny(ctx context.Context, id string) error {
 	return s.resolve(ctx, id, StatusDenied, nil)
 }
