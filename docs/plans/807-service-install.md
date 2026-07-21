@@ -1,4 +1,4 @@
-# Plan: harnesscli service OS-service commands (epic #807, slices 1–2)
+# Plan: harnesscli service OS-service commands (epic #807, slices 1–3)
 
 ## Context
 
@@ -12,57 +12,48 @@
   `launchctl`/`systemctl`.
 - Constraints: stdlib only (no plist/systemd libs); user-level services only
   (no root/system units); tmux remains the dev-agent rule. Slice 1 (merged,
-  PR #826) shipped install/uninstall + generators; this branch adds slice 2:
-  start/stop/status lifecycle.
+  PR #826) shipped install/uninstall + generators; slice 2 (merged, PR #866)
+  shipped start/stop/status; this branch adds slice 3: documentation.
 
 ## Scope
 
-- In scope (slice 2, this branch):
-  - `start`: darwin `launchctl bootstrap gui/<uid> <plist>` with
-    `kickstart -k gui/<uid>/com.gocode.harnessd` fallback when already loaded;
-    linux `systemctl --user start harnessd.service`
-  - `stop`: darwin `launchctl bootout gui/<uid>/com.gocode.harnessd`; linux
-    `systemctl --user stop harnessd.service`
-  - `status`: installed check (unit file present), loaded/active query
-    (`launchctl print` / `systemctl --user is-active`), HTTP health probe of
-    `<--base-url>/healthz` (flag default `http://localhost:8080`, mirroring
-    `cmd/harnesscli/main.go:144`)
-  - Clear "not installed" error (non-zero exit) for all lifecycle commands
-    run before `install`
-  - Real runner made quiet-on-success (buffered output shown only on failure)
-    so `launchctl print` doesn't spam the terminal
-- Delivered (slice 1, merged): `runService` dispatch, `case "service":` in
-  `dispatch()`, pure generators, `--binary`/`--addr`/`--log-dir` resolution,
-  `--dry-run`, `uninstall` with best-effort bootout/disable.
-- Out of scope: docs (slice 3), Windows, system-wide units, daemon changes.
+- In scope (slice 3, this branch — docs-only):
+  - `docs/runbooks/distribution.md`: "OS Service Install" section — commands,
+    per-OS unit paths, log locations, flags, lifecycle notes, troubleshooting
+    (`launchctl print`, `systemctl --user status`, `journalctl --user -u
+    harnessd`, lingering), scope guardrails
+  - `README.md`: end-user pointer to `harnesscli service install`; tmux
+    guidance explicitly re-scoped to repository dev agents
+  - `docs/runbooks/INDEX.md`: distribution entry updated
+  - `docs/logs/engineering-log.md`: epic entry
+- Delivered (slice 1, merged PR #826): `runService` dispatch, `case
+  "service":` in `dispatch()`, pure generators,
+  `--binary`/`--addr`/`--log-dir` resolution, `--dry-run`, `uninstall` with
+  best-effort bootout/disable.
+- Delivered (slice 2, merged PR #866): `start` (bootstrap + kickstart -k
+  fallback), `stop` (bootout / systemctl stop), `status` (installed check,
+  loaded/active query, `/healthz` probe), quiet-on-success runner with rich
+  wrapped errors.
+- Out of scope: Windows, system-wide units, daemon changes.
 
 ## Documentation Contract
 
-- Feature status: slice 1 `implemented` (merged PR #826); slice 2
+- Feature status: slices 1–2 `implemented` (merged PRs #826, #866); slice 3
   `in implementation`
-- Public docs affected: none in this slice (slice 3 owns
-  `docs/runbooks/distribution.md` + `README.md`)
+- Public docs affected: `docs/runbooks/distribution.md`, `README.md`,
+  `docs/runbooks/INDEX.md`, `docs/logs/engineering-log.md` (all this branch)
 - Spec docs to update before code: this file (done)
-- Implementation notes to add after code: none (slice 3)
+- Implementation notes to add after code: engineering-log entry (this branch)
 
 ## Test Plan (TDD)
 
-- New failing tests to add first (`cmd/harnesscli/service_test.go`):
-  - Fake-runner exact argument construction per platform and verb:
-    bootstrap/kickstart/bootout/print (darwin, exact `gui/<uid>[/<label>]`
-    domains), start/stop/is-active (linux)
-  - start: bootstrap success; already-loaded → kickstart -k restart; both
-    fail → non-zero + stderr; not installed → non-zero + clear message
-  - stop: success per platform; runner error → non-zero + stderr; not
-    installed → non-zero
-  - status table: not-installed (non-zero); installed-not-loaded (exit 0,
-    "not running"); loaded-and-healthy (httptest 200 on /healthz);
-    loaded-but-unreachable (closed port → "unreachable", exit 0)
-  - stub test from slice 1 removed (stubs replaced by real commands)
-- Existing tests to update: `setupServiceTest` helper now returns a
-  `serviceRunnerFake` with per-call error queue; slice-1 runner assertions
-  updated accordingly (same assertions, new accessor)
-- Regression tests required: none beyond the above
+- Slice 3 is docs-only: no new tests. Validation = every documented
+  command/flag/path checked against `cmd/harnesscli/service.go` and live
+  `-h` output of a built binary; `go test ./cmd/harnesscli/ -run Service
+  -count=1` re-run to confirm the documented behavior is the tested behavior.
+- Slice 1–2 tests (merged): 32 `Service` tests — generator golden content,
+  install/dry-run/binary/addr resolution, uninstall, fake-runner exact
+  argument construction per platform/verb, status table.
 
 ## Cross-Surface Impact Map
 
@@ -71,19 +62,11 @@
 ## Implementation Checklist
 
 - [x] Slice 1: install/uninstall + generators, merged via PR #826.
-- [x] Update this plan for slice 2 before code.
-- [x] Write failing slice-2 tests first; watch them fail (16 red against stubs).
-- [x] Implement start/stop/status + quiet-on-success runner (rich wrapped
-      errors on failure).
-- [x] `go test ./cmd/harnesscli/ -run Service` green (32 tests).
-- [x] `go test ./cmd/harnesscli/... -count=1` full package green; gofmt +
-      go vet clean.
-- [x] macOS acceptance: install → start → status (running; healthy once the
-      daemon bound) → existing `harnesscli status --base-url ... <run-id>`
-      reached the daemon → stop → status (installed, not running, silent
-      stderr) → restart path → uninstall; `launchctl print` confirms the job
-      is gone.
-- [ ] Commit, push `epic/807-service-install-s2`, open PR (no merge).
+- [x] Slice 2: start/stop/status lifecycle, merged via PR #866.
+- [x] Write distribution runbook OS-service section.
+- [x] README end-user pointer + tmux re-scope; INDEX + engineering log.
+- [ ] Validate docs against implementation (flags, paths, commands).
+- [ ] Commit, push `epic/807-service-install-s3`, open PR (no merge).
 
 ## Risks and Mitigations
 

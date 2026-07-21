@@ -47,6 +47,53 @@ The wrapper must:
 - resolve the caller's project root and pass it as the run workspace
 - work when launched from any repository, not just from this repo
 
+## OS Service Install
+
+End users can run `harnessd` as a persistent, user-level OS service instead of a hand-managed process. No sudo is needed:
+
+```bash
+harnesscli service install    # write the unit file
+harnesscli service start      # start it now
+harnesscli service status     # installed? running? healthy?
+harnesscli service stop       # stop it
+harnesscli service uninstall  # stop (best-effort) and remove the unit file
+```
+
+What gets written:
+
+| Platform | Unit file | Manager |
+| --- | --- | --- |
+| macOS | `~/Library/LaunchAgents/com.gocode.harnessd.plist` (label `com.gocode.harnessd`) | launchd user agent in `gui/<uid>` |
+| Linux | `~/.config/systemd/user/harnessd.service` | `systemd --user` |
+
+- The macOS agent sets `RunAtLoad` and `KeepAlive`, so the daemon starts at login and relaunches on crash. The Linux unit sets `Restart=on-failure` and installs into `default.target`, so it starts with the user session and restarts on failure.
+- Logs go to `~/.harness/logs/harnessd.stdout.log` and `~/.harness/logs/harnessd.stderr.log` on both platforms (override the directory with `--log-dir`). On Linux, daemon output goes to those files; `journalctl --user -u harnessd` shows unit lifecycle events.
+
+`install` flags:
+
+- `--binary PATH`: the `harnessd` executable to run. Default: `harnessd` looked up on `PATH` (the Homebrew- or installer-provided binary). The unit embeds the absolute path.
+- `--addr ADDR`: listen address exported to the daemon as `HARNESS_ADDR`. Default: the same resolution the daemon applies to itself — `HARNESS_ADDR` env or `~/.harness/config.toml`, falling back to `:8080`.
+- `--log-dir DIR`: log directory (default `~/.harness/logs`).
+- `--dry-run`: print the rendered unit and its target path without writing anything.
+
+Lifecycle notes:
+
+- `install` only writes the unit file; it does not start the daemon. Run `harnesscli service start`, or log out and back in (login triggers `RunAtLoad` / `default.target`).
+- `start` is idempotent on macOS: an already-loaded agent is restarted with `launchctl kickstart -k`.
+- `status` exits non-zero with a clear message when the service is not installed. Otherwise it reports the running state and probes `GET <base-url>/healthz` (`--base-url` flag, default `http://localhost:8080`), so "running, healthy" is distinguished from "running but unreachable".
+- `uninstall` best-effort stops and disables the service (`launchctl bootout` / `systemctl --user disable --now`), then removes the unit file. It fails with a clear "not installed" message when the service was never installed.
+- `start`, `stop`, and `status` also fail with the same "not installed" message when run before `install`.
+
+Troubleshooting:
+
+- macOS state query: `launchctl print gui/$(id -u)/com.gocode.harnessd`.
+- Linux state query: `systemctl --user status harnessd`; lifecycle events: `journalctl --user -u harnessd`.
+- Linux boot persistence without an interactive login requires lingering: `loginctl enable-linger "$USER"`.
+- If the `harnessd` binary moves, re-run `harnesscli service install --binary <new-path>` — the unit embeds the absolute path and is not watched for changes.
+- The service managers do not create the log directory; `install` creates it. If you deleted it, re-run `install` or `mkdir -p ~/.harness/logs`.
+
+Scope guardrails: user-level services only — no root launchd daemons, no system systemd units, no Windows support. Repository dev agents keep using tmux per the worktree runbooks; the service install targets end users running go-code as a tool.
+
 ## GitHub Pages
 
 The public landing page source lives in `docs/site/`.

@@ -1,5 +1,11 @@
 # Engineering Log
 
+## 2026-07-20 (OS-Service Install for harnessd — Epic #807)
+
+- Shipped `harnesscli service install|uninstall|start|stop|status` for end users: user-level launchd agent on macOS (`~/Library/LaunchAgents/com.gocode.harnessd.plist`, `RunAtLoad`+`KeepAlive`) and `systemd --user` unit on Linux (`~/.config/systemd/user/harnessd.service`, `Restart=on-failure`, `WantedBy=default.target`). Slice 1 (PR #826): install/uninstall + pure unit generators with `--binary`/`--addr`/`--log-dir`/`--dry-run`; addr resolution reuses the daemon's own stack (`HARNESS_ADDR` env or `~/.harness/config.toml`, default `:8080`) exported into the unit environment. Slice 2 (PR #866): lifecycle commands over launchctl/systemctl behind an injectable runner; `status` distinguishes not-installed / installed-not-running / running-healthy / running-unreachable via a `GET /healthz` probe.
+- Slice 3 (this change, docs-only): new "OS Service Install" section in `docs/runbooks/distribution.md` (commands, per-OS unit paths, log locations, flags, troubleshooting incl. `launchctl print gui/$(id -u)/com.gocode.harnessd` and `journalctl --user -u harnessd`, lingering note, scope guardrails); README gains an end-user pointer and the tmux guidance is explicitly re-scoped to repository dev agents.
+- Validation: slices 1–2 landed under strict TDD (`go test ./cmd/harnesscli/ -run Service -count=1` — 32 tests) plus real launchd end-to-end on macOS (install → start → healthy status → stop → uninstall; `plutil -lint` OK). Slice 3 verified every documented flag/path/command against `cmd/harnesscli/service.go` and live `-h` output; no code changed.
+
 ## 2026-07-20 (Issue #875 Shell-Mode Test-Seam Coverage Fix)
 
 - Symptom: post-merge regression gate (`scripts/test-regression.sh`) failed after PR #870 landed: `coveragegate` flagged `(*Model).ShellCommandRunning` and `(*Model).WithShellExecTimeout` (cmd/harnesscli/tui/model.go) at 0.0%.
