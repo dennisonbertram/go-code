@@ -197,3 +197,78 @@
 - [x] `go test ./cmd/harnesscli/... -count=1` green.
 - [x] Engineering-log entry.
 - [ ] Commit, push `epic/820-tui-steering-s3`, open PR (do NOT merge).
+
+---
+
+## Slice 4 — immediate local echo for steered input with dedupe
+
+## Context
+
+- Problem: after slice 3, a TUI-originated steer only becomes visible at the next
+  step boundary (when `steering.received` arrives — seconds later). The user gets
+  no immediate confirmation their input went anywhere, and a naive immediate echo
+  would double-render once the server confirmation lands.
+- User impact: steered text must appear instantly on send, exactly once, with
+  failures never leaving an orphan entry claiming a steer the server rejected.
+- Constraints: implement ONLY slice 4. Server event contract fixed. Viewport
+  supports only `ReplaceTailLines`/`ReplaceLineRange(start,...)` — no content
+  search; assistant streaming re-renders via `ReplaceTailLines`, so position
+  tracking for non-tail blocks is unsafe without hooking every append path
+  (rejected as too invasive).
+
+## Design (chosen after viewport exploration)
+
+- Echo at keypress uses the FINAL slice-2 rendering (`steered ⟂ msg`) in the
+  viewport — no in-place re-render is ever needed on confirm, so no fragile
+  offset bookkeeping. Pending state lives in the transcript entry
+  (`steered ⟂ msg (pending)`) and a small `pendingSteers` set
+  (`{message, transcriptIdx}`) on the model.
+- Dedupe at `steering.received`: payload matching a pending echo → strip the
+  `(pending)` suffix from that transcript entry, consume the pending record,
+  append nothing (exactly one marker). No match → slice-2 behavior (external
+  steer, e.g. webhook).
+- Failure (`SteerErrorMsg`): exact matching needs the prompt — add `Prompt` to
+  `SteerErrorMsg` (slice-1 type, module-internal) and populate it in
+  `steerRunCmd`. On failure: drop the pending record, delete the transcript
+  entry (no orphan entry), and remove the viewport bubble ONLY when it is
+  verifiably still at the tail — tracked by `steerEchoTail`, invalidated on any
+  later `SSEEventMsg` (the only async append source during a run). Otherwise
+  the bubble remains but the transcript (the durable/exported record) is clean
+  and the status bar shows the failure.
+- Pending state cleared wherever the transcript is reset (resetTranscriptView,
+  new session, session switch). Leftover pendings at run end keep their
+  `(pending)` mark — an honest record of an unconfirmed steer; out of scope.
+
+## Scope
+
+- In scope: `cmd/harnesscli/tui/model.go` (echo helper, pending set, key case,
+  SSE dedupe, error cleanup, reset hooks), `messages.go` + `api.go`
+  (`SteerErrorMsg.Prompt`).
+- Out of scope: slice 5 (e2e); server/harness changes; viewport position
+  tracking for non-tail in-place updates.
+
+## Test Plan (TDD)
+
+- New failing tests (`cmd/harnesscli/tui/steer_echo_test.go`, package `tui_test`):
+  - echo visible immediately after ctrl+g, before any SSE event; transcript
+    entry marked pending.
+  - scripted `steering.received` with same content → exactly one marker in
+    viewport, exactly one transcript entry, no longer pending.
+  - `steering.received` with different content (external) → second marker/entry;
+    external steer with no local echo → slice-2 behavior unchanged.
+  - consumed dedupe: a second identical `steering.received` after confirmation
+    appends a new marker (treated as external).
+  - failure (409 and 429 via httptest, cmd driven end-to-end through Update) →
+    transcript has no entry for the text (no orphan), viewport bubble removed
+    (tail case), failure status shown.
+- Regression: slice 1–3 steer suites + `go test ./cmd/harnesscli/... -count=1`.
+
+## Implementation Checklist
+
+- [x] Define acceptance criteria in tests (listed above).
+- [x] Write failing tests first, watch them fail.
+- [x] Implement echo + dedupe + failure cleanup + `SteerErrorMsg.Prompt`.
+- [x] gofmt + go vet clean.
+- [x] `go test ./cmd/harnesscli/... -count=1` green.
+- [x] Engineering-log entry.
+- [ ] Commit, push `epic/820-tui-steering-s4`, open PR (do NOT merge).

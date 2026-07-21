@@ -299,26 +299,26 @@ func compactRunCmd(baseURL, runID, instruction, apiKey string) tea.Cmd {
 func steerRunCmd(baseURL, runID, prompt, apiKey string) tea.Cmd {
 	return func() tea.Msg {
 		if strings.TrimSpace(prompt) == "" {
-			return SteerErrorMsg{RunID: runID, Kind: "invalid_prompt", Err: "prompt is required"}
+			return SteerErrorMsg{RunID: runID, Kind: "invalid_prompt", Err: "prompt is required", Prompt: prompt}
 		}
 		body, err := json.Marshal(map[string]string{"prompt": prompt})
 		if err != nil {
-			return SteerErrorMsg{RunID: runID, Kind: "transport", Err: "encode request: " + err.Error()}
+			return SteerErrorMsg{RunID: runID, Kind: "transport", Err: "encode request: " + err.Error(), Prompt: prompt}
 		}
 		endpoint := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/steer"
 		req, err := newHarnessRequest(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body), apiKey)
 		if err != nil {
-			return SteerErrorMsg{RunID: runID, Kind: "transport", Err: "build request: " + err.Error()}
+			return SteerErrorMsg{RunID: runID, Kind: "transport", Err: "build request: " + err.Error(), Prompt: prompt}
 		}
 		req.Header.Set("Content-Type", "application/json")
 		resp, err := (&http.Client{Timeout: 10 * time.Second}).Do(req)
 		if err != nil {
-			return SteerErrorMsg{RunID: runID, Kind: "transport", Err: "request failed: " + err.Error()}
+			return SteerErrorMsg{RunID: runID, Kind: "transport", Err: "request failed: " + err.Error(), Prompt: prompt}
 		}
 		defer resp.Body.Close()
 		responseBody, err := io.ReadAll(resp.Body)
 		if err != nil {
-			return SteerErrorMsg{RunID: runID, Kind: "transport", Err: "read response: " + err.Error()}
+			return SteerErrorMsg{RunID: runID, Kind: "transport", Err: "read response: " + err.Error(), Prompt: prompt}
 		}
 		if resp.StatusCode >= 300 {
 			kind := "http"
@@ -330,7 +330,7 @@ func steerRunCmd(baseURL, runID, prompt, apiKey string) tea.Cmd {
 			case http.StatusTooManyRequests:
 				kind = "steering_buffer_full"
 			}
-			return SteerErrorMsg{RunID: runID, Kind: kind, Err: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody)))}
+			return SteerErrorMsg{RunID: runID, Kind: kind, Err: fmt.Sprintf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(responseBody))), Prompt: prompt}
 		}
 		return SteerAcceptedMsg{RunID: runID}
 	}

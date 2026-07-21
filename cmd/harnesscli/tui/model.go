@@ -201,6 +201,16 @@ type Model struct {
 	// transcript accumulates entries for the current session (used by /export).
 	transcript []transcriptexport.TranscriptEntry
 
+	// pendingSteers tracks TUI-originated steering sends echoed locally but not
+	// yet confirmed by a steering.received SSE event (epic #820 slice 4), used
+	// to dedupe the confirmation against the echo and to clean up failed sends.
+	pendingSteers []pendingSteer
+
+	// steerEchoTail, when non-nil, marks the viewport tail as a pending steer
+	// echo of the given line count so a failed send can remove it in place. Any
+	// later SSE event may append below the echo, so it invalidates this.
+	steerEchoTail *steerEchoTail
+
 	// usageDataPoints accumulates per-day DataPoints for the stats panel.
 	// Updated whenever a usage.delta SSE event is received.
 	usageDataPoints []statspanel.DataPoint
@@ -1075,6 +1085,101 @@ func (m *Model) appendSteeringMarker(message string) {
 	m.appendMessageBubble(messagebubble.RoleUser, marked)
 }
 
+// steeringPendingSuffix marks a local steering echo that has been sent but not
+// yet confirmed by a steering.received event. It lives only in the transcript
+// entry (the durable/exported record); the viewport bubble renders in its
+// final form immediately so confirmation never needs an in-place re-render.
+const steeringPendingSuffix = " (pending)"
+
+// pendingSteer tracks one TUI-originated steering send awaiting server-side
+// confirmation, for echo dedupe (steering.received) and failure cleanup
+// (SteerErrorMsg).
+type pendingSteer struct {
+	message       string // raw steered text, matched against steering.received payloads
+	transcriptIdx int    // index into m.transcript of the pending echo entry
+}
+
+// steerEchoTail marks the viewport tail as a pending steer echo of lines
+// lines, so a failed send can remove the bubble in place when nothing has been
+// appended below it.
+type steerEchoTail struct {
+	message string
+	lines   int
+}
+
+// appendSteeringEcho renders the local echo of a TUI-originated steer
+// immediately on send: the viewport bubble uses the final slice-2 rendering,
+// while the transcript entry carries the pending mark until confirmation. The
+// send is registered for dedupe against the later steering.received event.
+func (m *Model) appendSteeringEcho(message string) {
+	m.transcript = append(m.transcript, transcriptexport.TranscriptEntry{
+		Role:      "user",
+		Content:   steeringMarkerPrefix + message + steeringPendingSuffix,
+		Timestamp: time.Now(),
+	})
+	m.pendingSteers = append(m.pendingSteers, pendingSteer{message: message, transcriptIdx: len(m.transcript) - 1})
+	m.steerEchoTail = &steerEchoTail{message: message, lines: len(m.renderMessageBubble(messagebubble.RoleUser, steeringMarkerPrefix+message))}
+	m.appendMessageBubble(messagebubble.RoleUser, steeringMarkerPrefix+message)
+}
+
+// confirmPendingSteer consumes the oldest pending echo matching message,
+// marking its transcript entry confirmed. It reports whether a match was found
+// (false means the steering event originated elsewhere, e.g. a webhook).
+func (m *Model) confirmPendingSteer(message string) bool {
+	for i, ps := range m.pendingSteers {
+		if ps.message != message {
+			continue
+		}
+		m.pendingSteers = append(m.pendingSteers[:i], m.pendingSteers[i+1:]...)
+		if ps.transcriptIdx < len(m.transcript) &&
+			m.transcript[ps.transcriptIdx].Content == steeringMarkerPrefix+message+steeringPendingSuffix {
+			m.transcript[ps.transcriptIdx].Content = steeringMarkerPrefix + message
+		}
+		return true
+	}
+	return false
+}
+
+// failPendingSteer consumes the pending echo for a failed send (matched by the
+// prompt carried on SteerErrorMsg) and removes it: the transcript entry is
+// deleted so no orphan entry claims a steer the server rejected, and the
+// viewport bubble is removed in place when it is verifiably still at the tail
+// (no SSE event has appended below it).
+func (m *Model) failPendingSteer(prompt string) {
+	idx := -1
+	for i, ps := range m.pendingSteers {
+		if ps.message == prompt {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return
+	}
+	ps := m.pendingSteers[idx]
+	m.pendingSteers = append(m.pendingSteers[:idx], m.pendingSteers[idx+1:]...)
+	if ps.transcriptIdx < len(m.transcript) &&
+		m.transcript[ps.transcriptIdx].Content == steeringMarkerPrefix+prompt+steeringPendingSuffix {
+		m.transcript = append(m.transcript[:ps.transcriptIdx], m.transcript[ps.transcriptIdx+1:]...)
+		for i := range m.pendingSteers {
+			if m.pendingSteers[i].transcriptIdx > ps.transcriptIdx {
+				m.pendingSteers[i].transcriptIdx--
+			}
+		}
+	}
+	if m.steerEchoTail != nil && m.steerEchoTail.message == prompt {
+		m.vp.ReplaceTailLines(m.steerEchoTail.lines, nil)
+		m.steerEchoTail = nil
+	}
+}
+
+// clearPendingSteers drops all steering echo/dedupe state. It must be called
+// wherever the transcript is reset, since pending records index into it.
+func (m *Model) clearPendingSteers() {
+	m.pendingSteers = nil
+	m.steerEchoTail = nil
+}
+
 // steerErrorStatusText maps a SteerErrorMsg Kind (see messages.go) to the
 // status-bar text shown when a steer attempt fails.
 func steerErrorStatusText(msg SteerErrorMsg) string {
@@ -1641,6 +1746,7 @@ func (m *Model) resetTranscriptView() {
 	m.activeAssistantLineCount = 0
 	m.toolLineStarts = make(map[string]int)
 	m.toolLineOrder = nil
+	m.clearPendingSteers()
 	m.clearThinkingBar()
 }
 
@@ -2034,6 +2140,7 @@ func executeNewSessionCommand(m *Model, _ Command) ([]tea.Cmd, bool) {
 	m.lastAssistantText = ""
 	m.responseStarted = false
 	m.activeAssistantLineCount = 0
+	m.clearPendingSteers()
 	m.clearThinkingBar()
 	// A fresh session has no title; drop it from the status bar.
 	m.statusBar.SetTitle("")
@@ -2411,6 +2518,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				cmds = append(cmds, m.setStatusMsg("Type a message to steer into the run"))
 			default:
 				m.input = m.input.Clear()
+				// Local echo (slice 4): show the steered text immediately rather
+				// than waiting for the server-confirmed steering.received event,
+				// which dedupes against this echo instead of double-rendering.
+				m.appendSteeringEcho(steerPrompt)
 				cmds = append(cmds,
 					m.setStatusMsg("Steering sent"),
 					steerRunCmd(m.config.BaseURL, m.RunID, steerPrompt, m.config.APIKey),
@@ -3798,11 +3909,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	// SteerAcceptedMsg: the server queued the steering message (HTTP 202). The
 	// send-time "Steering sent" status already covers the acknowledgement; the
-	// server-confirmed transcript marker arrives later as a steering.received
-	// SSE event (slice 2). Slice 4 hooks this for the local-echo lifecycle.
+	// echo stays pending until the server-confirmed steering.received SSE event
+	// arrives (slices 2/4), which is where dedupe happens — nothing to do here.
 	case SteerAcceptedMsg:
 
 	case SteerErrorMsg:
+		// The server rejected the steer: remove the pending local echo so no
+		// orphan entry claims a steer that never happened (slice 4), then
+		// surface the failure.
+		m.failPendingSteer(msg.Prompt)
 		cmds = append(cmds, m.setStatusMsg(steerErrorStatusText(msg)))
 
 	case SSEEventMsg:
@@ -3818,6 +3933,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.ID != "" {
 			m.lastEventID = msg.ID
 		}
+		// Any SSE activity may append below a pending steer echo, so the echo
+		// can no longer be assumed to sit at the viewport tail (slice 4).
+		m.steerEchoTail = nil
 		// Route event to viewport based on type.
 		switch msg.EventType {
 		case "assistant.message.delta":
@@ -3949,13 +4067,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "steering.received":
 			// Server-confirmed steering injection (harness drainSteering): the
 			// steered text was appended to the run as a user message at the last
-			// step boundary. Show it marked as steered input so it is not
-			// mistaken for a typed prompt. Malformed/empty payloads are dropped.
+			// step boundary. A TUI-originated steer already echoed locally on
+			// send (slice 4) — confirm that echo instead of double-rendering;
+			// anything else (e.g. a webhook steer) renders as a fresh marker.
+			// Malformed/empty payloads are dropped.
 			var p struct {
 				Message string `json:"message"`
 			}
 			if err := json.Unmarshal(msg.Raw, &p); err == nil && strings.TrimSpace(p.Message) != "" {
-				m.appendSteeringMarker(p.Message)
+				if !m.confirmPendingSteer(p.Message) {
+					m.appendSteeringMarker(p.Message)
+				}
 			}
 		}
 		// Continue polling the SSE channel.
@@ -4330,6 +4452,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.lastAssistantText = ""
 		m.responseStarted = false
 		m.activeAssistantLineCount = 0
+		m.clearPendingSteers()
 		// Show a system message so the user knows the session switch happened.
 		m.vp.AppendLine("↩ Resumed session " + msg.SessionID + ". Previous messages are on the server.")
 		m.vp.AppendLine("")
