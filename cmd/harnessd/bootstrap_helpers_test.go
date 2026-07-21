@@ -789,3 +789,63 @@ func TestBuildPersistenceBootstrapClosesRunStoreWhenConversationSetupFails(t *te
 		t.Fatal("expected run store to be cleaned up on failure")
 	}
 }
+
+// TestLookupModelModalitiesWiring verifies the lookupModelModalities closure
+// resolves catalog modalities (directly and via aliases) and returns nil for
+// unknown models (epic #818 slice 4).
+func TestLookupModelModalitiesWiring(t *testing.T) {
+	t.Parallel()
+
+	workspace := t.TempDir()
+	if err := os.MkdirAll(workspace+"/catalog", 0o755); err != nil {
+		t.Fatalf("mkdir catalog: %v", err)
+	}
+	if err := os.WriteFile(workspace+"/catalog/models.json", []byte(`{
+  "catalog_version": "1.0.0",
+  "providers": {
+    "openai": {
+      "display_name": "OpenAI",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "models": {
+        "gpt-4.1": {
+          "display_name": "GPT-4.1",
+          "context_window": 128000,
+          "modalities": ["text", "image"],
+          "tool_calling": true,
+          "streaming": true
+        }
+      },
+      "aliases": {"gpt4": "gpt-4.1"}
+    }
+  }
+}`), 0o644); err != nil {
+		t.Fatalf("write catalog: %v", err)
+	}
+
+	bootstrap, err := buildCatalogBootstrap(catalogBootstrapOptions{
+		workspace: workspace,
+		getenv:    func(string) string { return "" },
+		newProvider: func(openai.Config) (harness.Provider, error) {
+			return &noopProvider{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildCatalogBootstrap: %v", err)
+	}
+
+	got := bootstrap.lookupModelModalities("openai", "gpt-4.1")
+	if len(got) != 2 || got[0] != "text" || got[1] != "image" {
+		t.Fatalf("lookupModelModalities direct: got %v, want [text image]", got)
+	}
+	got = bootstrap.lookupModelModalities("openai", "gpt4")
+	if len(got) != 2 || got[1] != "image" {
+		t.Fatalf("lookupModelModalities via alias: got %v, want [text image]", got)
+	}
+	if got := bootstrap.lookupModelModalities("openai", "nonexistent"); got != nil {
+		t.Fatalf("lookupModelModalities unknown model: got %v, want nil", got)
+	}
+	if got := bootstrap.lookupModelModalities("unknown-provider", "gpt-4.1"); got != nil {
+		t.Fatalf("lookupModelModalities unknown provider: got %v, want nil", got)
+	}
+}

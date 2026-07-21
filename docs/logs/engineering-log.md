@@ -1,5 +1,26 @@
 # Engineering Log
 
+## 2026-07-21 (Provider Image Encoding — Epic #818 Slice 4)
+
+- Both provider clients now translate `harness` image blocks into their
+  native wire shapes: Anthropic emits `{"type":"image","source":{"type":
+  "base64","media_type","data"}}` block-array content for user messages
+  (image-only messages grow no empty text block); OpenAI emits chat-
+  completions `image_url` parts and responses-API `input_image` parts, both
+  as `data:<media_type>;base64,<data>` URLs. Text-only messages serialize
+  byte-identically to before (regression-tested in both clients).
+- Defense in depth: new shared sentinel `provider.ErrImageModalityUnsupported`
+  is returned before any HTTP request when an image block targets a
+  catalog-known text-only model — Anthropic checks its existing catalog
+  field; OpenAI checks the new optional `Config.ModelModalityLookup`
+  (mirrors `ModelAPILookup`), wired in `cmd/harnessd` via
+  `lookupModelModalities` (alias-resolving, nil-safe). Unknown
+  models/modalities skip the check.
+- Acceptance proofs: runner → provider wire tests for both clients
+  (`TestRunnerImageBlockReachesAnthropicWire`,
+  `TestRunnerImageBlockReachesOpenAIWire`) capture the real HTTP body of a
+  `StartRun` with an attachment.
+
 ## 2026-07-21 (ACP Server Mode — Epic #806, Slice 3)
 
 - Prompt turns now stream live output to the editor: `assistant.message.delta` -> `agent_message_chunk`, `assistant.thinking.delta` -> `agent_thought_chunk` (payload field `content`), `tool.call.started` -> `tool_call` (`status: in_progress`, `title` = tool name, `kind` via a tool-name table), `tool.call.completed` -> `tool_call_update` (`completed`, or `failed` when the payload carries `error`; output included as content). `toolCallId` is the harness `call_id`, stable across start/complete.

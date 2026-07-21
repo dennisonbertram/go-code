@@ -328,6 +328,12 @@ func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (h
 		model = c.model
 	}
 
+	// Defense in depth (epic #818 slice 4): refuse image blocks for a
+	// catalog-known text-only model before any HTTP request.
+	if err := c.refuseImageForTextOnlyModel(model, req.Messages); err != nil {
+		return harness.CompletionResult{}, err
+	}
+
 	// Split system message out from conversation messages.
 	systemPrompt, conversationMsgs := extractSystem(req.Messages)
 
@@ -587,13 +593,23 @@ type message struct {
 }
 
 type contentBlock struct {
-	Type      string          `json:"type"` // "text", "tool_use", "tool_result"
+	Type      string          `json:"type"` // "text", "image", "tool_use", "tool_result"
 	Text      string          `json:"text,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   string          `json:"content,omitempty"` // for tool_result
+	// Source carries the base64 image payload for type == "image" (epic #818).
+	Source *contentBlockSource `json:"source,omitempty"`
+}
+
+// contentBlockSource is the Anthropic image source shape:
+// {"type":"base64","media_type":"image/png","data":"..."}.
+type contentBlockSource struct {
+	Type      string `json:"type"` // "base64"
+	MediaType string `json:"media_type"`
+	Data      string `json:"data"`
 }
 
 type toolDef struct {
@@ -885,7 +901,21 @@ func mapMessages(messages []harness.Message) ([]message, error) {
 	for _, msg := range messages {
 		switch msg.Role {
 		case "user":
-			addBlock("user", contentBlock{Type: "text", Text: msg.Content})
+			// Text content stays a plain text block; image blocks (epic
+			// #818) become base64 image blocks after it. An image-only
+			// message must not grow an empty text block.
+			if msg.Content != "" || len(msg.Blocks) == 0 {
+				addBlock("user", contentBlock{Type: "text", Text: msg.Content})
+			}
+			for _, b := range msg.Blocks {
+				if b.Type != "image" {
+					return nil, fmt.Errorf("unsupported content block type %q for user message: only \"image\" is supported", b.Type)
+				}
+				addBlock("user", contentBlock{
+					Type:   "image",
+					Source: &contentBlockSource{Type: "base64", MediaType: b.MediaType, Data: b.Data},
+				})
+			}
 
 		case "assistant":
 			// Assistant messages may include text content and/or tool calls.
@@ -931,6 +961,38 @@ func mapMessages(messages []harness.Message) ([]message, error) {
 	}
 
 	return flush()
+}
+
+// refuseImageForTextOnlyModel implements the defense-in-depth image
+// modality check (epic #818 slice 4): when any message carries an image
+// block and the client's catalog marks the model text-only, the request is
+// rejected before any HTTP call. Unknown data (nil catalog, model absent
+// from the catalog, or no recorded modalities) skips the check.
+func (c *Client) refuseImageForTextOnlyModel(model string, messages []harness.Message) error {
+	if c.catalog == nil {
+		return nil
+	}
+	hasImage := false
+	for _, m := range messages {
+		for _, b := range m.Blocks {
+			if b.Type == "image" {
+				hasImage = true
+			}
+		}
+	}
+	if !hasImage {
+		return nil
+	}
+	info, ok := c.catalog.ModelInfo(c.providerName, model)
+	if !ok || len(info.Model.Modalities) == 0 {
+		return nil
+	}
+	for _, mod := range info.Model.Modalities {
+		if mod == "image" {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s (provider %s)", provider.ErrImageModalityUnsupported, model, c.providerName)
 }
 
 func mapTools(definitions []harness.ToolDefinition) []toolDef {

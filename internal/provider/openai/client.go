@@ -26,6 +26,12 @@ import (
 // Used to route models to the correct endpoint (e.g. "responses" → /v1/responses).
 type ModelAPILookupFn func(providerName, modelID string) string
 
+// ModelModalityLookupFn returns the catalog's modality list for a model
+// (e.g. ["text", "image"]), or nil when the model is unknown or has no
+// recorded modalities. Used by the defense-in-depth image-input refusal
+// (epic #818 slice 4); a nil lookup disables the check entirely.
+type ModelModalityLookupFn func(providerName, modelID string) []string
+
 type Config struct {
 	APIKey string
 	// TokenSource optionally supplies a bearer credential for every request.
@@ -37,15 +43,19 @@ type Config struct {
 	BaseURL      string
 	// SkipV1Path keeps a provider base URL's existing namespace and appends
 	// endpoint paths directly (for example, /backend-api/codex/responses).
-	SkipV1Path        bool
-	Model             string
-	Client            *http.Client
-	PricingResolver   pricing.Resolver
-	ProviderName      string           // e.g. "openai", "deepseek" — used for pricing resolution
-	ModelAPILookup    ModelAPILookupFn // optional — routes models to the correct endpoint
-	NoParallelTools   bool             // when true, sets parallel_tool_calls: false in requests (workaround for Gemini streaming bug)
-	ForceNonStreaming bool             // when true, always uses non-streaming HTTP requests regardless of req.Stream (workaround for Gemini parallel tool call index bug)
-	ModelIDPrefix     string           // when non-empty, prepended to model ID in API requests (e.g., "models/" for Gemini's OpenAI-compat API)
+	SkipV1Path      bool
+	Model           string
+	Client          *http.Client
+	PricingResolver pricing.Resolver
+	ProviderName    string           // e.g. "openai", "deepseek" — used for pricing resolution
+	ModelAPILookup  ModelAPILookupFn // optional — routes models to the correct endpoint
+	// ModelModalityLookup optionally returns a model's catalog modalities so
+	// the client can refuse image blocks for text-only models (epic #818).
+	// Nil disables the refusal.
+	ModelModalityLookup ModelModalityLookupFn
+	NoParallelTools     bool   // when true, sets parallel_tool_calls: false in requests (workaround for Gemini streaming bug)
+	ForceNonStreaming   bool   // when true, always uses non-streaming HTTP requests regardless of req.Stream (workaround for Gemini parallel tool call index bug)
+	ModelIDPrefix       string // when non-empty, prepended to model ID in API requests (e.g., "models/" for Gemini's OpenAI-compat API)
 	// Quirks is the list of provider-level quirk identifiers from the catalog.
 	// Recognized values:
 	//   "reasoning_content_passback" — replay prior assistant Reasoning back to the
@@ -60,23 +70,24 @@ type Config struct {
 }
 
 type Client struct {
-	apiKey            string
-	tokenSource       provider.TokenSource
-	extraHeaders      map[string]string
-	baseURL           string
-	skipV1Path        bool
-	model             string
-	client            *http.Client
-	pricingResolver   pricing.Resolver
-	providerName      string
-	modelAPILookup    ModelAPILookupFn
-	noParallelTools   bool
-	forceNonStreaming bool
-	modelIDPrefix     string
-	quirks            []string
-	openRouterReferer string
-	openRouterTitle   string
-	retry             *provider.RetryConfig
+	apiKey              string
+	tokenSource         provider.TokenSource
+	extraHeaders        map[string]string
+	baseURL             string
+	skipV1Path          bool
+	model               string
+	client              *http.Client
+	pricingResolver     pricing.Resolver
+	providerName        string
+	modelAPILookup      ModelAPILookupFn
+	modelModalityLookup ModelModalityLookupFn
+	noParallelTools     bool
+	forceNonStreaming   bool
+	modelIDPrefix       string
+	quirks              []string
+	openRouterReferer   string
+	openRouterTitle     string
+	retry               *provider.RetryConfig
 }
 
 func NewClient(config Config) (*Client, error) {
@@ -108,23 +119,24 @@ func NewClient(config Config) (*Client, error) {
 		baseURL = strings.TrimSuffix(baseURL, "/v1")
 	}
 	return &Client{
-		apiKey:            config.APIKey,
-		tokenSource:       config.TokenSource,
-		extraHeaders:      cloneHeaders(config.ExtraHeaders),
-		baseURL:           baseURL,
-		skipV1Path:        config.SkipV1Path,
-		model:             model,
-		client:            httpClient,
-		pricingResolver:   config.PricingResolver,
-		providerName:      providerName,
-		modelAPILookup:    config.ModelAPILookup,
-		noParallelTools:   config.NoParallelTools,
-		forceNonStreaming: config.ForceNonStreaming,
-		modelIDPrefix:     config.ModelIDPrefix,
-		quirks:            append([]string(nil), config.Quirks...),
-		openRouterReferer: config.OpenRouterReferer,
-		openRouterTitle:   config.OpenRouterTitle,
-		retry:             config.Retry,
+		apiKey:              config.APIKey,
+		tokenSource:         config.TokenSource,
+		extraHeaders:        cloneHeaders(config.ExtraHeaders),
+		baseURL:             baseURL,
+		skipV1Path:          config.SkipV1Path,
+		model:               model,
+		client:              httpClient,
+		pricingResolver:     config.PricingResolver,
+		providerName:        providerName,
+		modelAPILookup:      config.ModelAPILookup,
+		modelModalityLookup: config.ModelModalityLookup,
+		noParallelTools:     config.NoParallelTools,
+		forceNonStreaming:   config.ForceNonStreaming,
+		modelIDPrefix:       config.ModelIDPrefix,
+		quirks:              append([]string(nil), config.Quirks...),
+		openRouterReferer:   config.OpenRouterReferer,
+		openRouterTitle:     config.OpenRouterTitle,
+		retry:               config.Retry,
 	}, nil
 }
 
@@ -300,10 +312,47 @@ func (c *Client) usesResponsesAPI(model string) bool {
 	return c.modelAPILookup(c.providerName, model) == "responses"
 }
 
+// refuseImageForTextOnlyModel implements the defense-in-depth image modality
+// check (epic #818 slice 4): when any message carries an image block and the
+// configured ModelModalityLookup marks the model text-only, the request is
+// rejected before any HTTP call. Unknown data (nil lookup, model absent, no
+// recorded modalities) skips the check.
+func (c *Client) refuseImageForTextOnlyModel(model string, messages []harness.Message) error {
+	if c.modelModalityLookup == nil {
+		return nil
+	}
+	hasImage := false
+	for _, m := range messages {
+		for _, b := range m.Blocks {
+			if b.Type == "image" {
+				hasImage = true
+			}
+		}
+	}
+	if !hasImage {
+		return nil
+	}
+	mods := c.modelModalityLookup(c.providerName, model)
+	if len(mods) == 0 {
+		return nil
+	}
+	for _, mod := range mods {
+		if mod == "image" {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s (provider %s)", provider.ErrImageModalityUnsupported, model, c.providerName)
+}
+
 func (c *Client) Complete(ctx context.Context, req harness.CompletionRequest) (harness.CompletionResult, error) {
 	model := req.Model
 	if model == "" {
 		model = c.model
+	}
+	// Defense in depth (epic #818 slice 4): refuse image blocks for a
+	// catalog-known text-only model before any HTTP request.
+	if err := c.refuseImageForTextOnlyModel(model, req.Messages); err != nil {
+		return harness.CompletionResult{}, err
 	}
 	// Apply provider-specific model ID prefix (e.g. Gemini's OpenAI-compat API requires
 	// "models/" prefix: "gemini-2.5-flash" → "models/gemini-2.5-flash").
@@ -670,6 +719,25 @@ type chatMessage struct {
 	// Shape: [{type: "reasoning.text", text: "..."}]
 	// Emitted alongside ReasoningContent when the quirk is active.
 	ReasoningDetails []reasoningDetail `json:"reasoning_details,omitempty"`
+}
+
+// chatContentPart is one part of a multi-part chat message content array,
+// used for text + image input (epic #818). Text-only messages keep plain
+// string content and never use this shape.
+type chatContentPart struct {
+	Type     string        `json:"type"` // "text" | "image_url"
+	Text     string        `json:"text,omitempty"`
+	ImageURL *chatImageURL `json:"image_url,omitempty"`
+}
+
+// chatImageURL carries a base64 data URL for an image_url part.
+type chatImageURL struct {
+	URL string `json:"url"` // e.g. "data:image/png;base64,<data>"
+}
+
+// imageDataURL builds the base64 data URL for a harness content block.
+func imageDataURL(b harness.ContentBlock) string {
+	return "data:" + b.MediaType + ";base64," + b.Data
 }
 
 // reasoningDetail is one element of the reasoning_details passback array used
@@ -1067,7 +1135,21 @@ func mapMessages(messages []harness.Message, replayReasoning bool) []chatMessage
 			ToolCallID: msg.ToolCallID,
 			Name:       msg.Name,
 		}
-		if msg.Content != "" {
+		if msg.Role == "user" && len(msg.Blocks) > 0 {
+			// Mixed text + image content (epic #818): emit the multi-part
+			// content array. An image-only message gets no empty text part.
+			parts := make([]chatContentPart, 0, len(msg.Blocks)+1)
+			if msg.Content != "" {
+				parts = append(parts, chatContentPart{Type: "text", Text: msg.Content})
+			}
+			for _, b := range msg.Blocks {
+				if b.Type != "image" {
+					continue
+				}
+				parts = append(parts, chatContentPart{Type: "image_url", ImageURL: &chatImageURL{URL: imageDataURL(b)}})
+			}
+			chatMsg.Content = parts
+		} else if msg.Content != "" {
 			chatMsg.Content = msg.Content
 		}
 		if len(msg.ToolCalls) > 0 {
@@ -1173,6 +1255,16 @@ type responsesOutputItem struct {
 type responsesContentBlock struct {
 	Type string `json:"type"` // "output_text"
 	Text string `json:"text"`
+}
+
+// responsesInputContent is one part of a message item's content array in the
+// Responses API input, used for text + image input (epic #818). Text-only
+// messages keep plain string content and never use this shape.
+type responsesInputContent struct {
+	Type string `json:"type"` // "input_text" | "input_image"
+	Text string `json:"text,omitempty"`
+	// ImageURL carries the base64 data URL for type == "input_image".
+	ImageURL string `json:"image_url,omitempty"`
 }
 
 // responsesUsage holds token counts as reported by the Responses API.
@@ -1311,7 +1403,27 @@ func mapToResponsesRequest(req harness.CompletionRequest, model string) response
 				})
 			}
 		default:
-			// user and any other roles map to plain message items.
+			// user and any other roles map to plain message items — unless the
+			// message carries image blocks (epic #818), which require the
+			// multi-part content array (input_text + input_image).
+			if msg.Role == "user" && len(msg.Blocks) > 0 {
+				parts := make([]responsesInputContent, 0, len(msg.Blocks)+1)
+				if msg.Content != "" {
+					parts = append(parts, responsesInputContent{Type: "input_text", Text: msg.Content})
+				}
+				for _, b := range msg.Blocks {
+					if b.Type != "image" {
+						continue
+					}
+					parts = append(parts, responsesInputContent{Type: "input_image", ImageURL: imageDataURL(b)})
+				}
+				rr.Input = append(rr.Input, responsesInputItem{
+					Type:    "message",
+					Role:    msg.Role,
+					Content: parts,
+				})
+				break
+			}
 			rr.Input = append(rr.Input, responsesInputItem{
 				Type:    "message",
 				Role:    msg.Role,

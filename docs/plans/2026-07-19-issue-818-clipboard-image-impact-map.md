@@ -2,39 +2,38 @@
 
 ## Task
 
-- Task / issue: #818 — slice 1 (clipboard reader, PR #837), slice 2 (Ctrl-V paste + chips, PR #872), slice 3 (`feat(harness): image attachments through the run plumbing with modality gating`, in implementation)
+- Task / issue: #818 — slice 1 (clipboard reader, PR #837), slice 2 (Ctrl-V paste + chips, PR #872), slice 3 (run plumbing + modality gating, PR #897), slice 4 (`feat(provider): encode base64 image blocks for anthropic and openai`, in implementation)
 - Plan link: `docs/plans/2026-07-19-issue-818-clipboard-image-plan.md`
-- Owner: agent worktree `epic/818-image-input` (s1), `epic/818-image-input-s2` (s2), `epic/818-image-input-s3` (s3)
-- Status: slice 3 in implementation
+- Owner: agent worktree `epic/818-image-input` (s1), `epic/818-image-input-s2` (s2), `epic/818-image-input-s3` (s3), `epic/818-image-input-s4` (s4)
+- Status: slice 4 in implementation
 
 ## Config
 
-- User-facing config added or changed: None — the reader, paste UX, and run plumbing have no settings; platform/tool detection is automatic.
-- Defaults / fallbacks: darwin → `osascript`; linux → `wl-paste` then `xclip`; headless (`TERM` unset/`dumb`) short-circuits before any subprocess. Modality pre-flight (client and server) falls back to *allow* when the model's modalities are unknown (offline fetch, old server, OpenRouter-sourced list, nil provider registry, discovered models).
+- User-facing config added or changed: None — the reader, paste UX, run plumbing, and provider encoding have no settings; platform/tool detection is automatic.
+- Defaults / fallbacks: darwin → `osascript`; linux → `wl-paste` then `xclip`; headless (`TERM` unset/`dumb`) short-circuits before any subprocess. Modality checks (client pre-flight, server gate, provider refusal) all fall back to *allow* when the model's modalities are unknown (offline fetch, old server, OpenRouter-sourced list, nil registry, nil catalog/lookup on the provider client).
 - Environment variables, config files, or saved settings touched: `TERM` read only (existing `IsHeadless()` semantics, unchanged).
-- Migration / backward-compatibility notes: `GET /v1/models` gained additive `modalities` (slice 2); `POST /v1/runs` gains additive `attachments` (omitted/ignored by older clients and servers). `harness.Message` gains additive `Blocks`; `Content` is untouched, so text-only callers and stored JSON are unchanged. Image blocks are in-memory only — the text snapshot/history path does not persist them (documented limitation).
+- Migration / backward-compatibility notes: `GET /v1/models` gained additive `modalities` (slice 2); `POST /v1/runs` gained additive `attachments` (slice 3); `harness.Message` gained additive `Blocks`; `openai.Config` gains optional `ModelModalityLookup` (nil = skip refusal). Text-only messages serialize byte-identically to before slice 4 in both provider clients.
 
 ## Server API
 
 - Endpoints, request fields, response fields, or server wiring affected:
   - `GET /v1/models`: `modalities` array (slice 2, additive).
-  - `POST /v1/runs`: new optional `attachments` array of `{type, media_type, data}` (base64) on the run request (slice 3). Decoded through `harness.RunRequest` — no handler change.
-- Provider/model resolution or registry changes: None — the modality gate reads the existing catalog via the runner's `providerRegistry` (`Catalog().ModelInfo`).
-- Error states / validation changes: `POST /v1/runs` now returns HTTP 400 `invalid_request` when (a) an attachment is malformed (`type` != "image", media type not `image/png`/`image/jpeg`, empty or invalid base64) or (b) the effective model's catalog entry is known to lack the `image` modality (message names model + provider). No other request validation changed.
+  - `POST /v1/runs`: optional `attachments` array of `{type, media_type, data}` (base64); 400 on malformed blocks or known text-only models (slice 3). Slice 4 changes no request/response shapes.
+- Provider/model resolution or registry changes: `cmd/harnessd` wires a `lookupModelModalities` closure (mirroring `lookupModelAPI`, with alias resolution) into `openai.Config.ModelModalityLookup`; the anthropic client's refusal reuses its existing catalog field. No registry behavior change.
+- Error states / validation changes: provider clients return errors wrapping `provider.ErrImageModalityUnsupported` when asked to send an image block to a model the catalog marks text-only (defense in depth under the slice-3 gate; fires before any HTTP request). No HTTP-surface error change.
 
 ## TUI State
 
-- Slash commands, overlays, selection state, routing, or status bar changes: `ctrl+v` binding and chip row (slice 2); slice 3 consumes pending chips on submit — the images are base64-encoded into the run request, chips and temp dirs are cleared; an attachment encode failure aborts the submit, restores the text, and keeps the chips; `startRunCmd` surfaces the server's error body so the 400 modality message reaches the status bar.
+- Slash commands, overlays, selection state, routing, or status bar changes: unchanged from slices 2–3 (ctrl+v, chips, consume-on-submit). Slice 4 touches no TUI surface.
 - Persisted client state or local config changes: None.
-- Keyboard/navigation implications: unchanged from slice 2 (Backspace-on-empty removes chips; ctrl+v gated to no-overlay).
+- Keyboard/navigation implications: None.
 
 ## Regression Tests
 
-- New acceptance tests required: `go test ./internal/harness/ ./internal/server/ -run 'Image|Attachment|Modality'` — blocks flow to `fakeprovider.LastRequest()`; malformed-attachment matrix; modality gate (reject/allow matrix); `Message.Clone` Blocks independence; HTTP 400/202 matrix; TUI submit encodes chips into the POST body and consumes them.
-- Existing tests to update: None — all slice 1–2 and existing harness/server/TUI tests must stay green unchanged.
-- Cross-surface regressions to guard: text-only runs serialize identically (Blocks/attachments `omitempty`); run-request JSON without attachments unchanged; chip behavior when no chips exist unchanged.
+- New acceptance tests required: `go test ./internal/provider/...` — anthropic text+image block-array shape, image-only message (no empty text block), text-only string regression, refusal (typed error, zero HTTP calls), runner→wire proof via captured /v1/messages body; openai chat `text`/`image_url` parts, responses `input_text`/`input_image` parts, text-only regressions, refusal via `ModelModalityLookup` (typed error, zero HTTP calls).
+- Existing tests to update: None — all slice 1–3 and existing provider tests must stay green unchanged.
+- Cross-surface regressions to guard: text-only serialization identical in both clients; streaming paths unaffected (block mapping is shared); slice-3 harness/server tests unchanged and green.
 
 ## Warning Check
 
-- No blank headings. Config stays `None` with rationale; provider-side *encoding* of image blocks to Anthropic/OpenAI wire shapes is slice 4 and mapped there; ReadMediaFile/downscale is slice 5.
-
+- No blank headings. TUI State is `None` with rationale (slice 4 is provider-internal); the remaining surface of epic #818 (ReadMediaFile/downscale) is slice 5 and mapped there.
