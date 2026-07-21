@@ -26,6 +26,9 @@ type KeyMap struct {
 	Dashboard key.Binding
 	Quit      key.Binding
 	Copy      key.Binding
+	// Background detaches a running shell-mode command (ctrl+b, epic #811
+	// slice 4). Active only while a shell command is running.
+	Background key.Binding
 	// Steer injects the input-box content into the active run as a steering
 	// message (epic #820) without cancelling it. Bound to ctrl+g: ctrl+s is
 	// taken by Copy, and ctrl+r stays reserved for a future history-search
@@ -108,6 +111,10 @@ func DefaultKeyMap() KeyMap {
 			key.WithKeys("ctrl+s"),
 			key.WithHelp("ctrl+s", "copy last response"),
 		),
+		Background: key.NewBinding(
+			key.WithKeys("ctrl+b"),
+			key.WithHelp("ctrl+b", "background shell command"),
+		),
 		Steer: key.NewBinding(
 			key.WithKeys("ctrl+g"),
 			key.WithHelp("ctrl+g", "steer run"),
@@ -138,6 +145,6 @@ func (k KeyMap) FullHelp() [][]key.Binding {
 		{k.Submit, k.Newline, k.Interrupt, k.Steer, k.Quit},
 		{k.ScrollUp, k.ScrollDown, k.PageUp, k.PageDown, k.GotoTop, k.GotoBottom},
 		{k.SlashCmd, k.AtMention, k.ShellMode, k.Help, k.Dashboard},
-		{k.EditMode, k.ExpandTool},
+		{k.EditMode, k.ExpandTool, k.Background},
 	}
 }

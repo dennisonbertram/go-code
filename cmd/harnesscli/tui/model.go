@@ -400,6 +400,9 @@ type Model struct {
 	// result for one-shot injection into the next agent prompt (epic #811,
 	// slice 3). Consumed and cleared on the next normal submission.
 	shellLastResult *shellResult
+	// shellDetached tracks call IDs of commands backgrounded with Ctrl+B
+	// (epic #811, slice 4): their cards no longer stream live output.
+	shellDetached map[string]bool
 
 	// pluginsDir is the directory from which custom slash-command plugins are loaded.
 	// Defaults to ~/.config/harnesscli/plugins when empty.
@@ -580,6 +583,7 @@ func buildHelpDialog(reg *CommandRegistry, keys KeyMap) helpdialog.Model {
 		{Keys: "ctrl+e", Description: keys.EditMode.Help().Desc},
 		{Keys: "esc", Description: keys.Interrupt.Help().Desc},
 		{Keys: "ctrl+s", Description: keys.Copy.Help().Desc},
+		{Keys: "ctrl+b", Description: keys.Background.Help().Desc},
 		{Keys: "ctrl+g", Description: keys.Steer.Help().Desc},
 		{Keys: "ctrl+v", Description: keys.PasteImage.Help().Desc},
 		{Keys: "ctrl+c", Description: "interrupt run (twice) / quit when idle"},
@@ -833,6 +837,52 @@ func (m *Model) exitShellMode() {
 // running (for testing).
 func (m Model) ShellCommandRunning() bool {
 	return m.shellRunningID != ""
+}
+
+// ShellExecCount returns the number of shell-mode commands currently running,
+// foreground or backgrounded (for testing).
+func (m Model) ShellExecCount() int {
+	return len(m.shellExecs)
+}
+
+// backgroundShellCommand detaches the currently running shell-mode command
+// (Ctrl+B, epic #811 slice 4): the command keeps running, live delta
+// streaming stops, and its card collapses to a one-line backgrounded note.
+// The executor's done message later replaces the note with the completion
+// card. No-op when nothing is running.
+func (m *Model) backgroundShellCommand() {
+	callID := m.shellRunningID
+	if callID == "" {
+		return
+	}
+	ex, ok := m.shellExecs[callID]
+	if !ok {
+		return
+	}
+	ex.detach()
+	if m.shellDetached == nil {
+		m.shellDetached = make(map[string]bool)
+	}
+	m.shellDetached[callID] = true
+	m.shellRunningID = ""
+
+	view, ok := m.toolViews[callID]
+	if !ok {
+		return
+	}
+	timer := m.toolTimers[callID]
+	if timer.IsRunning() {
+		timer = timer.Stop()
+		m.toolTimers[callID] = timer
+	}
+	view.Status = "completed"
+	view.Args = m.toolArgs[callID] + " — backgrounded (ctrl+b)"
+	view.Result = ""
+	view.ErrorText = ""
+	view.Expanded = false
+	view.Timer = timer
+	m.toolViews[callID] = view
+	m.appendToolUseView(view)
 }
 
 // WithShellExecTimeout returns a copy of the Model with the shell-mode
@@ -2505,6 +2555,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				cmds = append(cmds, m.setStatusMsg("Copy unavailable"))
 			}
+		case key.Matches(msg, m.keys.Background):
+			// Ctrl+B backgrounds the running shell-mode command (epic #811,
+			// slice 4). Explicit no-op when no shell command is running.
+			if m.shellRunningID == "" {
+				return m, tea.Batch(cmds...)
+			}
+			m.backgroundShellCommand()
+			cmds = append(cmds, m.setStatusMsg("Shell command backgrounded — completion notice will follow"))
 		case key.Matches(msg, m.keys.Steer):
 			// Mid-turn steering (epic #820): send the input-box content into the
 			// active run via POST /v1/runs/{id}/steer. The run is neither
@@ -3593,7 +3651,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case shellExecOutputMsg:
 		// Streamed shell-mode output: append to the card and keep polling.
-		m.handleToolChunk(msg.CallID, msg.Chunk)
+		// Detached (backgrounded) commands skip the card update — a delta that
+		// raced the detach still re-issues the poll so the chain always
+		// reaches the done message.
+		if !m.shellDetached[msg.CallID] {
+			m.handleToolChunk(msg.CallID, msg.Chunk)
+		}
 		if ex, ok := m.shellExecs[msg.CallID]; ok {
 			cmds = append(cmds, waitShellExecMsg(ex))
 		}
@@ -3615,6 +3678,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// partial output is not context-worthy.
 		if !msg.Interrupted && !msg.TimedOut && msg.Err == nil {
 			m.shellLastResult = &shellResult{Command: command, Output: msg.Output, ExitCode: msg.ExitCode}
+		}
+		// Slice 4: for backgrounded commands, restore the card's header args
+		// (the backgrounded note annotated them) before finalizing, so the
+		// completion card shows the plain command again.
+		if m.shellDetached[msg.CallID] {
+			delete(m.shellDetached, msg.CallID)
+			if view, ok := m.toolViews[msg.CallID]; ok {
+				view.Args = m.toolArgs[msg.CallID]
+				m.toolViews[msg.CallID] = view
+			}
 		}
 		switch {
 		case msg.Interrupted:

@@ -135,3 +135,39 @@ func TestShellExec_KillInterrupts(t *testing.T) {
 		t.Errorf("kill took too long: %v", elapsed)
 	}
 }
+
+func TestShellExec_DetachStopsDeltasButBuffers(t *testing.T) {
+	ex, err := startShellExec("shell-1", "printf a; sleep 0.3; printf b", 5*time.Second)
+	if err != nil {
+		t.Fatalf("startShellExec: %v", err)
+	}
+	// Wait for the first delta ("a") before detaching.
+	select {
+	case msg := <-ex.ch:
+		out, ok := msg.(shellExecOutputMsg)
+		if !ok {
+			t.Fatalf("expected a streamed delta first, got %T", msg)
+		}
+		if !strings.Contains(out.Chunk, "a") {
+			t.Fatalf("first delta must carry the initial output, got %q", out.Chunk)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no streamed delta before detach")
+	}
+
+	ex.detach()
+
+	chunks, done := collectShellMsgs(t, ex)
+	for _, c := range chunks {
+		if strings.Contains(c, "b") {
+			t.Errorf("no deltas must be emitted after detach, got %q", c)
+		}
+	}
+	// The done message still carries the complete buffered output.
+	if done.Output != "ab" {
+		t.Errorf("detached command must buffer output to completion, got %q", done.Output)
+	}
+	if done.ExitCode != 0 {
+		t.Errorf("exit code: got %d, want 0", done.ExitCode)
+	}
+}
