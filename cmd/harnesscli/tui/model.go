@@ -4217,10 +4217,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toolApproval = toolApprovalState{}
 		case "plan.approval_required":
 			var p struct {
-				Plan string `json:"plan"`
+				Plan    string               `json:"plan"`
+				Options []planApproachOption `json:"options"`
 			}
 			if err := json.Unmarshal(msg.Raw, &p); err == nil {
-				m.planApproval = planApprovalState{active: true, runID: m.RunID, content: p.Plan}
+				m.planApproval = planApprovalState{active: true, runID: m.RunID, content: p.Plan, options: p.Options}
 			}
 		case "plan.approval_granted", "plan.approval_denied":
 			m.planApproval = planApprovalState{}

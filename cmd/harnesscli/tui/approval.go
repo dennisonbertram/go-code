@@ -49,26 +49,45 @@ type ToolApprovalErrorMsg struct {
 
 // ─── HTTP Commands ───────────────────────────────────────────────────────────
 
-// approveToolCmd sends POST /v1/runs/{id}/approve. On success it returns
+// approveToolCmd sends POST /v1/runs/{id}/approve. When a plan approach
+// option ID is given it is sent as {"option": id} in the request body (a
+// plan-exit approve with the operator's selected approach); otherwise the
+// body is empty (a plain approve). On success it returns
 // ToolApprovalDecidedMsg{Decision: "approved"}; on failure it returns
 // ToolApprovalErrorMsg.
-func approveToolCmd(baseURL, runID, apiKey string) tea.Cmd {
-	return toolApprovalDecisionCmd(baseURL, runID, "approve", "approved", apiKey)
+func approveToolCmd(baseURL, runID, apiKey string, option ...string) tea.Cmd {
+	opt := ""
+	if len(option) > 0 {
+		opt = option[0]
+	}
+	return toolApprovalDecisionCmd(baseURL, runID, "approve", "approved", apiKey, opt)
 }
 
 // denyToolCmd sends POST /v1/runs/{id}/deny. On success it returns
 // ToolApprovalDecidedMsg{Decision: "denied"}; on failure it returns
 // ToolApprovalErrorMsg.
 func denyToolCmd(baseURL, runID, apiKey string) tea.Cmd {
-	return toolApprovalDecisionCmd(baseURL, runID, "deny", "denied", apiKey)
+	return toolApprovalDecisionCmd(baseURL, runID, "deny", "denied", apiKey, "")
 }
 
-// toolApprovalDecisionCmd posts an empty body to /v1/runs/{id}/{path} and
-// translates the response into ToolApprovalDecidedMsg or ToolApprovalErrorMsg.
-func toolApprovalDecisionCmd(baseURL, runID, path, decision, apiKey string) tea.Cmd {
+// toolApprovalDecisionCmd posts to /v1/runs/{id}/{path} — with a
+// {"option": option} body when option is non-empty, an empty body otherwise —
+// and translates the response into ToolApprovalDecidedMsg or
+// ToolApprovalErrorMsg.
+func toolApprovalDecisionCmd(baseURL, runID, path, decision, apiKey, option string) tea.Cmd {
 	return func() tea.Msg {
 		postURL := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/" + path
-		req, err := newHarnessRequest(context.Background(), http.MethodPost, postURL, bytes.NewReader(nil), apiKey)
+		var body *bytes.Reader
+		if option != "" {
+			raw, err := json.Marshal(map[string]string{"option": option})
+			if err != nil {
+				return ToolApprovalErrorMsg{Err: fmt.Sprintf("%s tool call: %s", path, err.Error())}
+			}
+			body = bytes.NewReader(raw)
+		} else {
+			body = bytes.NewReader(nil)
+		}
+		req, err := newHarnessRequest(context.Background(), http.MethodPost, postURL, body, apiKey)
 		if err != nil {
 			return ToolApprovalErrorMsg{Err: fmt.Sprintf("%s tool call: %s", path, err.Error())}
 		}
