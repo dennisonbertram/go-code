@@ -89,7 +89,7 @@ func builtinCommandEntries() []CommandEntry {
 		},
 		{
 			Name:        "undo",
-			Description: "Remove the last n prompts from the conversation (/undo [n])",
+			Description: "Remove recent prompts (/undo [n], or bare /undo to pick)",
 			Handler: func(cmd Command) CommandResult {
 				return CommandResult{Status: CmdOK}
 			},

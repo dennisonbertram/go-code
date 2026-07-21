@@ -64,6 +64,14 @@
 - Validation: `go test ./cmd/harnesscli/... -count=1` (29 packages) and
   `-race` green; full regression suite (see PR body).
 
+## 2026-07-21 (`/undo` Picker Overlay — Epic #805, Slice 4)
+
+- Bare `/undo` now opens a prompt picker matching kimi-code behavior: new `undopicker` component (`cmd/harnesscli/tui/components/undopicker/`, modeled on `sessionpicker`) lists the last 10 non-meta user prompts newest-first with their relative position (`Count`, 1 = newest); Enter confirms, Esc cancels, navigation wraps and skips disabled rows.
+- Data path: `fetchUndoCandidatesCmd` GETs `{id}/messages` decoding `is_meta`/`is_compact_summary`; the pure `EntriesFromMessages` function filters prompts, assigns counts, and marks entries at/below the most recent compaction summary `Disabled` (the store refuses those undos — Slice 1 — so the picker never offers them; disabled rows render dimmed with a `(compaction boundary — cannot undo)` hint).
+- Selection flow: `UndoPickerSelectedMsg{Count}` closes the overlay and dispatches the Slice 3 `undoConversationCmd` — the numeric `/undo [n]` path is unchanged.
+- Key-routing note: overlay routing cases never see Enter (the `Submit` case claims it first) — profiles/theme handle Enter via explicit arms in the `Submit` case, and the undo picker follows that pattern (`wrapUndoPickerCmd` shared by the arm and the routing case). Discovered a pre-existing gap: the sessions overlay has no such arm, so Enter there is swallowed by the input area — filed as issue #917 (not fixed here; out of slice scope).
+- Validation: failing-first component tests (`model_test.go` — navigation/disabled/Enter/Esc/`EntriesFromMessages` rules; `view_test.go` — order/hints/empty) and model-level flow tests (`undo_command_test.go` — bare `/undo` opens the picker with no POST, Down+Enter issues `{"count":2}`, Esc cancels without HTTP, fetch error stays in the status bar, disabled row unselectable end to end); Slice 3's `TestExecuteUndoCommand_DefaultCount` rewritten as `TestExecuteUndoCommand_BareOpensPicker` (behavior change is deliberate per epic). tmux smoke vs `harnessd`: bare `/undo` shows the picker; Down+Enter on the 2nd-newest trims the viewport to prompt 1 + its answer; on a conversation with a mid-history summary the older prompt renders `(compaction boundary — cannot undo)` and navigation skips it; Esc closes cleanly.
+
 ## 2026-07-21 (ACP Server Mode — Epic #806, Slice 3)
 
 - Prompt turns now stream live output to the editor: `assistant.message.delta` -> `agent_message_chunk`, `assistant.thinking.delta` -> `agent_thought_chunk` (payload field `content`), `tool.call.started` -> `tool_call` (`status: in_progress`, `title` = tool name, `kind` via a tool-name table), `tool.call.completed` -> `tool_call_update` (`completed`, or `failed` when the payload carries `error`; output included as content). `toolCallId` is the harness `call_id`, stable across start/complete.
