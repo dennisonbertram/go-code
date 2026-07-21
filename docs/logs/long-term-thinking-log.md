@@ -1,5 +1,12 @@
 # Long-Term Thinking Log
 
+## 2026-07-19 (Theme System Slice 3 — Epic #810)
+
+- Command intent: Implement only slice 3 of epic #810 — a `/theme` picker overlay that re-scans the themes directory on every open and applies a selection live — on branch `epic/810-theme-system-s3`, strict TDD, push and open a PR without merging.
+- User intent: drop a JSON theme file into `~/.config/harnesscli/themes/`, open `/theme`, see it listed, select it, and watch the TUI restyle without a restart; a broken theme file must never strand the user without a theme.
+- Success definition: themepicker component mirrors profilepicker's pattern; `/theme` registered and wired at the same sites as `/profiles`; re-open after adding a file lists it; Enter resolves via the slice-1 loader and applies via slice-2 `SetTheme` (statusbar restyle proves it); malformed JSON keeps the current theme and sets an error status; `go test ./cmd/harnesscli/... -count=1` green.
+- Guardrails/constraints: slice 3 only — no persistence (slice 4), no docs site/example (slice 5); `themesDir` model field is the test seam so tests never touch the real home directory; picker styling itself mirrors profilepicker and stays outside the themed-component set.
+
 ## 2026-07-19 (Theme System Slice 2 — Epic #810)
 
 - Command intent: Implement only slice 2 of epic #810 — thread the resolved theme through statusbar, diffview, messagebubble, approval overlay, and spinner — on branch `epic/810-theme-system-s2`, strict TDD, push and open a PR without merging.
