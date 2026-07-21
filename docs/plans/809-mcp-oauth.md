@@ -1,18 +1,21 @@
 # Plan: MCP OAuth login flow for remote servers (epic #809)
 
-## Slice 3: OAuth 2.1 + PKCE authorization flow with localhost callback (in implementation)
+## Slice 4: harnesscli mcp login/logout/status and 401 re-auth guidance (in implementation)
 
-- Goal: browser-based login as a library function usable by the CLI (slice 4): discover endpoints, drive the browser, complete the exchange, store tokens, refresh silently.
-- Changes: new `internal/mcp/oauth` package (imports slice 2's `mcp.TokenStore`; no cycle — `internal/mcp` does not import it).
-  - Discovery: parse `WWW-Authenticate` on a 401 probe for `resource_metadata` → fetch protected-resource metadata (RFC 9728, well-known inserted before path, bare-origin retry) → fetch AS metadata (RFC 8414); fallback to well-known probing when the header is absent, and to a co-located AS at the resource origin.
-  - PKCE: S256 verifier/challenge on `crypto/rand`; random state.
-  - Loopback `net/http` listener on `127.0.0.1:0`, path `/callback`, first request wins, ctx-cancellable.
-  - Browser open via `os/exec` (`open`/`xdg-open`/`rundll32`), injectable as `Flow.OpenURL` so tests drive the redirect in-process.
-  - RFC 8707 `resource` parameter on the authorization request.
-  - Dynamic client registration (RFC 7591) when no client ID is configured and the AS advertises `registration_endpoint`; pre-registered client ID via `LoginOptions.ClientID`.
-  - Token exchange + `Refresh(serverName)` using the stored refresh token and recorded client ID (`ClientID` added to `mcp.Token` — additive); un-rotated refresh tokens are preserved; `invalid_grant` maps to `ErrReauthRequired`.
-- Tests (TDD; in-process `httptest` mock AS + mock resource server; no real network/browser/$HOME): full code+PKCE round trip with the browser stubbed (stub GETs the auth URL, mock AS 302s into the loopback), discovery via `WWW-Authenticate`, fallback when the header is absent, dynamic registration, pre-registered ID, missing-both error, state mismatch, AS error redirect, user abort via ctx cancel, token-endpoint error, refresh (success, un-rotated, invalid_grant, no token), PKCE known vector, `resource` param asserted.
-- Acceptance: `go test ./internal/mcp/oauth/... -count=1` green; round trip completes without real network or browser.
+- Goal: user-facing entrypoint; the transport automatically uses stored tokens; auth failures tell the user how to fix them.
+- Changes:
+  - `internal/mcp`: `TokenProviderFunc` + optional `ServerConfig.TokenProvider`; `ClientManager.SetTokenProvider` as the manager-level default injected at lazy-connect (`getConn` → `dialServer`). `httpConn.sendRequest` consults the provider only when no static `Authorization` header is configured; `("", nil)` means send unauthenticated. The 401 error message gains ``run `harnesscli mcp login <server>` `` (still wrapping `ErrUnauthorized`).
+  - `internal/mcp/oauth`: `Flow.TokenProvider()` adapts store + silent refresh into an `mcp.TokenProviderFunc` (expired → `Refresh`; not-found → `("", nil)`; refresh failures surface).
+  - `cmd/harnessd/main.go`: wire `mcpManager.SetTokenProvider((&oauth.Flow{Store: mcp.DefaultTokenStore()}).TokenProvider())` at startup.
+  - `cmd/harnesscli/mcp.go`: `mcp login <server> [--client-id id] [--scope "a b"]` (resolves the server's URL from `~/.harness/config.toml` + `.harness/config.toml` + `HARNESS_MCP_SERVERS`, runs the slice 3 flow), `mcp logout <server>` (idempotent token delete), `mcp status` (per-server auth state: static header / token valid / expired / corrupt / no token, for HTTP servers). New `mcp` case in `dispatch`. Browser opener injectable via package var for tests.
+  - Auth state is reported in the CLI status output (the epic's "or" option); `/v1/mcp/servers` is unchanged.
+- Tests (TDD; temp HOME, in-process mocks, no real browser/network):
+  - `internal/mcp`: 401 error contains `harnesscli mcp login <name>`; provider attaches bearer (end-to-end gated mock); `("", nil)` → no header; static header beats provider; provider error surfaces; `ClientManager.SetTokenProvider` used at lazy connect.
+  - `internal/mcp/oauth`: `Flow.TokenProvider` — valid, expired→refreshed, not-found→empty, invalid_grant→`ErrReauthRequired`.
+  - `cmd/harnesscli`: dispatch routing; login e2e (mock OAuth+MCP, browser stubbed, token stored, then `tools/list` via a manager succeeds with bearer attached); login errors (not configured, stdio); logout idempotent; status reports all states; status with no servers.
+- Acceptance: `go test ./cmd/harnesscli/... ./internal/mcp/... -count=1` green.
+
+## Slice 3: OAuth 2.1 + PKCE authorization flow with localhost callback (implemented, PR #888)
 
 ## Slice 2: file-backed OAuth token store under `~/.harness/mcp/` (implemented, PR #856)
 

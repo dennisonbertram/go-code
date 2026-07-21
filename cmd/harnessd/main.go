@@ -28,6 +28,7 @@ import (
 	htools "go-agent-harness/internal/harness/tools"
 	"go-agent-harness/internal/harness/tools/deferred"
 	"go-agent-harness/internal/mcp"
+	"go-agent-harness/internal/mcp/oauth"
 	"go-agent-harness/internal/networks"
 	om "go-agent-harness/internal/observationalmemory"
 	"go-agent-harness/internal/plugins"
@@ -620,6 +621,9 @@ func runWithSignalsWithDeps(sig <-chan os.Signal, getenv func(string) string, ne
 	// var entries with the same name.
 	mcpManager := mcp.NewClientManager()
 	defer func() { _ = mcpManager.Close() }() // safety-net defer; explicit close is in shutdown sequence below
+	// Attach OAuth tokens from ~/.harness/mcp to HTTP MCP requests, with
+	// silent refresh; static per-server Authorization headers take precedence.
+	mcpManager.SetTokenProvider((&oauth.Flow{Store: mcp.DefaultTokenStore()}).TokenProvider())
 	{
 		// Load config WITHOUT a profile so the global ClientManager only gets
 		// layers 1-3 (user global + project); profile-specific servers are
