@@ -612,10 +612,10 @@ func TestBuildCommandRegistry_SlashCompleteShowsCommands(t *testing.T) {
 		"attach",
 		"cancel",
 		"clear",
+		"compact",
 		"config",
 		"context",
 		"cost",
-		"dashboard",
 	}
 	for _, cmd := range wantVisible {
 		if !strings.Contains(v, cmd) {

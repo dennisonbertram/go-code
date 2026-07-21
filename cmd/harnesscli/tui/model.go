@@ -1992,6 +1992,21 @@ func executeCancelCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	}, false
 }
 
+// executeCompactCommand compacts the active run's context via /compact
+// [instruction] (epic #817). Any args are joined verbatim into a
+// preserve-instruction for the summarizer; the command always requests hybrid
+// mode. Requires an active run.
+func executeCompactCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
+	if !m.runActive || m.RunID == "" {
+		return []tea.Cmd{m.setStatusMsg("Usage: /compact [instruction] — requires an active run")}, false
+	}
+	instruction := strings.TrimSpace(strings.Join(cmd.Args, " "))
+	return []tea.Cmd{
+		m.setStatusMsg("Compacting " + m.RunID + "..."),
+		compactRunCmd(m.config.BaseURL, m.RunID, instruction, m.config.APIKey),
+	}, false
+}
+
 func executeReplayCommand(m *Model, cmd Command) ([]tea.Cmd, bool) {
 	if len(cmd.Args) == 0 || strings.TrimSpace(cmd.Args[0]) == "" {
 		return []tea.Cmd{m.setStatusMsg("Usage: /replay <run-id-or-rollout-path>")}, false
@@ -3549,6 +3564,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			cmds = append(cmds, m.setStatusMsg("Run command finished"))
 		}
+
+	case CompactResultMsg:
+		if msg.Err != "" {
+			cmds = append(cmds, m.setStatusMsg("compact failed: "+msg.Err))
+			return m, tea.Batch(cmds...)
+		}
+		cmds = append(cmds, m.setStatusMsg(fmt.Sprintf("Compacted context — %d messages removed", msg.MessagesRemoved)))
 
 	case SSEEventMsg:
 		if m.dashboard.peekID != "" {

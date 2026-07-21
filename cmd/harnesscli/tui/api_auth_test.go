@@ -18,6 +18,7 @@ package tui
 //	api.go          startRunCmd                    harnessd    yes (newHarnessRequest)
 //	api.go          fetchRunsCmd                    harnessd    yes
 //	api.go          cancelRunCmd                    harnessd    yes
+//	api.go          compactRunCmd                   harnessd    yes
 //	api.go          steerRunCmd                     harnessd    yes
 //	api.go          replayRunCmd                    harnessd    yes
 //	api.go          continueRunCmd                  harnessd    yes
@@ -77,6 +78,12 @@ func harnessAuthCases() []harnessAuthCase {
 			name: "cancelRunCmd",
 			call: func(ts *httptest.Server, apiKey string) any {
 				return cancelRunCmd(ts.URL, "run-1", apiKey)()
+			},
+		},
+		{
+			name: "compactRunCmd",
+			call: func(ts *httptest.Server, apiKey string) any {
+				return compactRunCmd(ts.URL, "run-1", "keep the SQL schema", apiKey)()
 			},
 		},
 		{

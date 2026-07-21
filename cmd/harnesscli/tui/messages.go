@@ -201,6 +201,19 @@ type RunControlResultMsg struct {
 	Err    string
 }
 
+// CompactResultMsg carries the result of a /compact command against the
+// active run (POST /v1/runs/{id}/compact). Mode is the resolved compaction
+// mode and Summary the compaction summary for summarize/hybrid modes (empty
+// for strip); epic #817 slice 4 renders the summary as a transcript block.
+// Err is non-empty on failure.
+type CompactResultMsg struct {
+	RunID           string
+	Mode            string
+	Summary         string
+	MessagesRemoved int
+	Err             string
+}
+
 // SteerAcceptedMsg signals the server accepted a steering message for a run
 // (HTTP 202 from POST /v1/runs/{id}/steer). The steered text is injected as a
 // user message at the next step boundary; the run keeps going.
