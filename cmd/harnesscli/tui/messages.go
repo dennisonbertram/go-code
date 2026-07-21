@@ -243,10 +243,14 @@ type SteerAcceptedMsg struct{ RunID string }
 //     prompt; no HTTP request was issued
 //   - "http"                 — any other non-2xx status
 //   - "transport"            — request build/send/read failure
+//
+// Prompt is the steered text that failed, so the model can match the error to
+// its pending local echo (epic #820 slice 4) and remove it.
 type SteerErrorMsg struct {
-	RunID string
-	Kind  string
-	Err   string
+	RunID  string
+	Kind   string
+	Err    string
+	Prompt string
 }
 
 // statusTickMsg is sent after statusMsgDuration to clear the transient status bar message.
