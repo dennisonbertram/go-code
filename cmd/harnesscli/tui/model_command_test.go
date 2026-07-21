@@ -453,9 +453,9 @@ func TestTUI137_ModelOverlayEnterAtLevel1ClosesAndSetsModel(t *testing.T) {
 // TestTUI137_ModelAppearsInHelpCommand verifies /model appears in /help output.
 func TestTUI137_ModelAppearsInHelpCommand(t *testing.T) {
 	// A taller window is needed so /model is within the help dialog's first
-	// visible page now that /cost and /config have been added to the
-	// (alphabetically-earlier) command set.
-	m := initModel(t, 80, 30)
+	// visible page now that /cost, /config, /compact, and /fork have been added
+	// to the (alphabetically-earlier) command set.
+	m := initModel(t, 80, 40)
 	m = sendSlashCommand(m, "/help")
 
 	v := m.View()
