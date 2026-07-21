@@ -127,7 +127,7 @@ This section covers ONLY slice 2 (branch `epic/813-skill-args-s2`).
 - [x] gofmt + go vet clean.
 - [x] `go test ./internal/skills/... ./internal/harness/tools/ -count=1` green.
 - [x] Update `docs/plans/INDEX.md` (description unchanged; no new file).
-- [ ] Push `epic/813-skill-args-s2` and open PR (no merge).
+- [x] Push `epic/813-skill-args-s2` and open PR (no merge). — PR #862, merged.
 
 ## Risks and Mitigations
 
@@ -136,3 +136,75 @@ This section covers ONLY slice 2 (branch `epic/813-skill-args-s2`).
     slice 5 docs; regex matches only `$<digits>`, never `$<letter>`.
 - Risk: fallback fires when it should not (body uses placeholder via computed string).
   - Mitigation: detection is on the raw body; placeholder-present cases pinned by tests.
+
+---
+
+# Plan: epic #813 slice 3 — named arguments from frontmatter arguments field
+
+This section covers ONLY slice 3 (branch `epic/813-skill-args-s3`).
+
+## Context
+
+- Problem: skills can only reference arguments positionally; kimi-code skills let
+  authors declare named arguments in SKILL.md frontmatter and reference `$<name>`.
+- User impact: multi-argument skills are unreadable (`$0 $1 $2` vs `$target $env`);
+  skills ported from kimi-code fail to expand declared names.
+- Constraints: strict TDD; scoped to `internal/skills`, the `SkillInfo` struct, and
+  the harnessd adapter; no default values or required-arg enforcement (epic defers).
+
+## Scope
+
+- In scope:
+  - `internal/skills/types.go`: `Arguments []string` on `Skill`; `arguments` yaml key
+    on the `frontmatter` struct.
+  - `internal/skills/loader.go`: validate declared names — identifier shape
+    `[A-Za-z_][A-Za-z0-9_]*`, reject reserved `ARGUMENTS`/`WORKSPACE`/`SKILL_DIR`,
+    reject numeric names, reject duplicates — with a clear load error naming the
+    offending entry.
+  - `internal/skills/interpolate.go`: expand `$<declared-name>` via a maximal
+    identifier-run match looked up in vars; unknown `$identifier` text (e.g. shell
+    `$HOME`) stays literal; `hasArgPlaceholder` now recognizes declared names.
+  - `internal/skills/hook.go` `buildVars`: bind declared names to tokens in
+    declaration order; unbound names expand empty.
+  - `internal/harness/tools/types.go` + `cmd/harnessd/main.go`: surface `Arguments`
+    on `SkillInfo` (`json:"arguments,omitempty"`) via `skillListerAdapter`.
+- Out of scope: TUI `skill:` namespace (slice 4), user docs (slice 5), default
+  values / required enforcement.
+
+## Documentation Contract
+
+- Feature status: `in implementation`
+- Public docs affected: none (slice 5 documents the `arguments` field).
+
+## Test Plan (TDD)
+
+- New failing tests first:
+  - `loader_test.go`: valid `arguments` parse; invalid identifier, numeric name,
+    reserved name, duplicate — each fails load naming the offender.
+  - `hook_test.go`: `buildVars` named binding order + unbound-empty; acceptance
+    `/deploy prod eu` → `$target`=prod `$env`=eu; quoted token binds one name;
+    named ref suppresses the ARGUMENTS fallback; undeclared `$HOME` stays literal.
+  - `resolver_test.go`: full-load acceptance for `arguments: [target, env]`.
+  - `interpolate_test.go`: declared name expands; undeclared `$foobar` literal.
+  - `cmd/harnessd/main_test.go`: adapter surfaces `Arguments` on `SkillInfo`.
+- Regression guards: fallback still fires when body has no placeholder even if the
+  skill declares arguments; `$ARGUMENTS`/`$WORKSPACE`/`$SKILL_DIR` behavior pinned
+  by existing tests.
+
+## Implementation Checklist
+
+- [x] Define acceptance criteria in tests.
+- [x] Write failing tests first (watch them fail).
+- [x] Implement types + loader validation.
+- [x] Implement named expansion + binding + adapter surfacing.
+- [x] gofmt + go vet clean.
+- [x] `go test ./internal/skills/... ./internal/harness/tools/ ./cmd/harnessd/ -count=1` green.
+- [ ] Push `epic/813-skill-args-s3` and open PR (no merge).
+
+## Risks and Mitigations
+
+- Risk: naive named replacement mangles shell snippets (`$HOME`, `$PATH`) in bodies.
+  - Mitigation: identifier-run regex + vars-membership lookup; unknown identifiers
+    stay literal; pinned by test.
+- Risk: `$env` clobbering `$env2` via prefix replacement.
+  - Mitigation: maximal identifier run matched as one placeholder; pinned by test.

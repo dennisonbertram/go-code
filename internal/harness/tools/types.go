@@ -498,6 +498,7 @@ type SkillInfo struct {
 	Name         string   `json:"name"`
 	Description  string   `json:"description"`
 	ArgumentHint string   `json:"argument_hint,omitempty"`
+	Arguments    []string `json:"arguments,omitempty"`
 	AllowedTools []string `json:"allowed_tools,omitempty"`
 	Source       string   `json:"source"`
 	Context      string   `json:"context,omitempty"`

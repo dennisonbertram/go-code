@@ -97,19 +97,28 @@ func buildVars(skill *Skill, args, workspace string) map[string]string {
 	for i, field := range fields {
 		vars[fmt.Sprintf("$%d", i)] = field
 	}
+	// Bind named arguments declared in frontmatter to tokens in declaration
+	// order. Names with no corresponding token expand empty.
+	for i, name := range skill.Arguments {
+		if i < len(fields) {
+			vars["$"+name] = fields[i]
+		} else {
+			vars["$"+name] = ""
+		}
+	}
 	return vars
 }
 
 // expandBody interpolates the skill body with the given arguments and
 // workspace, applying the shared expansion contract used by every invocation
 // path (AutoInvokeHook and Resolver.ResolveSkill): when the body references
-// no argument placeholder ($ARGUMENTS, $N, or — from slice 3 — a declared
-// named argument) and the raw args are non-empty, the raw args are appended
-// verbatim as a trailing "ARGUMENTS: <args>" line instead of being dropped.
+// no argument placeholder ($ARGUMENTS, $N, or a declared named argument) and
+// the raw args are non-empty, the raw args are appended verbatim as a
+// trailing "ARGUMENTS: <args>" line instead of being dropped.
 func expandBody(skill *Skill, args, workspace string) string {
 	vars := buildVars(skill, args, workspace)
 	content := Interpolate(skill.Body, vars)
-	if args != "" && !hasArgPlaceholder(skill.Body) {
+	if args != "" && !hasArgPlaceholder(skill) {
 		content += "\nARGUMENTS: " + args
 	}
 	return content

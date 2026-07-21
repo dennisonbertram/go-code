@@ -110,6 +110,24 @@ func TestInterpolate(t *testing.T) {
 			vars: map[string]string{"$1": "one", "$10": "ten"},
 			want: "oneabc and ten",
 		},
+		{
+			name: "declared named argument expands",
+			body: "Deploy $target to $env",
+			vars: map[string]string{"$target": "prod", "$env": "eu"},
+			want: "Deploy prod to eu",
+		},
+		{
+			name: "undeclared dollar names stay literal",
+			body: "Home=$HOME Target=$target Longer=$targets",
+			vars: map[string]string{"$target": "prod"},
+			want: "Home=$HOME Target=prod Longer=$targets",
+		},
+		{
+			name: "named argument unbound expands empty",
+			body: "Deploy $target to [$env]",
+			vars: map[string]string{"$target": "prod", "$env": ""},
+			want: "Deploy prod to []",
+		},
 	}
 
 	for _, tt := range tests {

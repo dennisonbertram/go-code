@@ -2110,6 +2110,7 @@ version: 1
 argument-hint: "<arg>"
 allowed-tools:
   - bash
+arguments: [target, env]
 ---
 Hello $ARGUMENTS`
 	if err := os.WriteFile(skillDir+"/SKILL.md", []byte(skillContent), 0o644); err != nil {
@@ -2139,6 +2140,9 @@ Hello $ARGUMENTS`
 	}
 	if len(info.AllowedTools) != 1 || info.AllowedTools[0] != "bash" {
 		t.Fatalf("AllowedTools: got %v", info.AllowedTools)
+	}
+	if len(info.Arguments) != 2 || info.Arguments[0] != "target" || info.Arguments[1] != "env" {
+		t.Fatalf("Arguments: got %v", info.Arguments)
 	}
 }
 

@@ -31,6 +31,7 @@ type Skill struct {
 	AutoInvoke   bool         // default: true
 	AllowedTools []string     // default: nil (all tools)
 	ArgumentHint string       // optional
+	Arguments    []string     // optional named arguments, bound to tokens in declaration order
 	Source       SkillSource  // "global" or "local"
 	Triggers     []string     // extracted from description "Trigger: ..."
 	Context      SkillContext // "conversation" (default) or "fork"
@@ -50,6 +51,7 @@ type frontmatter struct {
 	AutoInvoke   *bool    `yaml:"auto-invoke"`
 	AllowedTools []string `yaml:"allowed-tools"`
 	ArgumentHint string   `yaml:"argument-hint"`
+	Arguments    []string `yaml:"arguments"`
 	Context      string   `yaml:"context"`
 	Agent        string   `yaml:"agent"`
 	Verified     bool     `yaml:"verified"`
