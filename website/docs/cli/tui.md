@@ -154,6 +154,7 @@ Type `/` to open the autocomplete dropdown. `Tab` completes to the common prefix
 | `/init [confirm]` | Generate an `AGENTS.md` for the current workspace via a harness run. If `AGENTS.md` already exists, run `/init confirm` to overwrite it |
 | `/add-dir [path]` | Attach an extra directory to the session so runs can read/work in it. Bare `/add-dir` lists attached directories; `/add-dir remove <path>` detaches one. See [Extra directories](#extra-directories-add-dir) |
 | `/new` | Start a fresh conversation (resets conversation ID) |
+| `/fork` | Fork the current session into a new conversation with the full history, and switch into the copy (see [Forking a session](#forking-a-session-fork)) |
 | `/search <query>` | Search the current session transcript |
 | `/history <query>` | Search across stored session metadata |
 | `/export` | Export the conversation to a Markdown file |
@@ -267,6 +268,28 @@ Sessions are persisted to `~/.config/harnesscli/sessions.json`.
 |---|---|
 | `/sessions` | Opens a picker of saved sessions. Press `D` to delete one. |
 | `/new` | Resets the conversation ID and clears the viewport, starting a fresh session. |
+| `/fork` | Duplicates the current session under a new conversation ID and switches into the copy. |
+
+---
+
+## Forking a session (`/fork`)
+
+`/fork` duplicates the live conversation — **full message history included** — into a new, server-minted conversation ID, then switches you into the copy. Use it to explore an alternative direction mid-task (a different prompt, a different plan) without abandoning or polluting the original session.
+
+Semantics:
+
+- **Snapshot at fork time.** The fork contains the full message history as it is at the moment you run `/fork`; when the server's in-memory view is newer than the last persisted state, the fork captures the newer view. From then on the two conversations **diverge independently** — turns in one never appear in the other.
+- **You land in the fork.** The status bar confirms with `Forked <src> → <new>; you are now in the fork`. The transcript stays in place because the fork holds identical history. The original session is untouched and remains resumable via `/sessions`.
+- **Session store.** The fork is registered in `~/.config/harnesscli/sessions.json` with a `forked from <src-id>` hint, so it survives a TUI restart.
+- **Workspace is shared.** Only messages are copied — the fork keeps the same workspace path. File state, rewind points, and the pinned flag are **not** carried over, and token/cost counters start at zero for the fork.
+- **Errors keep you put.** When the fork fails (unknown conversation, server without conversation persistence, network error), the status bar shows the server error and you stay in the current conversation.
+- With no active conversation (before the first message), `/fork` shows a "send a message first" hint instead of calling the server.
+
+<Callout type="info">
+`/fork` always copies the **entire current history**. To branch a *recorded* run from a specific mid-history step, use `harnesscli replay -mode fork -fork-step N` instead — that is a different feature with its own semantics.
+</Callout>
+
+Under the hood `/fork` calls `POST /v1/conversations/{id}/fork` — see the [HTTP route reference](/docs/reference/http-routes).
 
 ---
 
