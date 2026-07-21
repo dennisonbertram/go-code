@@ -306,6 +306,11 @@ type Model struct {
 	// <workspace>/AGENTS.md (see init_agents.go).
 	pendingInitAgentsMd bool
 
+	// extraDirs holds the absolute paths of additional directories the user
+	// attached to this session via /add-dir. They are sent on every run as
+	// extra_dirs so the server's file-tool confinement grants them.
+	extraDirs []string
+
 	// Search overlay state (for /search and /history commands).
 	searchResults     []SearchResult
 	searchQuery       string
@@ -689,6 +694,17 @@ func (m Model) SelectedProfile() string {
 // The returned pointer is live — callers can inspect it after updates.
 func (m Model) SessionStore() *SessionStore {
 	return m.sessionStore
+}
+
+// ExtraDirs returns a copy of the extra directories attached to this session
+// via /add-dir (for testing).
+func (m Model) ExtraDirs() []string {
+	if m.extraDirs == nil {
+		return nil
+	}
+	cp := make([]string, len(m.extraDirs))
+	copy(cp, m.extraDirs)
+	return cp
 }
 
 // gatewayIndex returns the index of the gateway option with the given ID,
@@ -3347,7 +3363,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		// Fire off the run against the harness API with the expanded prompt.
 		effModel, effProvider := m.effectiveModelAndProvider()
-		cmds = append(cmds, startRunCmd(m.config.BaseURL, expandedValue, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, m.config.Workspace, m.config.APIKey, runAttachments, m.planMode))
+		cmds = append(cmds, startRunCmd(m.config.BaseURL, expandedValue, m.conversationID, effModel, effProvider, m.selectedReasoningEffort, m.selectedProfile, m.config.Workspace, m.config.APIKey, runAttachments, m.extraDirs, m.planMode))
 		// The attachments were handed to the run: consume the chips and their
 		// temp files.
 		if runAttachments != nil {

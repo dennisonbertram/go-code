@@ -68,6 +68,10 @@ type runCreateRequest struct {
 	// name in prompt_profile makes the server reject the run with HTTP 400.
 	ProfileName   string `json:"profile,omitempty"`
 	WorkspacePath string `json:"workspace_path,omitempty"`
+	// ExtraDirs carries session directories added via /add-dir; they map to
+	// harness.RunRequest.ExtraDirs so file-tool confinement grants them in
+	// addition to the workspace root.
+	ExtraDirs []string `json:"extra_dirs,omitempty"`
 	// AllowFallback lets the server degrade to its default provider when the
 	// requested model's provider can't be resolved, instead of hard-failing
 	// the run. Always true from the TUI.
@@ -139,7 +143,9 @@ type RemoteTask struct {
 // restrictions and isolation.
 // attachments carries the base64-encoded image blocks from the input area's
 // chips (nil for text-only prompts).
-func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile, workspace, apiKey string, attachments []runAttachment, planMode ...bool) tea.Cmd {
+// extraDirs lists additional directory roots the run may read/work in (see
+// /add-dir); nil or empty omits the field.
+func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffort, profile, workspace, apiKey string, attachments []runAttachment, extraDirs []string, planMode ...bool) tea.Cmd {
 	enabled := len(planMode) > 0 && planMode[0]
 	return func() tea.Msg {
 		body, _ := json.Marshal(runCreateRequest{
@@ -151,6 +157,7 @@ func startRunCmd(baseURL, prompt, conversationID, model, provider, reasoningEffo
 			Attachments:     attachments,
 			ProfileName:     profile,
 			WorkspacePath:   workspace,
+			ExtraDirs:       extraDirs,
 			AllowFallback:   true,
 			PlanMode:        enabled,
 		})

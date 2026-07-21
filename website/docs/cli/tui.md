@@ -152,6 +152,7 @@ Type `/` to open the autocomplete dropdown. `Tab` completes to the common prefix
 | `/sessions` | Browse and resume past sessions |
 | `/title [text]` | Set or show the current session's title (`/title clear` removes it). Shown in the status bar and the `/sessions` picker, persisted across restarts |
 | `/init [confirm]` | Generate an `AGENTS.md` for the current workspace via a harness run. If `AGENTS.md` already exists, run `/init confirm` to overwrite it |
+| `/add-dir [path]` | Attach an extra directory to the session so runs can read/work in it. Bare `/add-dir` lists attached directories; `/add-dir remove <path>` detaches one. See [Extra directories](#extra-directories-add-dir) |
 | `/new` | Start a fresh conversation (resets conversation ID) |
 | `/search <query>` | Search the current session transcript |
 | `/history <query>` | Search across stored session metadata |
@@ -170,6 +171,17 @@ Type `/` to open the autocomplete dropdown. `Tab` completes to the common prefix
 | `/help` | Show the help dialog |
 | `/clear` | Clear the conversation history and viewport |
 | `/quit` | Quit the TUI |
+
+---
+
+## Extra directories (`/add-dir`)
+
+`/add-dir <path>` attaches an additional directory to the session. Attached directories are sent on every run as `extra_dirs` (`POST /v1/runs`), and the server's file-tool confinement (`read`, `write`, `edit`, `ls`, `grep`, …) permits paths under them in addition to the workspace root. Paths outside the workspace root and all attached directories stay denied.
+
+- Relative paths resolve against the session workspace.
+- Bare `/add-dir` lists the attached directories; `/add-dir remove <path>` detaches one. (`remove` is a subcommand only when followed by a path, so a directory literally named `remove` can still be added.)
+- The list is session-scoped — it is not persisted across restarts.
+- Current limits: the `bash` tool's command sandbox and `glob` still confine to the primary workspace root only; the server validates every entry (absolute path to an existing directory) and rejects the run with HTTP 400 otherwise.
 
 ---
 

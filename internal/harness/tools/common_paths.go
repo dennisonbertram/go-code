@@ -261,13 +261,15 @@ func canonicalizePathAllowingMissing(absPath string) (string, error) {
 // ResolveWorkspacePathConfined resolves relativePath against workspaceRoot
 // exactly like ResolveWorkspacePath, then additionally enforces
 // ConfineWorkspacePath using the effective sandbox scope (context override,
-// falling back to defaultScope). This is the single call every path-resolving
-// tool handler should use going forward.
+// falling back to defaultScope) and any per-run extra allowed roots carried
+// on the context (WithExtraAllowedRoots). This is the single call every
+// path-resolving tool handler should use going forward.
 func ResolveWorkspacePathConfined(ctx context.Context, workspaceRoot, relativePath string, defaultScope SandboxScope) (string, error) {
 	absPath, err := ResolveWorkspacePath(workspaceRoot, relativePath)
 	if err != nil {
 		return "", err
 	}
 	scope := EffectiveSandboxScope(ctx, defaultScope)
-	return ConfineWorkspacePath(scope, workspaceRoot, nil, absPath)
+	extraRoots, _ := ExtraAllowedRootsFromContext(ctx)
+	return ConfineWorkspacePath(scope, workspaceRoot, extraRoots, absPath)
 }

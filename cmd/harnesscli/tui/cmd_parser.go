@@ -232,6 +232,14 @@ func builtinCommandEntries() []CommandEntry {
 			Execute: executeInitCommand,
 		},
 		{
+			Name:        "add-dir",
+			Description: "Attach an extra directory to the session (/add-dir [remove] <path>)",
+			Handler: func(cmd Command) CommandResult {
+				return CommandResult{Status: CmdOK}
+			},
+			Execute: executeAddDirCommand,
+		},
+		{
 			Name:        "rewind",
 			Description: "Choose and confirm a destructive session rewind",
 			Handler:     func(cmd Command) CommandResult { return CommandResult{Status: CmdOK} },

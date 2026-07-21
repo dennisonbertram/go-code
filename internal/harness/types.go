@@ -428,6 +428,13 @@ type RunRequest struct {
 	// named in ProfileName. Explicit WorkspaceType always takes precedence over
 	// the profile's IsolationMode setting.
 	WorkspaceType string `json:"workspace_type,omitempty"`
+	// ExtraDirs grants the run read/work access to additional directory roots
+	// beyond the workspace root (TUI /add-dir). Each entry must be an absolute
+	// path to an existing directory; violations are rejected synchronously at
+	// StartRun time. Entries are enforced only for file-tool path confinement
+	// (ConfineWorkspacePath): the bash tool's command sandbox and glob still
+	// confine to the primary workspace root.
+	ExtraDirs []string `json:"extra_dirs,omitempty"`
 	// ProviderName explicitly selects which catalog provider to use for this run.
 	// When set, overrides the automatic provider resolution from the model name.
 	// Must match a provider key in the model catalog (e.g. "openai", "anthropic").

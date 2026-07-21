@@ -1,5 +1,6 @@
 Command Registry - 120x40
 ------------------------------------------------------------
+/add-dir — Attach an extra directory to the session (/add-dir [remove] <path>)
 /attach — Attach file context with @path tokens
 /cancel — Cancel a harness run
 /clear — Clear conversation history
