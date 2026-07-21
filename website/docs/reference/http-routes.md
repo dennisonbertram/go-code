@@ -91,6 +91,7 @@ Runs are the core unit of execution in `harnessd`. A run accepts a prompt, invok
 | `GET` | `/v1/conversations/{id}/runs` | `runs:read` | All runs for a conversation. |
 | `GET` | `/v1/conversations/{id}/export` | `runs:read` | JSONL (ndjson) export of all messages. |
 | `POST` | `/v1/conversations/{id}/compact` | `runs:write` | Replace early messages with a summary. Body: `{"keep_from_step":N,"summary":"…","role":"system"}`. Auto-generates summary via LLM when `summary` is omitted. |
+| `POST` | `/v1/conversations/{id}/fork` | `runs:write` | Duplicate the conversation — full message history included — under a server-minted ID. No body. Returns `{"conversation_id":"…","forked_from":"…","message_count":N}`. The fork inherits the source's workspace and tenant (cross-tenant requests are rejected with 404); pinned flag and token/cost counters start at zero. Works for persisted conversations and ones held only in server memory (mid-run), capturing the latest in-memory view. 404 unknown source; 405 for non-POST; 501 when conversation persistence is not configured. Afterwards the two conversations diverge independently. |
 | `POST` | `/v1/conversations/cleanup` | `runs:write` | Bulk-delete old conversations. Body: `{"max_age_days":30}`. Returns `{"deleted":N}`. |
 | `DELETE` | `/v1/conversations/{id}` | `runs:write` | Delete a conversation. |
 

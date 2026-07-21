@@ -1,6 +1,35 @@
 # Plan: /fork — fork live conversations (epic #816)
 
-## Slice 3: `feat(harnesscli): /fork TUI command` (branch epic/816-session-fork-s3)
+## Slice 4: `docs(cli): document /fork command and fork endpoint` (branch epic/816-session-fork-s4)
+
+### Context
+
+- Problem: slices 1–3 shipped the store primitive, endpoint, and TUI command; the public docs do not mention either surface.
+- User impact: users cannot discover `/fork` semantics or the endpoint contract without reading code.
+- Constraints: docs-only; anti-ghost-feature rule — every documented behavior verified against the merged implementation (`cmd/harnesscli/tui` fork command, `internal/server` fork endpoint).
+
+### Scope
+
+- In scope:
+  - `website/docs/cli/tui.md` — `/fork` row in the slash-command table + a "Forking a session" subsection (full-history copy at fork time, independent divergence, shared workspace, session-store entry, error behavior, distinction from `harnesscli replay -mode fork -fork-step`).
+  - `website/docs/reference/http-routes.md` — `POST /v1/conversations/{id}/fork` row (scope, request/response, 404/405/501, tenant guard).
+  - `docs/plans/INDEX.md` — refresh the now-stale "slice-1" description of this plan.
+- Out of scope: code changes; pre-existing doc drift unrelated to fork (e.g. cleanup-route scope, `?token=` note).
+
+### Verification
+
+- `cd website && npm run build` succeeds; both pages render the new entries.
+
+### Checklist
+
+- [x] tui.md `/fork` documented (table row + semantics section; verified against merged TUI implementation).
+- [x] http-routes.md fork endpoint documented (verified against merged endpoint).
+- [x] Website build green (`npm run build` → SUCCESS; both built pages contain the new entries).
+- [x] Plan/index maintenance; commit, push, PR.
+
+---
+
+## Slice 3: `feat(harnesscli): /fork TUI command` (merged via PR #883)
 
 ### Context
 
