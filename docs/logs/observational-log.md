@@ -2,6 +2,27 @@
 
 Use this file for observations about system behavior without immediately prescribing code changes.
 
+## 2026-07-31 (TUI SSE Envelope Identity)
+
+- Lifecycle observation: run identity alone is insufficient for asynchronous
+  pending-input responses because one run can resume or enter a newer waiting
+  call before an earlier GET completes. The stable acceptance key is the
+  active run, originating call ID, response call ID, and model generation.
+- Test observation: a blocked localhost handler makes both races deterministic:
+  release the response only after resume, or let a second request finish before
+  releasing the first. Neither test depends on scheduler timing.
+- Wire observation: harness run identity is top-level event-envelope metadata;
+  AskUserQuestion payload data contains the call identity, not a duplicate run
+  ID.
+- Testing observation: model-only tests that construct payload bytes can pass
+  while the production bridge drops envelope metadata. Client acceptance tests
+  for lifecycle events must start at the real SSE envelope boundary.
+- Ownership observation: replay and live delivery share `decodeSSE`, so keeping
+  run identity on the decoded message fixes both paths without payload mutation.
+- Verification observation: the same localhost fixture can prove rendered
+  overlay text, answer transport, resume, and continued transcript without
+  replacing Bubble Tea's production model or SSE bridge with a test double.
+
 ## 2026-07-30 (Scheduled Conversation Continuation Re-entry)
 
 - Native GUI observation: while Chat stayed visible, a later cron recurrence

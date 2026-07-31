@@ -23,6 +23,7 @@ type SSEEventMsg struct {
 	EventType string
 	Raw       json.RawMessage
 	ID        string
+	RunID     string
 }
 
 // SSEErrorMsg signals a stream read/parse error.

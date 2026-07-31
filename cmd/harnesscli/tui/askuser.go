@@ -41,10 +41,12 @@ type AskUserQuestion struct {
 // AskUserPendingMsg is sent to the model when pending questions have been
 // fetched from GET /v1/runs/{id}/input and are ready to display.
 type AskUserPendingMsg struct {
-	RunID      string
-	CallID     string
-	Questions  []AskUserQuestion
-	DeadlineAt time.Time
+	RunID         string
+	WaitingCallID string
+	Generation    uint64
+	CallID        string
+	Questions     []AskUserQuestion
+	DeadlineAt    time.Time
 }
 
 // AskUserSubmittedMsg is sent when the POST /v1/runs/{id}/input succeeds.
@@ -68,7 +70,10 @@ type AskUserTimeoutMsg struct {
 // askUserFetchErrorMsg is sent when GET /v1/runs/{id}/input fails.
 // This is unexported — it is handled inside the model to set a status message.
 type askUserFetchErrorMsg struct {
-	err string
+	runID         string
+	waitingCallID string
+	generation    uint64
+	err           string
 }
 
 // ─── Ask User State (stored on Model) ────────────────────────────────────────
@@ -79,6 +84,7 @@ type askUserState struct {
 	active     bool
 	runID      string
 	callID     string
+	generation uint64
 	questions  []AskUserQuestion
 	deadlineAt time.Time
 	// qIdx is the index of the question currently displayed (for multi-question sets).
@@ -91,20 +97,28 @@ type askUserState struct {
 
 // fetchAskUserPendingCmd fetches the pending AskUserQuestion for the given runID
 // via GET /v1/runs/{id}/input and returns an AskUserPendingMsg or askUserFetchErrorMsg.
-func fetchAskUserPendingCmd(baseURL, runID, apiKey string) tea.Cmd {
+func fetchAskUserPendingCmd(baseURL, runID, waitingCallID string, generation uint64, apiKey string) tea.Cmd {
 	return func() tea.Msg {
+		fetchError := func(err string) askUserFetchErrorMsg {
+			return askUserFetchErrorMsg{
+				runID:         runID,
+				waitingCallID: waitingCallID,
+				generation:    generation,
+				err:           err,
+			}
+		}
 		fetchURL := strings.TrimRight(baseURL, "/") + "/v1/runs/" + url.PathEscape(runID) + "/input"
 		req, err := newHarnessRequest(context.Background(), http.MethodGet, fetchURL, nil, apiKey)
 		if err != nil {
-			return askUserFetchErrorMsg{err: fmt.Sprintf("fetch pending input: %s", err.Error())}
+			return fetchError(fmt.Sprintf("fetch pending input: %s", err.Error()))
 		}
 		resp, err := httpClientWithTimeout.Do(req)
 		if err != nil {
-			return askUserFetchErrorMsg{err: fmt.Sprintf("fetch pending input: %s", err.Error())}
+			return fetchError(fmt.Sprintf("fetch pending input: %s", err.Error()))
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != http.StatusOK {
-			return askUserFetchErrorMsg{err: fmt.Sprintf("fetch pending input: HTTP %d", resp.StatusCode)}
+			return fetchError(fmt.Sprintf("fetch pending input: HTTP %d", resp.StatusCode))
 		}
 
 		// Parse the AskUserQuestionPending payload from the server.
@@ -115,13 +129,15 @@ func fetchAskUserPendingCmd(baseURL, runID, apiKey string) tea.Cmd {
 			DeadlineAt time.Time         `json:"deadline_at"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-			return askUserFetchErrorMsg{err: fmt.Sprintf("decode pending input: %s", err.Error())}
+			return fetchError(fmt.Sprintf("decode pending input: %s", err.Error()))
 		}
 		return AskUserPendingMsg{
-			RunID:      payload.RunID,
-			CallID:     payload.CallID,
-			Questions:  payload.Questions,
-			DeadlineAt: payload.DeadlineAt,
+			RunID:         payload.RunID,
+			WaitingCallID: waitingCallID,
+			Generation:    generation,
+			CallID:        payload.CallID,
+			Questions:     payload.Questions,
+			DeadlineAt:    payload.DeadlineAt,
 		}
 	}
 }

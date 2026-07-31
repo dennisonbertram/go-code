@@ -31,13 +31,16 @@ func TestTUI009_MsgTypeCoverage(t *testing.T) {
 
 func TestTUI009_SSEEventMsgRoundTrip(t *testing.T) {
 	payload := json.RawMessage(`{"delta":"hello world"}`)
-	orig := tui.SSEEventMsg{EventType: "assistant.message.delta", Raw: payload}
+	orig := tui.SSEEventMsg{EventType: "assistant.message.delta", Raw: payload, RunID: "run-1"}
 	// Verify fields preserved
 	if orig.EventType != "assistant.message.delta" {
 		t.Error("EventType not preserved")
 	}
 	if string(orig.Raw) != `{"delta":"hello world"}` {
 		t.Errorf("Raw not preserved: %s", orig.Raw)
+	}
+	if orig.RunID != "run-1" {
+		t.Errorf("RunID not preserved: %s", orig.RunID)
 	}
 }
 

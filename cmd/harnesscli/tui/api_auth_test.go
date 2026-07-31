@@ -155,7 +155,7 @@ func harnessAuthCases() []harnessAuthCase {
 		{
 			name: "fetchAskUserPendingCmd",
 			call: func(ts *httptest.Server, apiKey string) any {
-				return fetchAskUserPendingCmd(ts.URL, "run-1", apiKey)()
+				return fetchAskUserPendingCmd(ts.URL, "run-1", "call-1", 1, apiKey)()
 			},
 		},
 		{

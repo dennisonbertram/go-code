@@ -290,6 +290,7 @@ func nonRetryableSSEError(status int, body []byte) error {
 
 type sseEnvelope struct {
 	Type    string          `json:"type"`
+	RunID   string          `json:"run_id"`
 	Payload json.RawMessage `json:"payload"`
 }
 
@@ -313,7 +314,7 @@ func decodeSSE(event, data, id string) tea.Msg {
 	}
 	// Unknown event types are forwarded as SSEEventMsg so that consumers
 	// can inspect EventType and Raw. No silent discard.
-	return SSEEventMsg{EventType: env.Type, Raw: env.Payload, ID: id}
+	return SSEEventMsg{EventType: env.Type, Raw: env.Payload, ID: id, RunID: env.RunID}
 }
 
 // toolDeltaCallID extracts the call_id field from a tool.output.delta

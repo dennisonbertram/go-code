@@ -381,7 +381,8 @@ type Model struct {
 
 	// askUser holds the state for an in-progress AskUserQuestion interaction.
 	// askUser.active is true when the overlay is shown.
-	askUser askUserState
+	askUser           askUserState
+	askUserGeneration uint64
 
 	// toolApproval holds the state for an in-progress tool-approval decision.
 	// toolApproval.active is true when the overlay is shown.
@@ -4396,17 +4397,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.costDisplay = m.costDisplay.Update(costSnapshotFromModel(&m))
 			}
 		case "run.waiting_for_user":
-			// Extract run_id from the event payload, then fetch pending questions.
+			// Run identity belongs to the SSE envelope; the payload owns only
+			// event-specific fields such as call_id.
 			var p struct {
-				RunID  string `json:"run_id"`
 				CallID string `json:"call_id"`
 			}
-			if err := json.Unmarshal(msg.Raw, &p); err == nil && p.RunID != "" {
-				m.askUser = askUserState{active: true, runID: p.RunID, callID: p.CallID}
-				cmds = append(cmds, fetchAskUserPendingCmd(m.config.BaseURL, p.RunID, m.config.APIKey))
+			if err := json.Unmarshal(msg.Raw, &p); err == nil && msg.RunID != "" && p.CallID != "" {
+				m.askUserGeneration++
+				m.askUser = askUserState{
+					active:     true,
+					runID:      msg.RunID,
+					callID:     p.CallID,
+					generation: m.askUserGeneration,
+				}
+				cmds = append(cmds, fetchAskUserPendingCmd(
+					m.config.BaseURL,
+					msg.RunID,
+					p.CallID,
+					m.askUserGeneration,
+					m.config.APIKey,
+				))
 			}
 		case "run.resumed":
-			// Dismiss the ask-user overlay when the run resumes.
+			// Dismiss the ask-user overlay and invalidate any pending GET.
+			m.askUserGeneration++
 			m.askUser = askUserState{}
 		case "steering.received":
 			// Server-confirmed steering injection (harness drainSteering): the
@@ -4515,13 +4529,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case AskUserPendingMsg:
 		// Pending questions fetched — populate the overlay and start deadline timer.
-		// Accept both when already activated by run.waiting_for_user and when
-		// delivered directly (e.g. in tests or future code paths).
-		if (!m.askUser.active || m.askUser.runID == msg.RunID) && len(msg.Questions) > 0 {
+		// A late result must not resurrect a resumed wait or overwrite a newer
+		// call in the same run.
+		if m.askUser.active &&
+			m.askUser.runID == msg.RunID &&
+			m.askUser.callID == msg.WaitingCallID &&
+			m.askUser.callID == msg.CallID &&
+			m.askUser.generation == msg.Generation &&
+			len(msg.Questions) > 0 {
 			m.askUser = askUserState{
 				active:      true,
 				runID:       msg.RunID,
 				callID:      msg.CallID,
+				generation:  msg.Generation,
 				questions:   msg.Questions,
 				deadlineAt:  msg.DeadlineAt,
 				selectedIdx: 0,
@@ -4559,9 +4579,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case askUserFetchErrorMsg:
-		// Failed to fetch pending input — show error and clear overlay.
-		m.askUser = askUserState{}
-		cmds = append(cmds, m.setStatusMsg("fetch input failed: "+msg.err))
+		// A stale failure from a resumed or superseded wait is irrelevant.
+		if m.askUser.active &&
+			m.askUser.runID == msg.runID &&
+			m.askUser.callID == msg.waitingCallID &&
+			m.askUser.generation == msg.generation {
+			m.askUser = askUserState{}
+			cmds = append(cmds, m.setStatusMsg("fetch input failed: "+msg.err))
+		}
 
 	case ModelsFetchedMsg:
 		currentStarred := m.modelSwitcher.StarredIDs()

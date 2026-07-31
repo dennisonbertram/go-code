@@ -1,5 +1,27 @@
 # System Log
 
+## 2026-07-31 (TUI Run-Event Identity Boundary — Issue #1058)
+
+- System/component: run-scoped SSE envelope, TUI `decodeSSE`/`SSEEventMsg`,
+  `Model.Update`, and AskUserQuestion GET/POST input commands.
+- Source of truth: `run_id` belongs to the event envelope; event-specific
+  fields remain in `payload`.
+- Intended flow: decode envelope metadata once -> waiting handler uses the
+  decoded run ID -> GET pending input -> visible overlay -> POST answer ->
+  `run.resumed` and later assistant/terminal events continue on the same bridge.
+- Lifecycle: initial delivery and `Last-Event-ID` replay use the same decoder.
+- Security: existing SSE and input bearer authentication is unchanged; answers
+  and credentials are not logged.
+- Failure boundary: losing envelope identity prevents the first input GET even
+  when the server broker, pending state, answer endpoint, and persistence work.
+- Implemented boundary: `SSEEventMsg.RunID` carries envelope identity for every
+  non-terminal decoded event; `Raw` remains the unmodified event payload.
+- Wait correlation: each waiting event advances a model-owned generation and
+  launches GET with the envelope run ID plus payload call ID. Success and error
+  messages are ignored unless that exact run/call/generation is still active;
+  successful payload call ID must also match. Resume invalidates the generation
+  before clearing the overlay, and a newer wait supersedes the prior one.
+
 ## 2026-07-30 (Conversation Event Replay and GUI Reconciliation)
 
 - System/components: `store.ConversationEventReader`, the memory and SQLite run
