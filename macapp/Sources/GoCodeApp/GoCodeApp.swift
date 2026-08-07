@@ -38,12 +38,19 @@ struct GoCodeApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("GoCode") {
+        // Empty title: the app's identity is a sidebar header row now, the
+        // way the reference does it. A window title here would reserve a
+        // second chrome band purely to repeat it.
+        WindowGroup("") {
             AppShell(
                 initialWorkspace: Self.initialWorkspace,
                 externalBaseURL: Self.externalBaseURL,
                 initialPrompt: Self.environment["GOCODE_INITIAL_PROMPT"])
         }
-        .windowToolbarStyle(.unified)
+        // Hidden. With the header owning its own controls there is no toolbar
+        // left to displace, which is what defeated this the first time. The
+        // system band was pure overhead: 52pt above a 40pt header, for a
+        // title the sidebar now carries.
+        .windowStyle(.hiddenTitleBar)
     }
 }

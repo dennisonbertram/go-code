@@ -5,7 +5,11 @@ import SwiftUI
 enum Layout {
     static let appMinimumWidth: CGFloat = 1_040
     static let appMinimumHeight: CGFloat = 600
-    static let railWidth: CGFloat = 220
+    /// 310, not 220. The reference's sidebar is 348.5pt — 20.1% of its
+    /// window against our 16.1% — and at 220 ours failed on both the absolute
+    /// and the proportional measure. 310 closes most of that without starving
+    /// the transcript column, which is already width-matched to the reference.
+    static let railWidth: CGFloat = 310
     static let railRowHeight: CGFloat = 37
     /// Codex's environment surface is a compact card, not a sidebar. 361pt was
     /// measured from the reference, but the reference fills only 64% of its

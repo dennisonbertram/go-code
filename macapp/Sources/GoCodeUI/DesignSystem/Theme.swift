@@ -88,7 +88,7 @@ enum Theme {
 
     // MARK: - Foreground
     // Four rungs (the task's stated minimum; Codex measures five —
-    // 255/222/163/116/97 — a fifth can slot in later without breaking this
+    // 255/222/150/139/116/97 — six rungs, matching the reference's ramp
     // span). Light values are `255 − dark`, so each rung keeps the same
     // *distance from its appearance's extreme* — same relative contrast
     // step — instead of the two appearances drifting to different ratios.
@@ -104,14 +104,33 @@ enum Theme {
     static let foregroundSecondaryLevel = GreyLevel(
         dark: RGB(r: 222, g: 222, b: 222), light: RGB(r: 33, g: 33, b: 33))
 
-    /// Tertiary — metadata: dates, counts, durations, captions.
+    /// Tertiary — metadata: dates, counts, durations, captions, chip labels.
+    ///
+    /// 150, not 163. The reference's ramp has no value at 163 (`#A3A3A3`) at
+    /// all; a critic measuring both apps found we were the only one using it.
+    /// 150 is `#969696`, which is where the reference puts this rung.
     static let foregroundTertiaryLevel = GreyLevel(
-        dark: RGB(r: 163, g: 163, b: 163), light: RGB(r: 92, g: 92, b: 92))
+        dark: RGB(r: 150, g: 150, b: 150), light: RGB(r: 92, g: 92, b: 92))
 
-    /// Quaternary — the dimmest still-legible text: placeholders, section
-    /// headers, empty-state icons.
+    /// Subtle — overflow menus, panel affordances, and other controls that
+    /// should be found when looked for and ignored otherwise.
+    ///
+    /// This rung existed in the reference and not here, which is why seven
+    /// different chrome elements had collapsed into one 220–224 band: with
+    /// nothing between secondary and quaternary, everything rounded up to
+    /// secondary.
+    static let foregroundSubtleLevel = GreyLevel(
+        dark: RGB(r: 139, g: 139, b: 139), light: RGB(r: 108, g: 108, b: 108))
+
+    /// Quaternary — section headers and other labels that name a group
+    /// without competing with it. `#747474`, matching the reference exactly.
     static let foregroundQuaternaryLevel = GreyLevel(
         dark: RGB(r: 116, g: 116, b: 116), light: RGB(r: 139, g: 139, b: 139))
+
+    /// Placeholder — the dimmest still-legible text. `#616161`, which the
+    /// reference uses for composer placeholder text and nothing else.
+    static let foregroundPlaceholderLevel = GreyLevel(
+        dark: RGB(r: 97, g: 97, b: 97), light: RGB(r: 154, g: 154, b: 154))
 
     /// Selected navigation labels remain primary content, rather than taking
     /// on the system tint that is reserved for an explicit product action.
@@ -141,7 +160,9 @@ enum Theme {
     static let foreground = color(foregroundLevel)
     static let foregroundSecondary = color(foregroundSecondaryLevel)
     static let foregroundTertiary = color(foregroundTertiaryLevel)
+    static let foregroundSubtle = color(foregroundSubtleLevel)
     static let foregroundQuaternary = color(foregroundQuaternaryLevel)
+    static let foregroundPlaceholder = color(foregroundPlaceholderLevel)
     static let selectedRowForeground = color(selectedRowForegroundLevel)
 
     /// Hairline dividers for boundaries between surfaces close enough in
@@ -153,6 +174,30 @@ enum Theme {
     static let separatorLevel = GreyLevel(
         dark: RGB(r: 43, g: 43, b: 43), light: RGB(r: 220, g: 220, b: 220))
     static let separator = color(separatorLevel)
+
+    /// A rule that reads as a rule.
+    ///
+    /// 60, not 43. A border must be *lighter* than the surface it borders or
+    /// it is indistinguishable from the antialiased edge of a rounded rect —
+    /// which is exactly what happened: a 43 edge against a 45 fill was
+    /// reported as a border and was not one. The reference's is 60 against the
+    /// same 45 fill.
+    static let ruleLevel = GreyLevel(
+        dark: RGB(r: 60, g: 60, b: 60), light: RGB(r: 198, g: 198, b: 198))
+    static let rule = color(ruleLevel)
+
+    /// The sidebar's own separator, one step below `rule` because it divides
+    /// two areas of the same surface rather than lifting a card off the page.
+    static let railRuleLevel = GreyLevel(
+        dark: RGB(r: 57, g: 57, b: 57), light: RGB(r: 205, g: 205, b: 205))
+    static let railRule = color(railRuleLevel)
+
+    /// The column divider between sidebar and content. 67, not the 47 the
+    /// system Divider was drawing — it was the one rule of the four whose
+    /// colour did not match the reference.
+    static let columnDividerLevel = GreyLevel(
+        dark: RGB(r: 67, g: 67, b: 67), light: RGB(r: 196, g: 196, b: 196))
+    static let columnDivider = color(columnDividerLevel)
 
     /// Unchanged from the system tint. The baseline's accent-related gap
     /// (§3, §10 — GoCode spends its one saturated hue on message ownership

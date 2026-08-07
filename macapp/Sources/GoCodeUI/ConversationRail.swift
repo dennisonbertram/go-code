@@ -10,6 +10,30 @@ struct ConversationRail: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: Spacing.tight) {
+            // The reference's app identity lives here, not in the window title
+            // bar: a bright header row inside the sidebar with a disclosure
+            // affordance. Ours was a recessed system title at 89 against the
+            // reference's 222 — 60% dimmer, in the wrong pane, and it cost a
+            // whole chrome band to display.
+            HStack(spacing: Spacing.small) {
+                Text("GoCode")
+                    .font(Typography.body.weight(.semibold))
+                    .foregroundStyle(Theme.foregroundSecondary)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: IconSize.status))
+                    .foregroundStyle(Theme.foregroundSubtle)
+                Spacer(minLength: Spacing.none)
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: IconSize.detail))
+                    .foregroundStyle(Theme.foregroundSubtle)
+                    .accessibilityHidden(true)
+            }
+            .padding(.horizontal, Spacing.comfortable)
+            .padding(.bottom, Spacing.small)
+            // Clears the window controls, which now overlay the sidebar's own
+            // top rather than living in a band of their own.
+            .padding(.top, Spacing.trafficLightClearance)
+
             RailRow(section: $section, item: .chat)
 
             // Each header is gated on its own rows. Gating both on "any
@@ -33,6 +57,13 @@ struct ConversationRail: View {
 
             Spacer(minLength: Spacing.none)
 
+            // Separates the footer from the list above it, as the reference
+            // separates its account row.
+            Rectangle()
+                .fill(Theme.railRule)
+                .frame(height: Spacing.hairline)
+                .padding(.bottom, Spacing.small)
+
             HStack(spacing: Spacing.tight) {
                 RailRow(section: $section, item: .activity, compact: true)
                 RailRow(section: $section, item: .sessions, compact: true)
@@ -41,6 +72,10 @@ struct ConversationRail: View {
                 Button(action: onClose) {
                     Image(systemName: "xmark.circle")
                         .font(.system(size: IconSize.standard))
+                        // Matches its four neighbours. It had been rendering
+                        // 60% brighter than them, which read as a state rather
+                        // than as the same kind of control.
+                        .foregroundStyle(Theme.foregroundSubtle)
                 }
                 .buttonStyle(.plain)
                 .help("Close project and stop its server")
@@ -93,16 +128,16 @@ private struct ConversationRailRow: View {
             section = .chat
         } label: {
             HStack(spacing: Spacing.small) {
-                Circle()
-                    .fill(isActive ? Theme.foreground : Theme.foregroundQuaternary)
-                    .frame(width: IconSize.rule, height: IconSize.rule)
-                    .accessibilityHidden(true)
-                Image(systemName: "bubble.left")
-                    .font(.system(size: IconSize.detail))
-                    .foregroundStyle(Theme.foregroundQuaternary)
-                    .accessibilityHidden(true)
+                // No bullet, no leading icon. The reference's chat rows are
+                // text-only and align with its project rows; ours carried a
+                // 255-peak bullet — the brightest ink in the whole sidebar —
+                // and a speech-bubble glyph, creating a third indent level.
                 Text(conversation.displayTitle)
-                    .font(Typography.detail)
+                    // Body, not detail. The reference sets its sidebar very
+                    // slightly *larger* than its transcript body; this was 24%
+                    // smaller, which read as a footnote rather than as the
+                    // list the sidebar exists to be.
+                    .font(Typography.body)
                     .lineLimit(1)
                 Spacer(minLength: Spacing.none)
                 if conversation.messageCount ?? 0 > 0 {

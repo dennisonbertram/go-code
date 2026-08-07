@@ -20,7 +20,11 @@ enum Typography {
     /// derived user-message height is unaffected.
     static let bodyLinePitch: CGFloat = 26.5
     static let bodyLineSpacing: CGFloat = bodyLinePitch - bodyLineHeight
-    static let caption = Font.system(size: 14)
+    /// 16, not 14. Measured against the reference ascender-to-descender, the
+    /// roles built on this rung ran short: composer placeholder 12.0pt against
+    /// 15.0, sidebar section header 10.0 against 14.5. The rung was the cause,
+    /// not the call sites.
+    static let caption = Font.system(size: 16)
     static let detail = Font.system(size: 12)
     static let code = Font.system(size: 15).monospaced()
     static let codeCaption = Font.system(size: 14).monospaced()

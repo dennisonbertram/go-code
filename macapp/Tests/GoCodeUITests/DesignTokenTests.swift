@@ -53,17 +53,21 @@ struct DesignTokenTests {
         #expect(Spacing.section == 18)
     }
 
+    /// Radii updated in round 11: control 8 → 10, card 10 → 18, composer
+    /// 20 → 24. The previous values were this app's own, not the reference's;
+    /// an edge-inset profile put both of the smallest surfaces ~40% short.
     @Test("shape and icon roles preserve their current measurements")
     func shapeAndIconMeasurements() {
         #expect(CornerRadius.tag == 4)
         #expect(CornerRadius.code == 6)
-        #expect(CornerRadius.control == 8)
-        #expect(CornerRadius.card == 10)
-        #expect(CornerRadius.composer == 20)
+        #expect(CornerRadius.control == 10)
+        #expect(CornerRadius.card == 18)
+        #expect(CornerRadius.composer == 24)
         #expect(IconSize.status == 7)
         #expect(IconSize.detail == 14)
         #expect(IconSize.standard == 15)
-        #expect(IconSize.row == 18)
+        // 15, not 18: measured ink width was 40% over the reference's.
+        #expect(IconSize.row == 15)
         #expect(IconSize.emptyState == 30)
         #expect(IconSize.launch == 44)
     }
@@ -127,8 +131,12 @@ struct DesignTokenTests {
     @Test("conversation layout tokens share the Codex column and quieter divider")
     func conversationLayout() {
         #expect(Layout.chatContentMaximumWidth == 883)
-        #expect(Spacing.conversationHeaderHeight == 52)
-        #expect(Spacing.transcriptTop == 65.5)
+        // 40, not 52: with padding the band measured 103pt against the
+        // reference's 55pt.
+        #expect(Spacing.conversationHeaderHeight == 40)
+        // 38, not 65.5: the reference opens its transcript tight and
+        // spends the space below the bubble instead.
+        #expect(Spacing.transcriptTop == 38)
         #expect(Theme.separatorLevel.dark == RGB(r: 43, g: 43, b: 43))
     }
 }
@@ -168,5 +176,110 @@ extension DesignTokenTests {
         let box: CGRect = BrandMark().path(in: rect).boundingRect
         let difference: CGFloat = abs(box.width - box.height)
         #expect(difference < 1.0)
+    }
+}
+
+extension DesignTokenTests {
+    /// Seven chrome elements had collapsed into one 220–224 band because the
+    /// ramp had no rung between secondary and quaternary — everything rounded
+    /// up to secondary. These pin the six distinct rungs.
+    @Test("the foreground ramp has six distinct rungs")
+    func foregroundRampIsSixSteps() {
+        let rungs = [
+            Theme.foregroundLevel.dark.r,
+            Theme.foregroundSecondaryLevel.dark.r,
+            Theme.foregroundTertiaryLevel.dark.r,
+            Theme.foregroundSubtleLevel.dark.r,
+            Theme.foregroundQuaternaryLevel.dark.r,
+            Theme.foregroundPlaceholderLevel.dark.r,
+        ]
+        #expect(Set(rungs).count == rungs.count)
+        // Strictly descending: a ramp that doubles back is not a hierarchy.
+        #expect(rungs == rungs.sorted(by: >))
+    }
+
+    /// 163 (#A3A3A3) is a value the reference never uses. A critic measuring
+    /// both apps found we were the only one with it, which is how an element
+    /// ends up looking foreign without any single token being obviously wrong.
+    @Test("the ramp avoids the value the reference never uses")
+    func rampAvoidsForeignValue() {
+        let rungs = [
+            Theme.foregroundLevel.dark.r,
+            Theme.foregroundSecondaryLevel.dark.r,
+            Theme.foregroundTertiaryLevel.dark.r,
+            Theme.foregroundSubtleLevel.dark.r,
+            Theme.foregroundQuaternaryLevel.dark.r,
+            Theme.foregroundPlaceholderLevel.dark.r,
+        ]
+        #expect(!rungs.contains(163))
+    }
+
+    /// Measured against the reference: section labels #747474, placeholder
+    /// #616161. Both were confirmed exact by pixel probe, so they are pinned
+    /// rather than left to drift.
+    @Test("the ramp holds the two rungs measured exactly against the reference")
+    func rampMatchesMeasuredReferenceValues() {
+        #expect(Theme.foregroundQuaternaryLevel.dark.r == 116)  // #747474
+        #expect(Theme.foregroundPlaceholderLevel.dark.r == 97)  // #616161
+    }
+}
+
+extension DesignTokenTests {
+    /// A border must be lighter than the surface it borders. A stroke at 43
+    /// against a 45 fill was reported as a border and was not one — it was
+    /// indistinguishable from the antialiased edge of the rounded rect
+    /// underneath it. This pins the direction, not just the value.
+    @Test("rule tokens are lighter than the surfaces they border")
+    func rulesReadAsRules() {
+        #expect(Theme.ruleLevel.dark.r > Theme.surfaceElevatedLevel.dark.r)
+        #expect(Theme.railRuleLevel.dark.r > Theme.surfaceLevel.dark.r)
+        // And distinctly so, rather than by a rounding error.
+        #expect(Theme.ruleLevel.dark.r - Theme.surfaceElevatedLevel.dark.r >= 10)
+    }
+
+    /// Two adjacent composer chips had a 48% icon-width spread and an 85%
+    /// label-gap spread because each sized its symbol from font metrics.
+    /// Pinning both to tokens is what keeps them a set.
+    @Test("composer chips share one icon size and one label gap")
+    func chipGeometryIsTokenized() {
+        #expect(IconSize.chip > 0)
+        #expect(Spacing.chipLabelGap > 0)
+        // Close to the reference's measured 13.5pt icon and 8.5pt gap.
+        #expect(abs(IconSize.chip - 13.5) < 1.0)
+        #expect(abs(Spacing.chipLabelGap - 8.5) < 1.0)
+    }
+
+    /// The sidebar was 63% of the reference's width and failed on both the
+    /// absolute and the proportional measure.
+    @Test("the sidebar is wide enough to read as a content browser")
+    func railWidthIsCloserToTheReference() {
+        #expect(Layout.railWidth >= 300)
+    }
+}
+
+extension DesignTokenTests {
+    /// Every rule in the app measured 2 raw px against the reference's 1 —
+    /// composer border, header rule, footer rule and column divider, four for
+    /// four. On a 2x display 0.5pt is the single-pixel line.
+    @Test("rules are drawn at the reference's weight")
+    func rulesAreHalfPoint() {
+        #expect(Spacing.hairline == 0.5)
+    }
+
+    /// The column divider was the one rule of four whose colour did not match,
+    /// because it was a system Divider rather than a token.
+    @Test("the column divider is a token lighter than the sidebar it borders")
+    func columnDividerIsTokenized() {
+        #expect(Theme.columnDividerLevel.dark.r == 67)
+        #expect(Theme.columnDividerLevel.dark.r > Theme.surfaceLevel.dark.r)
+    }
+
+    /// Both of the app's smallest surfaces were ~40% short of the reference's
+    /// radii, which is what made them read as boxes.
+    @Test("corner radii match the reference's measured curvature")
+    func radiiMatchReference() {
+        #expect(CornerRadius.control == 10)
+        #expect(CornerRadius.card == 18)
+        #expect(CornerRadius.card > CornerRadius.control)
     }
 }

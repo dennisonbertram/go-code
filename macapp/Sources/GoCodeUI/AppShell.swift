@@ -117,7 +117,10 @@ private struct ProjectView: View {
     var body: some View {
         HStack(spacing: Spacing.none) {
             ConversationRail(section: $section, project: project, onClose: onClose)
-            Divider()
+            // An explicit rule rather than Divider(): the system divider drew
+            // 47 where the reference draws 67, the only one of the app's four
+            // rules whose colour was wrong.
+            Rectangle().fill(Theme.columnDivider).frame(width: Spacing.hairline)
             content
         }
         .task {
@@ -129,9 +132,14 @@ private struct ProjectView: View {
                 project.submit()
             }
         }
-        // The sidebar surface must also paint behind the traffic lights.
-        .toolbarBackground(Theme.surface, for: .windowToolbar)
-        .toolbarBackground(.visible, for: .windowToolbar)
+        // Hidden, not coloured. A visible toolbar background paints one colour
+        // across the whole window width, so the sidebar's grey ran over the
+        // content pane and produced a full-width band down to y=52 — the
+        // content pane did not exist at that height. The reference has no such
+        // band: each column paints its own colour to the top of the window, so
+        // hiding the toolbar background lets the rail and the content pane do
+        // exactly that. Both already extend through the top safe area.
+        .toolbarBackground(.hidden, for: .windowToolbar)
     }
 
     @ViewBuilder
@@ -197,12 +205,21 @@ struct RailRow: View {
             .padding(.horizontal, compact ? Spacing.small : Spacing.comfortable)
             .padding(.vertical, Spacing.standard)
             .frame(maxWidth: compact ? nil : .infinity, alignment: .leading)
-            .background(
-                section == item ? Theme.selectedRowSurface : .clear,
-                in: .rect(cornerRadius: CornerRadius.control)
-            )
+            // No fill on nav rows. selectedRowSurface belongs to the active
+            // conversation and nothing else — painting it here too put two
+            // competing "this one is selected" affordances in the sidebar
+            // 31.5pt apart, and the reference reserves that fill for the
+            // conversation alone. Selection still reads, through ink weight.
+            // No fill here. The fill is the *conversation* list's, and the
+            // reference shows exactly one filled row in its whole sidebar.
+            // Round 8 removed this and left no selection anywhere; round 10
+            // restored it and produced two identical bands. A nav row is
+            // current, not selected — weight and ink carry that without
+            // competing with the conversation the user is actually in.
             .foregroundStyle(
-                section == item ? Theme.selectedRowForeground : Theme.foregroundSecondary
+                // Secondary, not primary: the reference's nav labels sit at
+                // 222 selected or not, and spend 255 on content instead.
+                section == item ? Theme.foregroundSecondary : Theme.foregroundSubtle
             )
             .contentShape(.rect)
         }
@@ -218,9 +235,14 @@ struct RailSectionHeader: View {
 
     var body: some View {
         Text(title)
-            .font(Typography.detail)
-            .foregroundStyle(Theme.foregroundTertiary)
-            .padding(.horizontal, Spacing.comfortable).padding(.top, Spacing.comfortable)
+            // Larger and dimmer than before: the reference's section label is
+            // bigger than this was and two rungs darker, so it reads as a
+            // heading that recedes. Ours was smaller and brighter, which is
+            // the opposite relationship. foregroundQuaternary is #747474,
+            // which is the reference's ink exactly.
+            .font(Typography.caption)
+            .foregroundStyle(Theme.foregroundQuaternary)
+            .padding(.horizontal, Spacing.section).padding(.top, Spacing.comfortable)
             .padding(.bottom, Spacing.tight)
             // A heading, not a control — VoiceOver should announce it once
             // as a group label, not treat it as another focusable row.

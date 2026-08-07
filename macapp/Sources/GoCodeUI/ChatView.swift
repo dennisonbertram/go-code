@@ -19,7 +19,8 @@ struct ChatView: View {
         // simply reflows around it.
         HStack(alignment: .top, spacing: Spacing.none) {
             VStack(spacing: Spacing.none) {
-                ConversationHeader(project: project, run: run)
+                ConversationHeader(
+                    project: project, run: run, showInspector: $showInspector)
                 TranscriptView(
                     items: run.transcript.items,
                     statusMessage: project.statusMessage,
@@ -54,18 +55,12 @@ struct ChatView: View {
                 .transition(.move(edge: .trailing).combined(with: .opacity))
             }
         }
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                CopyConversationButton(items: run.transcript.items)
-                Button {
-                    showInspector.toggle()
-                } label: {
-                    Image(systemName: showInspector ? "sidebar.trailing" : "sidebar.right")
-                }
-                .help(showInspector ? "Hide tool inspector" : "Show tool inspector")
-                .accessibilityLabel(showInspector ? "Hide tool inspector" : "Show tool inspector")
-            }
-        }
+        // The content pane paints its own colour through the top safe area,
+        // the way the rail does. Previously only the toolbar background
+        // covered this strip, in the *sidebar's* colour, so the pane began at
+        // y=52 and the window wore a full-width band above it.
+        .background(Theme.background.ignoresSafeArea(.container, edges: .top))
+
         // Clicking a tool call is the reason the inspector exists; open it
         // automatically on selection rather than leaving the click looking
         // like it did nothing because the pane defaults to closed.
@@ -101,7 +96,10 @@ struct TranscriptView: View {
         ScrollViewReader { proxy in
             ScrollView {
                 ConversationColumn {
-                    LazyVStack(alignment: .leading, spacing: Spacing.large) {
+                    // The reference leaves 62pt between a user bubble and the
+                    // tool row that follows it; ours left 19.5 — 3.2x tight,
+                    // and the single most visible rhythm defect.
+                    LazyVStack(alignment: .leading, spacing: Spacing.transcriptTurnGap) {
                         ForEach(TranscriptPresentation.rows(for: items)) { item in
                             row(for: item).id(item.id)
                         }
@@ -222,7 +220,9 @@ struct CopyMessageButton: View {
             Image(systemName: copied ? "checkmark" : "doc.on.doc")
                 .font(Typography.caption)
                 .foregroundStyle(
-                    copied ? AnyShapeStyle(.tint) : AnyShapeStyle(Theme.foregroundQuaternary)
+                    // Only the copied state overrides; the row owns the
+                    // resting ink so all four icons agree.
+                    copied ? AnyShapeStyle(.tint) : AnyShapeStyle(Theme.foregroundSubtle)
                 )
                 .contentShape(.rect)
         }
@@ -248,7 +248,11 @@ struct CopyConversationButton: View {
                 copied = false
             }
         } label: {
-            Image(systemName: copied ? "checkmark" : "doc.on.doc")
+            // A distinct glyph from CopyMessageButton's. Both were
+            // "doc.on.doc", so the two actions rendered identically and the
+            // row read as a duplicated button. This one copies the whole
+            // transcript, which is a page rather than a snippet.
+            Image(systemName: copied ? "checkmark" : "text.document")
         }
         .disabled(items.isEmpty)
         .help(copied ? "Copied conversation" : "Copy conversation")
@@ -367,8 +371,14 @@ struct MessageActions: View {
             .help("Undo last turn")
             .accessibilityLabel("Undo last turn")
         }
+        // One size and one ink across all four. Different SF Symbols draw to
+        // different heights at the same point size, so the row measured a 62%
+        // spread; a fixed frame makes them a set. The colour is set once here
+        // and the buttons no longer override it — three of four had been
+        // inheriting the section-label rung instead.
         .font(.system(size: IconSize.detail))
-        .foregroundStyle(Theme.foregroundQuaternary)
+        .symbolRenderingMode(.monochrome)
+        .foregroundStyle(Theme.foregroundSubtle)
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -606,7 +616,7 @@ struct ToolRow: View {
                 }
                 Rectangle()
                     .fill(Theme.separator)
-                    .frame(height: Spacing.hairline)
+                    .frame(height: Spacing.toolRuleWeight)
             }
             .contentShape(.rect)
         }
@@ -794,7 +804,10 @@ struct UsageLabel: View {
                     ? "\(usage.totalTokens) tok · $\(String(format: "%.4f", usage.costUSD))"
                     : "\(usage.totalTokens) tok · cost n/a"
             )
-            .font(Typography.caption).foregroundStyle(Theme.foregroundQuaternary)
+            // Body size, separated by colour rather than by scale. The reference's
+            // "Worked for 11s" sits 0.5pt below its own body ascender; ours sat
+            // 2.5pt below, de-scaled *and* dimmed where the reference only dims.
+            .font(Typography.body).foregroundStyle(Theme.foregroundTertiary)
         }
     }
 }
@@ -867,6 +880,10 @@ struct Composer: View {
             ConversationColumn {
                 VStack(alignment: .leading, spacing: Spacing.comfortable) {
                     TextField(placeholder, text: $run.draft, axis: .vertical)
+                        // Without this the field inherits the macOS system
+                        // default and the placeholder renders a full step
+                        // under the reference's.
+                        .font(Typography.body)
                         .textFieldStyle(.plain)
                         .lineLimit(1...10)
                         .focused($focused)
@@ -875,12 +892,19 @@ struct Composer: View {
 
                     HStack(spacing: Spacing.comfortable) {
                         ModelChip(project: project)
-                        Toggle("Plan mode", isOn: $project.planMode)
-                            .toggleStyle(.checkbox).font(Typography.caption)
-                            .help("Restrict the agent to writing a plan file until you approve it")
+                        // A chip, not a checkbox. The reference's composer
+                        // uses icon+label chips and contains no checkbox
+                        // anywhere; a square AppKit control in a chat composer
+                        // was the most out-of-family element on the screen.
+                        ComposerChip(
+                            title: "Plan mode",
+                            icon: "list.bullet.rectangle",
+                            isOn: project.planMode
+                        ) { project.planMode.toggle() }
+                        .help("Restrict the agent to writing a plan file until you approve it")
                         Spacer()
                         Button("New") { project.newConversation() }
-                            .buttonStyle(.plain).font(Typography.caption).foregroundStyle(
+                            .buttonStyle(.plain).font(Typography.body).foregroundStyle(
                                 Theme.foregroundTertiary)
 
                         Button(action: { send(action) }) {
@@ -900,8 +924,21 @@ struct Composer: View {
                             action.isSteer ? "Steer the running task" : "Send message")
                     }
                 }
-                .padding(.horizontal, Spacing.large).padding(.vertical, Spacing.inset)
+                // The reference insets its composer controls 9pt from the
+                // right edge and 9.5 from the bottom; ours sat at 18.5 and 20,
+                // twice as far in, inside a shorter composer.
+                .padding(.horizontal, Spacing.comfortable).padding(.vertical, Spacing.inset)
                 .background(Theme.surfaceElevated, in: .rect(cornerRadius: CornerRadius.composer))
+                // The reference's composer carries a hairline on all four
+                // edges; ours sat as flat fill straight against the page.
+                // Theme.rule, not Theme.separator: at 43 against a 45 fill the
+                // stroke was darker than what it bordered and indistinguishable
+                // from the shape's own antialiased edge. A border has to be
+                // lighter than its fill to read as one.
+                .overlay(
+                    RoundedRectangle(cornerRadius: CornerRadius.composer, style: .continuous)
+                        .strokeBorder(Theme.rule, lineWidth: Spacing.hairline)
+                )
             }
             // No minimum height: the card hugs its content and grows with a
             // multi-line draft. A fixed floor was measured against the old,
@@ -981,6 +1018,45 @@ enum ComposerAction: Equatable {
     }
 }
 
+/// An icon+label chip for a composer toggle.
+///
+/// The reference's composer expresses its options this way; a square AppKit
+/// checkbox in a chat composer was the most out-of-family control on the
+/// screen. Selection reads through ink and a fill rather than a tick, so the
+/// control keeps the composer's vocabulary instead of importing a form's.
+struct ComposerChip: View {
+    let title: String
+    let icon: String
+    let isOn: Bool
+    let toggle: () -> Void
+
+    var body: some View {
+        Button(action: toggle) {
+            // Explicit icon+label rather than Label: Label sizes its symbol
+            // from the font's own metrics, which made this chip's icon 48%
+            // wider than the model chip's beside it and its label gap 85%
+            // larger. Fixing both to tokens puts the two chips on one size.
+            HStack(spacing: Spacing.chipLabelGap) {
+                Image(systemName: icon)
+                    .font(.system(size: IconSize.chip))
+                    .frame(width: IconSize.chip, height: IconSize.chip)
+                Text(title)
+            }
+            .font(Typography.body)
+            .foregroundStyle(isOn ? Theme.foreground : Theme.foregroundTertiary)
+            .padding(.horizontal, Spacing.small)
+            .padding(.vertical, Spacing.tight)
+            .background(
+                isOn ? Theme.selectedRowSurface : .clear,
+                in: .rect(cornerRadius: CornerRadius.control)
+            )
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isOn ? [.isSelected] : [])
+    }
+}
+
 struct ModelChip: View {
     @Bindable var project: ProjectSession
 
@@ -1007,8 +1083,15 @@ struct ModelChip: View {
                 Text(hiddenSummary).font(Typography.caption)
             }
         } label: {
-            Label(project.selectedModel ?? "Server default", systemImage: "cpu")
-                .font(Typography.caption)
+            // Same construction as ComposerChip so the two sit as a set:
+            // one icon size, one label gap, one baseline.
+            HStack(spacing: Spacing.chipLabelGap) {
+                Image(systemName: "cpu")
+                    .font(.system(size: IconSize.chip))
+                    .frame(width: IconSize.chip, height: IconSize.chip)
+                Text(project.selectedModel ?? "Server default")
+            }
+            .font(Typography.body)
         }
         .menuStyle(.borderlessButton)
         .fixedSize()
