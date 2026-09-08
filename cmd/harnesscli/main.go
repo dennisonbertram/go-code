@@ -176,7 +176,7 @@ func run(args []string) int {
 	workspacePath := resolveWorkspacePath(*workspace)
 
 	if *enableTUI {
-		if err := runTUI(*baseURL, workspacePath, *resume, *planMode); err != nil {
+		if err := runTUI(*baseURL, workspacePath, *resume, *model, *planMode); err != nil {
 			fmt.Fprintf(stderr, "harnesscli: tui: %v\n", err)
 			return exitClientError
 		}
@@ -535,7 +535,13 @@ func resolveWorkspacePath(workspace string) string {
 	return workspacePath
 }
 
-func newTUIConfig(baseURL, workspace, resumeConversationID string) tui.TUIConfig {
+// newTUIConfig assembles the TUI's configuration.
+//
+// model is the explicitly requested model (the -model flag) and may be empty.
+// Empty is meaningful: it lets the model remembered from the last session
+// (issue #1424) apply, and failing that the daemon default. A non-empty value
+// outranks both — a flag is an instruction, not a preference. Issue #1426.
+func newTUIConfig(baseURL, workspace, resumeConversationID, model string) tui.TUIConfig {
 	// Default to auto-detection; HARNESS_COLOR_PROFILE overrides (truecolor, 256,
 	// ansi, none). Resolved and applied in runTUI before the program starts.
 	colorProfile := strings.TrimSpace(os.Getenv("HARNESS_COLOR_PROFILE"))
@@ -568,14 +574,15 @@ func newTUIConfig(baseURL, workspace, resumeConversationID string) tui.TUIConfig
 		ResumeConversationID: resumeConversationID,
 		APIKey:               apiKey,
 		Theme:                themeName,
+		Model:                model,
 	}
 }
 
-func runTUI(baseURL, workspace, resumeConversationID string, planMode bool) error {
+func runTUI(baseURL, workspace, resumeConversationID, model string, planMode bool) error {
 	if !term.IsTerminal(int(os.Stdout.Fd())) {
 		return fmt.Errorf("--tui requires a terminal; pipe output or use without --tui for streaming mode")
 	}
-	tuiCfg := newTUIConfig(baseURL, workspace, resumeConversationID)
+	tuiCfg := newTUIConfig(baseURL, workspace, resumeConversationID, model)
 	tuiCfg.PlanMode = planMode
 	// Resolve and apply the color profile to the renderer before building the
 	// model, and store the effective profile back for accurate display.

@@ -184,7 +184,7 @@ func TestRunCreatesAndStreamsToCompletion(t *testing.T) {
 }
 
 func TestNewTUIConfigIncludesWorkspace(t *testing.T) {
-	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "")
+	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "", "")
 	if cfg.BaseURL != "http://127.0.0.1:8080" {
 		t.Fatalf("BaseURL = %q", cfg.BaseURL)
 	}
@@ -200,7 +200,7 @@ func TestNewTUIConfigIncludesWorkspace(t *testing.T) {
 }
 
 func TestNewTUIConfigIncludesResumeConversationID(t *testing.T) {
-	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "conv-resume-42")
+	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "conv-resume-42", "")
 	if cfg.ResumeConversationID != "conv-resume-42" {
 		t.Fatalf("ResumeConversationID = %q, want %q", cfg.ResumeConversationID, "conv-resume-42")
 	}
@@ -328,7 +328,7 @@ func TestNewTUIConfigLoadsSavedTheme(t *testing.T) {
 		t.Fatalf("config.Save: %v", err)
 	}
 
-	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "")
+	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "", "")
 	if cfg.Theme != "ocean" {
 		t.Errorf("TUIConfig.Theme = %q, want %q", cfg.Theme, "ocean")
 	}
@@ -339,8 +339,39 @@ func TestNewTUIConfigLoadsSavedTheme(t *testing.T) {
 func TestNewTUIConfigNoSavedThemeIsEmpty(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "")
+	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "", "")
 	if cfg.Theme != "" {
 		t.Errorf("TUIConfig.Theme = %q, want empty", cfg.Theme)
+	}
+}
+
+// TestNewTUIConfigCarriesExplicitModel pins issue #1426: an explicitly
+// requested model must reach the TUI.
+//
+// `harnesscli --tui -model X` parsed the flag and threw it away, so the TUI
+// started on the daemon default or — after #1424 — on the remembered model,
+// which is precisely the thing a user passing -model is trying to override.
+//
+// runTUI itself cannot be unit tested (it requires a terminal), so this is the
+// closest honest seam: the point where the flag's value becomes TUIConfig.Model.
+func TestNewTUIConfigCarriesExplicitModel(t *testing.T) {
+	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "", "gpt-4.1-mini")
+
+	if cfg.Model != "gpt-4.1-mini" {
+		t.Fatalf("TUIConfig.Model = %q, want %q; an explicitly requested model must reach the TUI",
+			cfg.Model, "gpt-4.1-mini")
+	}
+}
+
+// TestNewTUIConfigWithoutModelLeavesItEmpty is the control. Empty must stay
+// empty: it is what lets the remembered model (#1424) and then the daemon
+// default apply. A fix that defaulted to some model would satisfy the test
+// above and silently break both.
+func TestNewTUIConfigWithoutModelLeavesItEmpty(t *testing.T) {
+	cfg := newTUIConfig("http://127.0.0.1:8080", "/tmp/tui-project", "", "")
+
+	if cfg.Model != "" {
+		t.Fatalf("TUIConfig.Model = %q, want empty so the remembered model and daemon default still apply",
+			cfg.Model)
 	}
 }
