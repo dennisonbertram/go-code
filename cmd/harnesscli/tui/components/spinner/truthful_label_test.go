@@ -116,3 +116,40 @@ func TestSpinnerHintSurvivesEvenWhenLabelCannotFit(t *testing.T) {
 		t.Errorf("cancel hint should outrank the label when space is scarce, got %q", view)
 	}
 }
+
+// TestSpinnerKeepsCancelHintWithWideRunes pins issue #1432: the hint survives
+// regardless of the label's script.
+//
+// shortenLabel budgeted in display columns but truncated by rune count. For
+// CJK and emoji, which occupy two columns per rune, the label overran its
+// budget and the final MaxWidth clamp ate the hint — the exact outcome
+// shortenLabel exists to prevent. Every existing test passed throughout,
+// because they were all ASCII, where columns and runes coincide.
+//
+// The assertion is on the hint's survival, not on the line's width: the width
+// was always correct, which is why this went unnoticed.
+func TestSpinnerKeepsCancelHintWithWideRunes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		label string
+	}{
+		{name: "cjk", label: "Waiting for 模型模型模型模型模型模型模型模型"},
+		{name: "emoji", label: "Running 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀"},
+		// ASCII control: a fix that over-truncates everything to satisfy the
+		// hint assertion would show up here as a needlessly stunted label.
+		{name: "ascii control", label: "Waiting for some-long-model-name-v2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := New(0).Start().SetAction(tc.label)
+			for _, width := range []int{40, 50} {
+				view := m.View(width)
+				if !strings.Contains(view, CancelHint) {
+					t.Errorf("width %d: cancel hint truncated, got %q", width, view)
+				}
+				if got := lipgloss.Width(view); got > width {
+					t.Errorf("width %d: line is %d columns wide: %q", width, got, view)
+				}
+			}
+		})
+	}
+}
