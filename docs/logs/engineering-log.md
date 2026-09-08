@@ -1,5 +1,40 @@
 # Engineering Log
 
+## 2026-09-08 — Issue #1428 CLAUDE.md: tickets, real-run proof, delegation
+
+- Three practices this session kept proving necessary were absent from
+  `CLAUDE.md`, so each had to be re-established by instruction every time.
+- **Issues are tickets to work, not places to park problems.** The existing
+  discipline required an issue before implementation but never said the issue
+  must then be worked. The predictable failure, observed twice this session, is
+  stopping after filing to ask whether to proceed. Added: file, implement,
+  verify, merge, close, in the same stretch of work; discovering separate work
+  means filing it and finishing the task in hand, not stopping; and a diagnosis
+  that turns out wrong must be corrected on the issue before implementing,
+  never built against.
+- **Green tests are not proof a change works.** `CLAUDE.md` already warned that
+  merging is not shipping and binaries must be rebuilt; it said nothing about
+  driving the real thing. Three green-and-wrong cases from this session are
+  recorded in the file as evidence rather than exhortation:
+  - #1415's truthful spinner label passed every test and still ate the cancel
+    hint at 40 columns. Found by rendering the line.
+  - #1420's colour detection passed its tests while never colouring stdout,
+    because `style` runs inside command substitution where `-t 1` is false.
+    Found by a pty capture.
+  - #1424's model memory passed unit tests while the suite wrote into the
+    developer's real `~/.config/harnesscli/config.json`. Found by reading the
+    file.
+  The requirement includes stating plainly what could *not* be exercised: an
+  honest gap is a result, a silent one is a false claim.
+- **`/efficient-fable` is now named as the default for token-heavy work**, with
+  the split written down — searches, sweeps, log reduction, docs drafting and
+  live captures delegated; architecture, diagnosis, final diff review and what
+  to tell the user kept local. Also recorded: subagent reports are leads to
+  verify, not facts to repeat, with the two real cases from this session where a
+  confident subagent finding was wrong (a pre-existing unrelated build failure,
+  and a test failure caused by another session's processes).
+- Docs-only change: no rebuild required.
+
 ## 2026-09-08 — Issue #1426 --tui -model reaches the TUI
 
 - Symptom: `harnesscli --tui -model X` parsed the flag and threw it away. The

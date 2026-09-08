@@ -28,6 +28,20 @@ This repository is a Go coding harness with a streamed run API, a CLI smoke-test
 - **Merge at the end of a unit of work — do not leave branches sitting.** This repo's `main` moves fast (many concurrent squash-merged PRs) and subsystems get reimplemented in parallel, so a branch left unmerged drifts behind quickly and turns into a conflict-heavy, duplicated-work mess to reconcile. It gets messy if you don't.
 - When a unit of work is reviewable: open the PR, get CI green (re-run known-flaky checks rather than merging red), and squash-merge to `main` promptly. Then delete the branch.
 - Prefer small, scoped PRs that merge quickly over long-lived branches that accumulate multiple units of work. Always branch from the latest `origin/main`, not an older base.
+- **An issue is a ticket to work, not a place to park a problem.** Filing it is
+  the first step of the job, not the deliverable. Having filed one, implement
+  it, verify it, open the PR, get CI green, merge, and close it in the same
+  stretch of work. Stopping after filing to ask whether to proceed turns a
+  ticket into a question and leaves the work undone. The only exception is when
+  the user asked for the issue alone.
+- If a problem is discovered mid-task and is genuinely separate, file it as its
+  own ticket, say so, and finish the task in hand — then work the new ticket
+  unless the user redirects. Discovering work is not a reason to stop doing
+  work.
+- If a diagnosis turns out to be wrong after the issue is filed, correct the
+  issue before implementing. Never build a fix against a story the evidence has
+  already contradicted, and never close an issue whose stated cause was never
+  confirmed — say what remains unproven and leave it open.
 
 ## Current Source Of Truth
 
@@ -109,6 +123,27 @@ the SQLite conversation store persists the latest plan content per conversation.
 - Shell smoke: `bash scripts/run-bench-smoke.sh` (builds harnessd, uses `HARNESS_PROVIDER=fake`).
 - Full benchmark runbook (smokes, result schema, comparison harness, Python paths, honesty caveats): `docs/runbooks/benchmark-smoke.md`.
 
+## Delegation
+
+- **Use `/efficient-fable` for token-heavy work.** Delegate the parts that
+  consume context without needing judgment: broad repo or docs searches, full
+  regression sweeps and log reduction, documentation drafting from a settled
+  design, and live browser or pty capture runs. Keep the decision layer —
+  architecture, diagnosis, resolving conflicting reports, the final diff review,
+  and what to tell the user — with the primary agent.
+- Write a handoff packet as if the subagent has no context: repo path, exact
+  objective, files in and out of scope, the evidence format to return, the
+  commands to run and what success looks like, and stop conditions. Tell it to
+  stop and report rather than improvise when the code does not match the prompt.
+- **Treat subagent reports as leads, not facts.** Before acting on a finding,
+  opening a PR, or telling the user something is done, reopen the cited files
+  and confirm the line references and failures yourself. Subagents have reported
+  confidently wrong results in this repo, including a build failure that was
+  pre-existing and unrelated, and a test failure caused by another session's
+  processes rather than the change under review.
+- Run independent slices in parallel; keep coupled or delicate work local. Small
+  tasks stay direct — a subagent that costs more to brief than to do is waste.
+
 ## Operational Reminder
 
 - Respond concisely but educationally: explain what changed and why it matters.
@@ -116,6 +151,26 @@ the SQLite conversation store persists the latest plan content per conversation.
   symptom, cause, and fix in the relevant durable log or plan note.
 - Keep `docs/logs/long-term-thinking-log.md` in sync with any durable intent or success-criteria changes.
 - Keep `docs/runbooks/` aligned with the current CLI and server behavior.
+- **Green tests are not proof the change works — drive the real thing.** A
+  change is not done until the actual binary, TUI, or CLI has been exercised on
+  the path the user takes, and the observed result reported. Report what you
+  saw, not that you ran something.
+  - What counts: launching the rebuilt binary and using the feature; driving the
+    TUI in a pty and reading the rendered frames; running the CLI end to end and
+    inspecting its output and exit code; checking the file or database the
+    change was supposed to write. `docs/runbooks/harnesscli-live-testing.md` and
+    `docs/runbooks/benchmark-smoke.md` describe how; the fake provider makes
+    most of it key-free.
+  - What does not count: a passing unit test, a successful build, or a
+    subagent's assurance that it worked.
+  - State plainly what you could **not** exercise and what therefore rests on
+    unit tests alone. An honest gap is a result; a silent one is a false claim.
+  - This is not ceremony. Real cases from this repo: a spinner label that passed
+    every test and still ate the cancel hint at 40 columns; colour detection that
+    passed its tests while never colouring stdout, because the check ran inside
+    a command substitution; a persistence change that passed unit tests while
+    the suite quietly wrote into the developer's real config file. Each was
+    green and wrong, and each was caught only by looking at the real output.
 - **Rebuild the apps after changing them — merging is not shipping.** The
   installed binaries are build artifacts and a running process holds its code in
   memory, so a merged fix stays invisible until it is rebuilt and the app is
