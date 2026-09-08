@@ -1,5 +1,33 @@
 # Engineering Log
 
+## 2026-09-08 — Issue #1426 --tui -model reaches the TUI
+
+- Symptom: `harnesscli --tui -model X` parsed the flag and threw it away. The
+  TUI started on the daemon default or, after #1424, on the remembered model —
+  which is precisely what a user passing `-model` is trying to override. No
+  warning, no error: the flag was silently discarded.
+- Cause: `main.go:179` called `runTUI(*baseURL, workspacePath, *resume,
+  *planMode)`. `*model` was never among the arguments, and `newTUIConfig` never
+  set `TUIConfig.Model`. The non-TUI path (`main.go:216`) passed the flag
+  correctly all along, so the defect was confined to the TUI branch.
+- Fix: `model` threaded from the dispatch through `runTUI` into
+  `newTUIConfig`, following the route `planMode` already takes. Nothing in the
+  TUI changed — `selectedModel: cfg.Model` and #1424's `cfg.Model == ""` guard
+  were already correct and simply had no producer of a non-empty value.
+- Precedence, now real: flag, then the model remembered from last session, then
+  the daemon default. The flag deliberately does **not** write to
+  `~/.config/harnesscli/config.json`: a flag is a one-off instruction, not a
+  preference, and silently rewriting the saved model would be a worse bug than
+  the one being fixed.
+- Tests: `TestNewTUIConfigCarriesExplicitModel` and, as its control,
+  `TestNewTUIConfigWithoutModelLeavesItEmpty` — empty must stay empty, or a fix
+  that defaulted to some model would pass the first test while breaking #1424.
+  `runTUI` itself requires a terminal and cannot be unit tested, so
+  `newTUIConfig` is the closest honest seam; the consumer half is already
+  covered by `TestExplicitModelBeatsRememberedModel` in the `tui` package.
+  Neither test alone proves the flag works — producer and consumer are pinned
+  separately and meet only in the live check.
+
 ## 2026-09-08 — Issue #1424 remember the last used model
 
 - Symptom: the TUI forgot the model you picked. `/model`, quit, restart, and you
@@ -36,9 +64,9 @@
   test suite into something that mutates the developer's machine. When making
   anything persistent, check what the tests write before checking what the
   feature reads.
-- Noted, not fixed: `runTUI` never receives the `-model` flag, so
-  `harnesscli --tui -model X` ignores it today. Separate defect; the precedence
-  guard above is written so wiring it needs no further change here.
+- Noted, not fixed here: `runTUI` never receives the `-model` flag, so
+  `harnesscli --tui -model X` ignored it. Filed as #1426 and fixed there; the
+  precedence guard above needed no change, exactly as predicted.
 
 ## 2026-09-08 — Issue #1422 interrupt test flake, and a diagnosis that was wrong twice
 
