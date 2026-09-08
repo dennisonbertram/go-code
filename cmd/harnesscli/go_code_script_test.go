@@ -392,10 +392,17 @@ func TestGoCodeScriptStopsHarnessdOnInterrupt(t *testing.T) {
 			select {
 			case <-waitDone:
 			case <-time.After(30 * time.Second):
-				// Locally the wrapper exits in ~0.2s. The generous budget is
-				// headroom for a loaded CI runner under -race, not a claim
-				// about how long cleanup legitimately takes.
-				t.Fatal("wrapper did not exit within 30s of SIGINT")
+				// This is a hang, not a slow exit: locally the wrapper exits in
+				// ~0.2s, and it has never reproduced outside CI — not on macOS
+				// idle or loaded, not on Linux, not on Linux under -race with
+				// constrained CPU, and not with SIGINT ignored by the parent.
+				//
+				// Rather than time out opaquely again, capture what the process
+				// tree actually looks like while it is stuck, so the next CI
+				// failure carries evidence instead of only a duration.
+				// Issue #1422.
+				t.Fatalf("wrapper did not exit within 30s of SIGINT\n%s",
+					describeStuckProcesses(cmd.Process.Pid))
 			}
 
 			deadline := time.Now().Add(8 * time.Second)
@@ -494,4 +501,30 @@ func TestGoCodeScriptStopsHarnessdWhenOutputPipeCloses(t *testing.T) {
 	}
 	t.Fatalf("harnessd (pid %d) still running after the wrapper's output pipe closed; "+
 		"it will hold the workspace lock and break the next go-code in this project", daemonPID)
+}
+
+// describeStuckProcesses renders the state of the wrapper and its descendants,
+// for the failure message when the wrapper does not exit. Best-effort: it runs
+// only on a path that is already failing, so any error here is reported as text
+// rather than allowed to mask the original failure.
+func describeStuckProcesses(wrapperPID int) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "wrapper pid: %d\n", wrapperPID)
+
+	// Full listing with parent and state, so the tree and each process's wait
+	// state (S, D, Z, T) are both visible.
+	out, err := exec.Command("ps", "-eo", "pid,ppid,stat,wchan:20,args").CombinedOutput()
+	if err != nil {
+		fmt.Fprintf(&b, "ps failed: %v\n", err)
+		return b.String()
+	}
+	b.WriteString("relevant processes:\n")
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.Contains(line, "harnessd") || strings.Contains(line, "harnesscli") ||
+			strings.Contains(line, "go-code.sh") || strings.Contains(line, "sleep") ||
+			strings.Contains(line, fmt.Sprintf(" %d ", wrapperPID)) {
+			b.WriteString("  " + line + "\n")
+		}
+	}
+	return b.String()
 }
