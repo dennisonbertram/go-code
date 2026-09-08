@@ -277,11 +277,51 @@ func shortenLabel(glyph, label, full string, width int) string {
 		// Not even a stub of a label fits; the hint alone is more useful.
 		return glyph + " " + CancelHint
 	}
-	runes := []rune(label)
-	if len(runes) > budget {
-		label = string(runes[:budget-1]) + "\u2026"
-	}
+	label = truncateToWidth(label, budget)
 	return glyph + " " + label + " " + CancelHint
+}
+
+// truncateToWidth shortens label to at most budget terminal columns, appending
+// an ellipsis when it cuts.
+//
+// It measures display columns rather than runes. Counting runes was the bug in
+// issue #1432: CJK and emoji occupy two columns each, so a rune-budgeted label
+// could be twice its allowance in columns, overrun the line, and get clipped
+// from the right — taking the cancel hint with it. ASCII hid this completely,
+// because there columns and runes are the same number.
+//
+// Rune-by-rune accumulation is deliberate and imperfect: it does not segment
+// grapheme clusters, so a combining mark or ZWJ emoji sequence can still be
+// split. That is a strict improvement over rune counting and a much smaller
+// change than full segmentation, which is out of scope until a real case
+// appears.
+func truncateToWidth(label string, budget int) string {
+	if budget <= 0 {
+		return ""
+	}
+	if lipgloss.Width(label) <= budget {
+		return label
+	}
+
+	const ellipsis = "\u2026"
+	room := budget - lipgloss.Width(ellipsis)
+	if room <= 0 {
+		return ellipsis
+	}
+
+	var (
+		out   []rune
+		width int
+	)
+	for _, r := range label {
+		w := lipgloss.Width(string(r))
+		if width+w > room {
+			break
+		}
+		out = append(out, r)
+		width += w
+	}
+	return string(out) + ellipsis
 }
 
 // CompletionLine returns the one-line completion summary shown after the spinner stops.

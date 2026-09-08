@@ -1,5 +1,44 @@
 # Engineering Log
 
+## 2026-09-08 — Issue #1432 wide labels destroyed the cancel hint
+
+- Symptom: `shortenLabel` guarantees the `(esc to interrupt)` hint survives at
+  narrow widths, sacrificing the label instead. For double-width characters it
+  did the opposite:
+  ```
+  width=40  "· Waiting for 模型模型模型… (esc to inte"
+  width=40  "· Running 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀… (esc to "
+  ```
+  The line width was always correct — the final `MaxWidth` clamp saw to that —
+  which is exactly why nothing caught it. The clamp was cutting the hint off
+  because the label had not been shortened enough.
+- Cause: the function mixed two units. The budget was computed in display
+  columns (`lipgloss.Width`) but the truncation was applied in runes
+  (`runes[:budget-1]`). CJK and emoji occupy two columns per rune, so a
+  rune-budgeted label could be twice its allowance in columns. For ASCII the two
+  units coincide, so every existing test passed.
+- Fix: `truncateToWidth` accumulates `lipgloss.Width` per rune until the budget
+  is reached, counting the ellipsis's own width. Deliberately not
+  grapheme-cluster aware — combining marks and ZWJ sequences can still be split.
+  That is a strict improvement over rune counting and a far smaller change than
+  full segmentation, which stays out of scope until a real case appears.
+- Tests: `TestSpinnerKeepsCancelHintWithWideRunes` over CJK, emoji and an ASCII
+  control at widths 40 and 50, asserting the hint's *survival* rather than the
+  line's width — the width was never wrong, and asserting it is what let the bug
+  hide. The ASCII control guards against a fix that satisfies the hint
+  assertion by over-truncating every label.
+- **Provenance, and the reason this entry matters more than the bug.** Found by
+  `gpt-6-astra` through the Surplus proxy — an untrusted external reviewer given
+  the packed source and no tools — then confirmed locally by rendering the cases
+  before believing it. Our own tests were green throughout and stayed green,
+  because they were ASCII-only; the code asserted a guarantee in a comment that
+  it did not keep. An outside reader with no ability to run anything caught what
+  the test suite structurally could not.
+  - Signal-to-noise from that review, recorded honestly: three findings, one
+    confirmed (this), one unconfirmed and overlapping with it (a claim that
+    `MaxWidth` may wrap rather than clip — not observed), and one false positive
+    (elapsed-time nondeterminism in snapshots, which set `startTime` explicitly).
+
 ## 2026-09-08 — Issue #1428 CLAUDE.md: tickets, real-run proof, delegation
 
 - Three practices this session kept proving necessary were absent from
