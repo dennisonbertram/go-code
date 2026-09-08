@@ -303,3 +303,39 @@ func TestTUI025_VisualSnapshot_200x50(t *testing.T) {
 	}
 	t.Logf("Snapshot written: %s", path)
 }
+
+// TestCompletionDurationIsFrozenAtStop pins issue #1434: "Worked for <d>"
+// states how long the run took, so it must not depend on when you look at it.
+//
+// ElapsedSeconds() reads the wall clock, and View re-rendered it on every tick
+// of the completion window, so a finished run's duration kept climbing —
+// 5.0s, 5.3s, 5.6s — inflating the reported figure by up to the window's
+// length. For a short run that is a large relative error.
+//
+// The assertion is that successive renders are identical, not that the value
+// equals some number: asserting a number would be timing-dependent and flaky,
+// and would not capture the property that actually matters.
+func TestCompletionDurationIsFrozenAtStop(t *testing.T) {
+	m := New(0).Start()
+	m.startTime = time.Now().Add(-5 * time.Second)
+	m = m.Stop(100)
+
+	first := m.View(80)
+	if !strings.Contains(first, "Worked for") {
+		t.Fatalf("expected a completion line, got %q", first)
+	}
+	// Control: the frozen value must still reflect the real elapsed time, so a
+	// fix that freezes it at zero or drops the duration fails here.
+	if !strings.Contains(first, "5.") {
+		t.Fatalf("frozen duration should reflect the ~5s run, got %q", first)
+	}
+
+	for i := 0; i < 3; i++ {
+		time.Sleep(250 * time.Millisecond)
+		m = m.Tick()
+		if got := m.View(80); got != first {
+			t.Fatalf("completion duration changed while displayed:\n first: %q\n after tick %d: %q",
+				first, i+1, got)
+		}
+	}
+}

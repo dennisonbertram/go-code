@@ -31,7 +31,16 @@ var pulse = []string{"·", "✢", "✳", "✻", "✽", "✶", "✽", "✻", "✳
 // would slow the clock; gating advance slows only the glyph.
 //
 // Sum: 18 ticks, about 2.16s per cycle, against 720ms before.
+// Must stay the same length as pulse: Tick advances step modulo len(pulse) and
+// indexes holds with it, so a divergence would panic at runtime rather than
+// fail a build. Checked in init below.
 var holds = []int{3, 2, 1, 1, 2, 3, 2, 1, 1, 2}
+
+func init() {
+	if len(holds) != len(pulse) {
+		panic("spinner: holds and pulse must be the same length")
+	}
+}
 
 // durationThreshold is the elapsed time after which the spinner shows a duration.
 const durationThreshold = 2 * time.Second
@@ -70,6 +79,7 @@ type Model struct {
 	action           string    // what the run is currently doing; empty falls back to fallbackLabel
 	startTime        time.Time // when spinner started (for duration)
 	tokens           int       // token count stored on Stop()
+	stoppedAfter     float64   // elapsed seconds frozen at Stop; see issue #1434
 	active           bool      // true while spinner is running
 	done             bool      // true after Stop()
 	tickCount        int       // total ticks received
@@ -135,6 +145,11 @@ func (m Model) Tick() Model {
 // remains visible for N ticks before going silent.
 // Returns a new Model; the receiver is unchanged.
 func (m Model) Stop(tokens int) Model {
+	// Freeze the duration here. The completion line states how long the run
+	// took, and View re-renders it on every tick of the completion window, so
+	// reading the wall clock there made a finished run's duration keep climbing
+	// — inflating the reported figure by up to the window's length. Issue #1434.
+	m.stoppedAfter = m.ElapsedSeconds()
 	m.active = false
 	m.done = true
 	m.tokens = tokens
@@ -209,7 +224,7 @@ func (m Model) View(width int) string {
 	// Completion mode: show the finalized line for N frames, then go silent.
 	if m.done {
 		if m.ShowsCompletion() {
-			return m.CompletionLine(m.ElapsedSeconds())
+			return m.CompletionLine(m.stoppedAfter)
 		}
 		// Silent after completion window expires.
 		return ""
@@ -246,7 +261,7 @@ func (m Model) View(width int) string {
 	// rather than "Computing..."), so the trade-off is now worth making
 	// explicit. Issue #1415.
 	if lipgloss.Width(base) > width {
-		base = shortenLabel(currentFrame, label, base, width)
+		base = shortenLabel(currentFrame, label, width)
 	}
 
 	style := m.stylesOrDefault().Dim
@@ -264,7 +279,7 @@ func (m Model) View(width int) string {
 // It first drops the duration, then truncates the label itself, and gives up
 // only when even "<glyph> <hint>" will not fit — at which point the caller's
 // MaxWidth clamp takes over.
-func shortenLabel(glyph, label, full string, width int) string {
+func shortenLabel(glyph, label string, width int) string {
 	withoutDuration := glyph + " " + label + " " + CancelHint
 	if lipgloss.Width(withoutDuration) <= width {
 		return withoutDuration
