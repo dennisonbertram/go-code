@@ -528,3 +528,75 @@ func describeStuckProcesses(wrapperPID int) string {
 	}
 	return b.String()
 }
+
+// TestGoCodeScriptRejectsExtraPromptArguments pins issue #1435: the wrapper
+// must not silently discard part of the user's prompt.
+//
+// `prompt="$1"` took only the first positional, so `go-code explain this repo`
+// — the natural unquoted form — ran against `-prompt explain` and threw the
+// rest away with no warning and exit 0. The run looked successful and a short
+// prompt often still produces plausible output, so the truncation could go
+// unnoticed indefinitely.
+//
+// The assertion is on the user-visible consequence: either the whole prompt
+// reaches harnesscli, or the wrapper refuses and says why.
+func TestGoCodeScriptRejectsExtraPromptArguments(t *testing.T) {
+	scriptPath, err := filepath.Abs(filepath.Join("..", "..", "scripts", "go-code.sh"))
+	if err != nil {
+		t.Fatalf("resolve go-code script path: %v", err)
+	}
+
+	newStubs := func(t *testing.T, recordFile string) string {
+		t.Helper()
+		binDir := t.TempDir()
+		writeExecutable(t, filepath.Join(binDir, "curl"), "#!/usr/bin/env bash\nexit 0\n")
+		writeExecutable(t, filepath.Join(binDir, "harnessd"), "#!/usr/bin/env bash\nexit 0\n")
+		writeExecutable(t, filepath.Join(binDir, "harnesscli"), "#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> \"$RECORD_FILE\"\n")
+		return binDir
+	}
+
+	t.Run("extra positional arguments are refused", func(t *testing.T) {
+		tmp := t.TempDir()
+		recordFile := filepath.Join(tmp, "harnesscli.args")
+		binDir := newStubs(t, recordFile)
+
+		cmd := exec.Command("bash", scriptPath, "explain this repo", "and also this")
+		cmd.Env = append(os.Environ(),
+			"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"HARNESS_ADDR=:19910", "RECORD_FILE="+recordFile)
+		out, err := cmd.CombinedOutput()
+
+		if err == nil {
+			t.Fatalf("expected a non-zero exit when extra prompt arguments are given, got success\n%s", out)
+		}
+		if raw, statErr := os.ReadFile(recordFile); statErr == nil && len(raw) > 0 {
+			t.Fatalf("harnesscli was invoked with a truncated prompt instead of the wrapper refusing: %q", raw)
+		}
+		if !bytes.Contains(out, []byte("and also this")) {
+			t.Errorf("refusal should name the offending argument so the user can see what was dropped, got:\n%s", out)
+		}
+	})
+
+	// Control: the normal path must keep working, or a fix that refuses
+	// everything would satisfy the assertion above.
+	t.Run("a single quoted prompt still passes through whole", func(t *testing.T) {
+		tmp := t.TempDir()
+		recordFile := filepath.Join(tmp, "harnesscli.args")
+		binDir := newStubs(t, recordFile)
+
+		cmd := exec.Command("bash", scriptPath, "explain this repo")
+		cmd.Env = append(os.Environ(),
+			"PATH="+binDir+string(os.PathListSeparator)+os.Getenv("PATH"),
+			"HARNESS_ADDR=:19911", "RECORD_FILE="+recordFile)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("single quoted prompt should succeed: %v\n%s", err, out)
+		}
+		raw, err := os.ReadFile(recordFile)
+		if err != nil {
+			t.Fatalf("read record file: %v", err)
+		}
+		if !bytes.Contains(raw, []byte("-prompt explain this repo")) {
+			t.Errorf("whole prompt should reach harnesscli, got %q", raw)
+		}
+	})
+}

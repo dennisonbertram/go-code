@@ -405,6 +405,16 @@ main() {
     *)
       mode="prompt"
       prompt="$1"
+      shift
+      # Refuse rather than silently truncate. `prompt="$1"` alone discarded
+      # every later positional, so the natural unquoted form —
+      # `go-code explain this repo` — ran against `-prompt explain` and threw
+      # the rest away with exit 0. A short prompt still produces plausible
+      # output, so the loss was invisible. Joining the words instead would guess
+      # at intent; refusing teaches the rule once. Issue #1435.
+      if [[ $# -gt 0 ]]; then
+        die "unexpected extra argument: $1. Quote the whole prompt as one argument, e.g. go-code \"${prompt} $*\""
+      fi
       ;;
   esac
 
