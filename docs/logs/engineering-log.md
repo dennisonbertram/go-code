@@ -1,5 +1,48 @@
 # Engineering Log
 
+## 2026-09-08 — Issue #1434 completion line kept counting after the run finished
+
+- Symptom: `Worked for <d>` climbed while it was on screen, because `View`
+  re-rendered `ElapsedSeconds()` — a live wall-clock read — on every tick of the
+  completion window:
+  ```
+  tick 0: "· Worked for 5.0s"    tick 2: "· Worked for 5.6s"
+  tick 1: "· Worked for 5.3s"    tick 3: "· Worked for 5.9s"
+  ```
+  The window is 10 ticks at 120ms, so the figure a user reads was inflated by up
+  to ~1.2s. For a short run that is a large relative error: a 0.4s run reported
+  as 1.6s.
+- Fix: `Stop` freezes the elapsed duration into `stoppedAfter`, and the
+  completion branch renders that. `ElapsedSeconds()` keeps its meaning for a
+  live spinner, so nothing else changes.
+- Test: `TestCompletionDurationIsFrozenAtStop` asserts successive renders are
+  *identical* rather than asserting a number — a number would be timing-
+  dependent and flaky, and would not capture the property that matters. It also
+  keeps a control that the frozen value still reflects the real ~5s, so freezing
+  at zero would fail.
+- Two cleanups from the same review: `shortenLabel` carried an unused `full`
+  parameter, removed; and `Tick` indexes `holds[m.step]` while advancing modulo
+  `len(pulse)`, so an `init` now enforces that the two slices stay the same
+  length rather than leaving a future edit to panic at runtime.
+- **Provenance, and the actual lesson.** Both real findings came from *cheap*
+  models during a cost evaluation, on a file `gpt-6-astra` ($10/M) had already
+  reviewed and passed:
+  - `openai-gpt-oss-120b` ($0.07/M) found the growing duration. Astra raised a
+    related point and got it wrong — it framed elapsed time as a snapshot-test
+    nondeterminism problem, which is a false positive, since those tests set
+    `startTime` explicitly. It looked at the same code and drew the wrong
+    conclusion.
+  - `gpt-5-nano` ($0.05/M) found the unused parameter. Astra did not.
+  - `deepseek-v4-flash-0731` timed out at 180s with zero bytes — cheap but not
+    reliable here.
+  - `hy3-free` is listed at $0.00/M but returns `no_sellers_for_model`. Listed,
+    not served.
+  The models are not ranked, they are differently blind. Astra caught a subtle
+  correctness bug about mixed units (#1432) that the cheap models missed; the
+  cheap models caught a user-visible bug and a dead parameter that Astra missed.
+  Running more than one cheap reviewer is better value than running one
+  expensive one, and every finding still needs confirming before it is believed.
+
 ## 2026-09-08 — Issue #1435 go-code silently dropped prompt arguments
 
 - Symptom: `go-code explain this repo` — the natural unquoted form — ran against
