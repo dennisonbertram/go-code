@@ -1,5 +1,35 @@
 # Engineering Log
 
+## 2026-09-08 — Issue #1435 go-code silently dropped prompt arguments
+
+- Symptom: `go-code explain this repo` — the natural unquoted form — ran against
+  `-prompt explain` and discarded the rest, with no warning and exit 0. Proven
+  with stubs: `go-code "explain this repo" "and also this"` reached harnesscli
+  as `-prompt explain this repo`.
+- Cause: the prompt branch of the argument `case` assigned `prompt="$1"` and
+  never read `$2` onward. The CLI branch beside it captures the rest with
+  `cli_args=("$@")`, and the flag branches `die` on anything unknown — prompt
+  mode was the only path that accepted input and threw part of it away.
+- Why it stayed hidden: the run looks successful, and a truncated prompt often
+  still produces plausible output, so nothing signals the loss. No test covered
+  multi-argument prompt mode.
+- Fix: refuse, and name the fix. `go-code explain this repo` now exits non-zero
+  with `unexpected extra argument: this. Quote the whole prompt as one argument,
+  e.g. go-code "explain this repo"` — the message reconstructs the correct
+  command rather than only complaining.
+- Joining the arguments was considered and rejected: it guesses at intent and
+  silently reinterprets a shell-splitting mistake, where refusing teaches the
+  rule once.
+- Test: `TestGoCodeScriptRejectsExtraPromptArguments`, with a control asserting
+  a single quoted prompt still passes through whole — otherwise a fix that
+  refused everything would satisfy the first assertion.
+- Provenance: found by the untrusted external reviewer (`gpt-6-astra` via the
+  Surplus proxy) reading only the script, then confirmed by running the stub
+  reproduction rather than by reading. Six findings on this file, of which two
+  were confirmed, three were legitimate low-severity hardening (PID reuse in
+  `stop_server`, predictable tmp paths, unvalidated `HARNESS_ADDR`), and one was
+  rejected as speculative.
+
 ## 2026-09-08 — Issue #1432 wide labels destroyed the cancel hint
 
 - Symptom: `shortenLabel` guarantees the `(esc to interrupt)` hint survives at
